@@ -27,7 +27,7 @@ What bears on it:
 
 Proposed by the assistant and parked on the user's word. None has been weighed
 by the user yet beyond "keep them". The notes say how each fits what exists.
-The assistant's own picks for value against effort: the clipping overlay,
+The assistant's own picks for value against effort: the clipping overlay (done),
 before/after, export recipes and naming, perspective correction, and burst
 grouping with a compare view.
 
@@ -35,8 +35,12 @@ grouping with a compare view.
 
 - **Before/after:** a split view or a held key. The preview pipeline needs
   restructuring for it (the architecture review).
-- **Clipping overlay (`J`) and highlight/shadow warnings:** one more step in
-  the per-pixel processing, cheap.
+- **Clipping overlay (`J`) and highlight/shadow warnings:** done (ADR 055): the histogram
+  panel's triangles and `J` paint the clipped pixels of the picture shown.
+- **Drag-to-adjust on the histogram (2026-10-20):** drag in a tonal region of the histogram to
+  move the matching Basic Tone control (shadows, blacks, highlights, whites, exposure), as in
+  Lightroom. Left out of ADR 055's v1; the panel's plot would need to map x to a control and
+  to take the drag without taking the focus.
 - **Focus peaking and a sharpness score** for culling, from the pyramid level
   the thumbnails use.
 - **Soft proofing:** preview through the export profile and flag the colours it

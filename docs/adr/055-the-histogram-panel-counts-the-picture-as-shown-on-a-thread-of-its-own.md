@@ -1,6 +1,6 @@
 # The histogram panel counts the picture as shown, on a thread of its own
 
-Status: proposed, 2026-10-20. The plan is
+Status: accepted, 2026-10-20; implemented (plan steps 1 to 9) and reviewed. The plan is
 [histogram-panel-plan.md](../ideas/histogram-panel-plan.md). Picks up the parked "Clipping overlay
 (`J`) and highlight/shadow warnings" ([parked-ideas.md](../ideas/parked-ideas.md)) and the planned
 `J` key ([keybindings.md](../keybindings.md)).
@@ -58,8 +58,13 @@ the pixels a screen shows, and what an 8-bit export at that size would write, sh
   Rec.709: 0.2126, 0.7152, 0.0722; Display P3 and Adobe RGB: their own), encode the sum again, and
   round to a code. This is ADR 035's rule (luminance, then encoded) moved to the output space. A grey
   of code `g` therefore has luma `g` exactly, in every encoding, and pure sRGB red has luma code 127,
-  not the 54 that a weighted sum of encoded values gives. It is computed with a 256-entry decode table and a
-  binary search over the 255 decoded code boundaries, so it is exact and needs no `pow` per pixel.
+  not the 54 that a weighted sum of encoded values gives. It is computed with a 256-entry decode table and the 255 decoded code
+  boundaries, so it is exact and needs no `pow` per pixel. The boundary is found by a lookup table
+  of 65 536 equal cells of linear luminance, each holding where a binary search would land for the
+  cell's start, then a short forward walk over the boundaries inside the cell (two lie within one
+  cell at the dark end of Adobe RGB). That gives the same code as a binary search for every input
+  (a test compares the two over every red and green with nine blues, in the three encodings), and
+  it avoids the search's mispredicted branches, which were most of the cost of the count (section 9).
   - *Alternative:* Rec.601 Y′, a weighted sum of the *encoded* channels (Photoshop's
     "Luminosity"). It is cheaper, but it disagrees with the curve histogram's luma and depends on
     the encoding's gamma.
@@ -110,14 +115,22 @@ struct OutputHistogram {
   counts cannot be derived from the per-channel bins, because the channels overlap, so they are
   fields of their own.
 - **One counting loop**, a private `src/core/OutputHistogramCount.h`
-  (`countOutputCodes(rows, size, stride, channels, encoding, spans)`), serves both public
+  (`countOutputCodes(rows, size, stride, format, encoding, spans, abandon)`), serves both public
   overloads and the app. `arraw-app-core` sees `src/core`, as `CurveEditing` does (ADR 036). The app
   calls it on the `QImage`'s bits without a copy, and `spans` (optional, one `[begin, end)` per
   row) restricts it to the crop being drawn (decision 3).
+  - **`RowSpan` is public.** The span type is declared in `include/OutputHistogram.h`, not in the
+    private header: the app's `HistogramCounter.h`, and through it `MainWindow.h` in `arraw-app-ui`,
+    name it, and `arraw-app-ui` does not see `src/core`. No public function takes one, so it is
+    public API only so that the app can carry spans; it is a plain struct and stays small. The
+    alternatives were to move it to an app-core header and have `countOutputCodes` take
+    `std::span<const std::pair<std::uint32_t, std::uint32_t>>`, or to hide the job behind a pimpl
+    in `HistogramCounter`; both cost more than a documented public struct.
 - **The conversion is export's.** The Qt conversion in `prepareExportImage` is factored into a
   private `encodedForOutput(buffer, encoding, format)` in core, and `toDisplayImage` is checked
-  against it (a test, not shared code, because the app's conversion owns a view of the render). That
-  is how the Python histogram of a develop and the app's histogram of the same request agree code
+  against it (`tests/test_DisplayImage.cpp`, "The display image equals the sRGB output of an
+  export, code for code"; a test, not shared code, because the app's conversion owns a view of the
+  render). That is how the Python histogram of a develop and the app's histogram of the same request agree code
   for code.
 
 *Alternatives:*
@@ -186,7 +199,7 @@ does with preview results.
   render, would need a second path, and `PreviewRenderer` is already the most intricate class of
   the app.
 - (c) Count on the GUI thread. This is the simplest, but it costs 5 to 25 ms of GUI time per frame
-  on a large screen during a drag (estimate; step 1 of the plan measures it), against the spirit of
+  on a large screen during a drag (estimate; section 9 gives the measured count), against the spirit of
   ADR 043.
 - (d) A dedicated bilinear 1024 px render, as the curve histogram has. It is stable across window
   sizes, but it costs a render per state, waits for the pause, and is not what is on screen.
@@ -215,9 +228,19 @@ colours that the conversion clamps to 0 or 255 count, since they are clipped in 
 
 ### 5. The clipping overlay is painted from the shown image, not rendered
 
-`PhotoView` paints the overlay over whatever it draws: the render, and the fallback beneath it.
-The overlay is a mask of that same image, so no second render is needed and it lines up pixel for
-pixel at any zoom.
+`PhotoView` paints the overlay over the render. The overlay is a mask of that same image, drawn
+through the same rectangle as the render, so no second render is needed and every mark lies on the
+pixel it was made from, at any zoom.
+
+- **Only the render is masked, never the fallback.** When zoomed in, the render is a region and the
+  reduced whole-frame fallback shows around and beneath it. A mask of the fallback drawn under or
+  over the render would put marks of a coarser picture, and during a drag of an older state (the
+  fallback is refreshed only at the pause), on pixels that do not clip. The area outside the
+  render's rectangle shows the fallback unmasked; the render covers the visible region once it
+  lands. (The first version masked both and painted the fallback's mask across the whole frame; the
+  review found it, and `test_MainWindowHistogram.cpp` now zooms in for real and checks that the
+  fallback's clipping never shows through the render, and that a render that no longer clips drops
+  the old marks.)
 
 - `clippingMask(const QImage&, bool shadows, bool highlights)` (pure, `arraw-app-core`) returns an
   `ARGB32_Premultiplied` image that is transparent where nothing clips. Highlight-clipped pixels are
@@ -226,11 +249,14 @@ pixel at any zoom.
   *Alternative:* colour by the channels that clip (Camera Raw's Alt-drag), which the user allowed. It
   says more, but a yellow mask on a yellow flower cannot be seen. The triangle's colour and tooltip
   carry the channel instead.
-- It is built **on the GUI thread, lazily**: only while an overlay is on, once per image (cached by
-  `cacheKey()`), and drawn with the image's transform and no smoothing, so mask pixels stay crisp
-  when magnified. This keeps the overlay in step with the picture: the two can never be shown a
-  frame apart. A scan of a 4K image is a few milliseconds (step 1 measures it); if it proves too
-  slow, the mask moves to the counter thread and the previous one is drawn stretched until it lands.
+- It is built **on the GUI thread, lazily**: only while an overlay is on, once per render (cached by
+  `cacheKey()`, and dropped when both kinds are turned off), and drawn with the render's transform
+  and no smoothing, so mask pixels stay crisp when magnified. This keeps the overlay in step with
+  the picture: the two can never be shown a frame apart. Measured (release, 3840 × 2160, best of
+  five): 13 ms for a picture that clips nothing and 20 ms for noise that clips about 3 % of its
+  pixels, on a 2.6 GHz laptop core in a container. That is within a frame at 60 Hz only for the
+  lighter case; if the mask must be cheaper on a 4K screen, it moves to the counter thread and the
+  previous one is drawn stretched until it lands (not done).
 - In the crop mode the overlay is not painted (the overlay there draws its own rotated image); the
   triangles still show the crop's counts.
 - In the mask mode the overlay is painted beneath `MaskOverlay`, which is a child on top.
@@ -292,8 +318,10 @@ keeps its height either way, so the panel does not jump.
     placeholder colour.
   - While a photograph opens, the last histogram is cleared and the plot shows nothing until the
     first count. A spinner would only duplicate the render indicator.
-  - A failed render leaves the plot empty. Triangles are unlit and disabled while there is no
-    count.
+  - When the section is collapsed or the dock hidden, the plot is emptied, and counted again on
+    return (the same as opening a photograph).
+  - A failed render keeps the last count, since the picture beside it stays too; the plot is
+    empty only before the first count. Triangles are unlit and disabled while there is no count.
 - **Out of v1:** drag-to-adjust (dragging in a tonal region moves the matching Basic Tone
   control), recorded in `parked-ideas.md`.
 
@@ -304,7 +332,9 @@ back and converted by the same `toDisplayImage`. So the histogram is as close be
 the renders are (ADR 017's tolerances: the pointwise and resample bounds, one 8-bit code).
 
 - **The parity test** (`tests/gpu`) renders one state and one request on both paths, converts and
-  counts them, and allows at most 1 % of pixels per channel to move, by one bin only. A clipped
+  counts them, and allows at most 1 % of pixels per channel to move, by one bin only. It checks
+  that on the pictures themselves, code by code (no sample differs by more than one code, and at
+  most 1 % of the samples of a channel differ), as well as on the histograms. A clipped
   count may differ only by pixels within one code of 0 or 255 in the other render. ADR 035 set the
   same allowance.
 - *Alternative:* count on the GPU with a reduction pass. The pixels are read back for display
@@ -314,10 +344,42 @@ the renders are (ADR 017's tolerances: the pointwise and resample bounds, one 8-
 ### 9. Cost
 
 The count runs over the shown whole-frame image, at most the viewport's device pixels (about 8 MP
-fitted on a 4K screen). It does a table lookup per channel and a binary search for luma. The
-estimate is 2 to 3 ns a pixel, so up to about 25 ms on a 4K screen, on a thread that holds nothing
-else up. Step 1 of the plan measures it. If a 2560 × 1600 count takes more than 10 ms, the bins
-are counted on every second row and column above 2 MP, a point sample that keeps the distribution.
+fitted on a 4K screen), on a thread that holds nothing else up. It does a table lookup per
+channel and one table lookup for luma. The original estimate was 2 to 3 ns a pixel, so up to
+about 25 ms on a 4K screen, and a budget of **10 ms for 2560 × 1600**.
+
+**Measured** (`[.bench]` cases in `tests/test_OutputHistogram.cpp` and `tests/test_ClippingMask.cpp`;
+release build, `-O3`, best of five; Intel i7-10750H at 2.6 GHz in a container, so a desktop will be
+somewhat faster, and the container's timings vary by about 30 % between runs):
+
+| What | 2560 × 1600 (4.1 MP) | 3840 × 2160 (8.3 MP) |
+|---|---|---|
+| Count, luma by binary search (first version) | 128-165 ms, rainbow; 375 ms, noise | 234-272 ms, rainbow |
+| Count, luma by lookup (this ADR) | 52-60 ms (rainbow, noise, photograph) | 105-118 ms |
+| Clipping mask (section 5) | | 13 ms flat, 20 ms noise |
+
+About 13 ns a pixel. The binary search over 255 floats mispredicts on most pixels and was most of
+the cost; the lookup is 2 to 6 times faster and gives the same codes. The remaining cost is four
+increments into random bins per pixel (a loop that counts only R, G, B and the clipping takes about
+4 ns a pixel on this machine, and the luma conversion and its increment add as much again).
+
+**The budget is not met.** 2560 × 1600 takes about 55 ms against 10 ms, five to six times over,
+and a 4K screen about 110 ms. So the histogram updates at about 8 to 18 Hz during a drag, and the
+counter thread keeps one core busy while the drag lasts. This is not hidden by the thread, but it is
+not a problem for the picture (the count never delays a render). The budget is unchanged here. The
+levers, for the user to choose:
+
+1. **Count with several threads.** Split the rows into bands over N workers and add the bins
+   (exact, because counts add). With 4 to 6 workers a 2560 × 1600 count is about 10 to 15 ms. It
+   competes with the CPU renderer's bands during a drag, so the counter would take a share of the
+   cores, not all of them.
+2. **Relax the budget** to what is measured (about 60 ms at 2560 × 1600), and accept 8 to 18 Hz.
+3. **Sample every second row and column above 2 MP** for the bins, as this section first proposed
+   (a 4 times saving, so about 14 ms), and keep a full pass for the clipping counts, which must
+   cover every pixel so that the triangles agree with the overlay. The full pass is then the same
+   cost as today's R, G, B and clipping part (about a third of the count), so the saving is
+   about 2.5 times, not 4, and a sampled distribution flickers a little between frames.
+
 The **clipping counts are always taken over every pixel**, so the triangles always agree with the
 overlay.
 
@@ -346,8 +408,12 @@ arraw.output_histogram(image, encoding=None) -> arraw.OutputHistogram
   overshoots at hard edges, so a pixel next to a bright edge can show 255 on screen, and count as
   clipped, where a full-size export would not. ADR 035 forced Bilinear for the curve histogram for
   exactly this reason. Here it is accepted: the overlay paints those pixels too, so the triangles
-  never claim what the picture does not show. Step 1 measures how many end-bin pixels the ringing
-  adds on the fixtures. If that matters, the fix belongs in the resize (a clamp of the overshoot,
+  never claim what the picture does not show. Measured on a real photograph (`samples/IMG_2610.JPG`,
+  3000 × 2000, developed with default settings; the `[.bench]` case "end-bin pixels that Lanczos
+  adds over Bilinear"): at fit 1024 Lanczos adds 32 highlight-clipped and 2 429 shadow-clipped
+  pixels of 699 392 (0.35 % of them shadows); at 1600, 34 and 2 197 of 1 707 200 (0.13 %); at
+  2560, 73 and 1 692 of 4 369 920 (0.04 %). The shadow figures are dark edges of the photograph, and
+  would be a visible overlay of a few thousand pixels beside edges. If that matters, the fix belongs in the resize (a clamp of the overshoot,
   on both paths), not in a different histogram source.
 - The histogram depends a little on the window size, and between fitted and zoomed views, because
   the fallback is a 1024 px render. The differences are those of a resampled statistic.

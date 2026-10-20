@@ -1,6 +1,6 @@
 # Histogram panel: final picture, clipping, pixel readout — plan
 
-Status: proposed, 2026-10-20. Decision record:
+Status: done, 2026-10-20 (steps 1 to 9, and the fixes of the review in `docs/reviews/`). Decision record:
 [ADR 055](../adr/055-the-histogram-panel-counts-the-picture-as-shown-on-a-thread-of-its-own.md).
 
 ## Decisions (user, 2026-10-20)
@@ -51,11 +51,14 @@ plans. Each step lists its tests by file and case name.
   overloads (ADR 055, section 2).
   - `static_assert` that `OutputHistogram::Bins` and `CurveHistogram::Bins` are the same type.
 - `src/core/OutputHistogramCount.h/.cpp` (private):
-  - `RowSpan { std::uint32_t begin, end; }`;
+  - `RowSpan { std::uint32_t begin, end; }` is declared in the public `include/OutputHistogram.h`
+    instead, since `arraw-app-ui` names it through `HistogramCounter.h` and does not see
+    `src/core`; ADR 055, section 2, records why that is accepted;
   - `countOutputCodes(const std::byte* rows, ImageSize, std::size_t stride, PixelFormat,
     NamedEncoding, std::span<const RowSpan> spans = {}, const std::atomic<bool>* abandon =
     nullptr)`;
-  - the luma tables per encoding (a 256-entry decode table and 255 boundaries), built once.
+  - the luma tables per encoding (a 256-entry decode table, 255 boundaries and a 65 536-cell
+    lookup of where the boundary search lands, then a short forward walk), built once.
 - `src/core/ImageExport.cpp`: factor the Qt conversion out into a private
   `encodedForOutput(const ImageBuffer&, NamedEncoding, QImage::Format)` that `prepareExportImage`
   calls. Behaviour is unchanged, which the existing `test_ImageExport` cases check.
@@ -77,7 +80,13 @@ plans. Each step lists its tests by file and case name.
   - `"count cost at 2560x1600 and 3840x2160"`;
   - `"clipping mask cost at 3840x2160"`, from step 5's function once it exists;
   - `"end-bin pixels that Lanczos adds over Bilinear"` on the fixtures, at fit sizes.
-  Record the figures in the ADR's sections 5, 9 and the Consequences.
+  Record the figures in the ADR's sections 5, 9 and the Consequences. **Done:** the figures are
+  there. In release the count takes 52-60 ms at 2560 × 1600 and 105-118 ms at 3840 × 2160 (after
+  replacing the luma binary search, which took 128-165 ms and 234-272 ms, by a lookup), against the
+  budget of 10 ms: the budget is not met, and the ADR proposes the levers (counting with several
+  threads, relaxing the budget, or sampling) for the user to choose. The clipping mask takes 13 to
+  20 ms at 3840 × 2160. Lanczos adds 0.04 to 0.35 % of the pixels as shadow-clipped on a real
+  photograph.
 - **Risks:** the luma boundary search is slower than estimated; Qt's 8-bit rounding differs from
   `round(v * 255)` for float input (test it, and match Qt's if it does).
 
@@ -227,8 +236,9 @@ plans. Each step lists its tests by file and case name.
 ### 8. Clipping overlay and `J`
 
 - `PhotoView`: `setClippingShown(bool shadows, bool highlights)`; it paints `clippingMask` of the
-  render and of the fallback with their transforms, no smoothing, cached by `cacheKey`. It does not
-  paint in the crop mode.
+  render only, through the render's own rectangle, no smoothing, cached by `cacheKey`. The fallback
+  is never masked (the review found its mask showing through the render when zoomed in). It does
+  not paint in the crop mode.
 - `MainWindow`:
   - `View > Show Clipping` (`J`), checkable, added to the window (ADR 047);
   - its rule: both on if either is off, else both off;
@@ -250,13 +260,16 @@ plans. Each step lists its tests by file and case name.
 
 ### 9. Docs and close-out
 
-- `docs/desired-features.md`: describe the histogram panel under Develop. `J` is already there.
+Done:
+
+- `docs/desired-features.md`: the histogram panel is described under Adjustments. `J` was already
+  there, and `docs/keybindings.md` moved it to *Current* in step 8.
 - `docs/ideas/parked-ideas.md`:
   - the clipping overlay is done;
-  - add "Drag-to-adjust on the histogram".
+  - "Drag-to-adjust on the histogram" is added.
 - ADR 055 status set to accepted, with the measured figures. A note in ADR 048 that the dock holds
   the histogram section.
-- `docs/todo.md`, if it lists the histogram.
+- `docs/todo.md` is the user's; it was not touched.
 
 ## Order and parallel work
 
