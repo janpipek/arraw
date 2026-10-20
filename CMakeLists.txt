@@ -319,6 +319,9 @@ add_library(arraw STATIC
         src/core/ConfigDirectory.cpp
         src/core/ConfigDirectoryRules.h
         include/ExportSettings.h
+        include/ExportPresets.h
+        src/core/ExportPresetsJson.h
+        src/core/ExportPresetsJson.cpp
         src/core/ExportSettings.cpp
         src/core/ImageExport.cpp
         include/ExifInfo.h

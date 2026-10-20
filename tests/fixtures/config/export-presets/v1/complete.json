@@ -1,0 +1,38 @@
+{
+  "arraw": 1,
+  "exportPresets": [
+    {
+      "allowEnlarging": false,
+      "bitDepth": 16,
+      "encoding": "adobe-rgb",
+      "format": "tiff",
+      "metadata": {"capture": true, "descriptive": false, "location": true},
+      "name": "Print TIFF",
+      "quality": 90,
+      "sharpening": 0,
+      "size": null
+    },
+    {
+      "allowEnlarging": true,
+      "bitDepth": 8,
+      "encoding": "srgb",
+      "format": "jpeg",
+      "metadata": {"capture": true, "descriptive": true, "location": false},
+      "name": "Web 2048",
+      "quality": 85,
+      "sharpening": 30,
+      "size": {"height": 2048, "width": 2048}
+    },
+    {
+      "allowEnlarging": false,
+      "bitDepth": 16,
+      "encoding": "display-p3",
+      "format": "png",
+      "metadata": {"capture": false, "descriptive": false, "location": false},
+      "name": "Wide PNG",
+      "quality": 100,
+      "sharpening": 100,
+      "size": {"height": 1000, "width": 1500}
+    }
+  ]
+}

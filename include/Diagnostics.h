@@ -166,6 +166,14 @@ enum class Notice {
     /// @brief The lens has no calibration for a correction that is on, so that correction was
     /// skipped: the lens, then the corrections, joined by `, `.
     LensNotCalibrated,
+
+    /// @brief An export preset in the presets file cannot be used by this arraw, and was kept
+    /// as it is: its name (empty when it has none), then why.
+    ExportPresetUnusable,
+
+    /// @brief The export presets file cannot be read, so it is treated as holding no presets and
+    /// is never written over: the reason.
+    ExportPresetsUnreadable,
 };
 
 /// @brief One detail of a diagnostic, kept as a value rather than as prose.
