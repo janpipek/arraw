@@ -5,6 +5,7 @@
 #include <DevelopState.h>
 #include <Diagnostics.h>
 #include <Edits.h>
+#include <ExportSettings.h>
 #include <ImageExport.h>
 #include <ImageImport.h>
 #include <LensCorrection.h>
@@ -23,6 +24,7 @@
 #include <cstdint>
 #include <exception>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -799,33 +801,73 @@ void bindPhoto(nb::module_& m) {
         field("location", &MetadataSelection::location),
         field("descriptive", &MetadataSelection::descriptive));
 
-    const ExportOptions exportDefaults{};
+    // The keywords that `settings` replaces are optional here, so that giving both is noticed;
+    // nb::sig shows their real types and defaults.
+    const ExportOptions exportDefaults;
     m.def(
         "save",
         [](const ImageBuffer& image, const std::filesystem::path& path,
-           std::optional<ImageFileFormat> format, NamedEncoding encoding, int bitDepth, int quality,
-           bool embedProfile, int sharpening, const std::optional<Photo>& metadataFrom,
-           const MetadataSelection& metadata) {
-            const ExportOptions options{format,  encoding,     bitDepth,
-                                        quality, embedProfile, sharpening};
+           std::optional<ImageFileFormat> format, std::optional<NamedEncoding> encoding,
+           std::optional<int> bitDepth, std::optional<int> quality, bool embedProfile,
+           std::optional<int> sharpening, const std::optional<Photo>& metadataFrom,
+           const std::optional<MetadataSelection>& metadata,
+           const std::optional<ExportSettings>& settings) {
+            const ExportOptions exportDefaults;
+            ExportOptions options;
+            MetadataSelection selection = metadata.value_or(MetadataSelection{});
+            if (settings) {
+                const auto clash = [&](const char* name, bool given) {
+                    if (given) {
+                        throw nb::type_error((std::string("save() takes either settings or '") +
+                                              name + "', not both")
+                                                 .c_str());
+                    }
+                };
+                clash("format", format.has_value());
+                clash("encoding", encoding.has_value());
+                clash("bit_depth", bitDepth.has_value());
+                clash("quality", quality.has_value());
+                clash("sharpening", sharpening.has_value());
+                clash("metadata", metadata.has_value());
+                validate(*settings);
+                options = optionsOf(*settings);
+                selection = selectionOf(*settings);
+            } else {
+                options = ExportOptions{format,
+                                        encoding.value_or(exportDefaults.encoding),
+                                        bitDepth.value_or(exportDefaults.bitDepth),
+                                        quality.value_or(exportDefaults.quality),
+                                        true,
+                                        sharpening.value_or(exportDefaults.sharpening)};
+            }
+            options.embedProfile = embedProfile;
             std::optional<ExportMetadata> carried;
             if (metadataFrom) {
-                carried = ExportMetadata{metadataFrom->path(), metadataFrom->marks(), metadata};
+                carried = ExportMetadata{metadataFrom->path(), metadataFrom->marks(), selection};
             }
             PythonLog log;
             withoutGil([&] { exportImage(image, path, options, carried, log); });
         },
-        "image"_a, "path"_a, nb::kw_only(), "format"_a = exportDefaults.format,
-        "encoding"_a = exportDefaults.encoding, "bit_depth"_a = exportDefaults.bitDepth,
-        "quality"_a = exportDefaults.quality, "embed_profile"_a = exportDefaults.embedProfile,
-        "sharpening"_a = exportDefaults.sharpening, "metadata_from"_a = std::optional<Photo>{},
-        "metadata"_a = MetadataSelection{},
+        "image"_a, "path"_a, nb::kw_only(), "format"_a.none() = nb::none(),
+        "encoding"_a.none() = nb::none(), "bit_depth"_a.none() = nb::none(),
+        "quality"_a.none() = nb::none(), "embed_profile"_a = exportDefaults.embedProfile,
+        "sharpening"_a.none() = nb::none(), "metadata_from"_a.none() = nb::none(),
+        "metadata"_a.none() = nb::none(), "settings"_a.none() = nb::none(),
+        nb::sig("def save(image: ImageBuffer, path: str | os.PathLike, *, "
+                "format: ImageFileFormat | None = None, encoding: NamedEncoding = ..., "
+                "bit_depth: int = 8, quality: int = 90, embed_profile: bool = True, "
+                "sharpening: int = 0, metadata_from: Photo | None = None, "
+                "metadata: MetadataSelection = ..., settings: ExportSettings | None = None) "
+                "-> None"),
         "Write an image as JPEG, PNG or TIFF; the format comes from the extension unless given. "
         "`sharpening` (0-100, default 0 = off) applies an unsharp mask to the final pixels. "
         "With `metadata_from` (the photograph the pixels came from) the groups of `metadata` "
         "are copied from its file and sidecar, and its marks written as rating and label; "
         "without it nothing is written. A source or sidecar that cannot be read is logged as a "
-        "warning on the 'arraw' logger and its metadata left out; the file is still written.");
+        "warning on the 'arraw' logger and its metadata left out; the file is still written. "
+        "`settings` (an ExportSettings, e.g. a preset's) gives the format, encoding, bit depth, "
+        "quality, sharpening and metadata groups in one; combining it with any of those keywords "
+        "is a TypeError. Its size is for `develop`, see ExportSettings.develop_size.");
 }
 
 } // namespace arraw::python

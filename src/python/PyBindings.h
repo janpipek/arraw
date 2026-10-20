@@ -195,6 +195,10 @@ void bindLens(nb::module_& module);
 /// @brief Adds the lens members to `Photo` and the lens functions; after ::bindPhoto.
 void bindLensMethods(nb::module_& module);
 
+/// @brief Binds the export settings, the export presets and their store; after ::bindPhoto, which
+/// binds the file formats.
+void bindExport(nb::module_& module);
+
 /// @brief Binds the EXIF value classes and `read_exif`.
 void bindExif(nb::module_& module);
 
