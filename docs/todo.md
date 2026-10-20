@@ -214,8 +214,10 @@ Done (user, 2026-10-20): **export presets** (branch `export-presets`, ADR 054, p
   `ExportPresetStore` and friends; the dialog's picker (Save As, Update, Rename, Delete, Set
   Aside) and Export with Preset in the File and film-strip menus;
 - review `docs/reviews/claude-opus-5-5_2026-10-20_export-presets.md` (untracked): mediums
-  fixed. Open: Python `arraw.export()` taking a preset (L6, a design choice: `arraw.export()`
-  or a `ValueError`); a cross-process lock test; `path.string()` on Windows unchecked; the
+  fixed. Python's `save(settings=)` is removed (user, 2026-10-20: a preset
+  is render plus write, and `save` only writes; the recipe is `develop(size=settings.develop_size)`
+  then `save`); whether Python wants an `export(photo, path, preset)` is for the Python API
+  design pass, not now. Open: a cross-process lock test; `path.string()` on Windows unchecked; the
   app does not report the new path after Set Aside; `--no-profile` and `--resize-filter` are
   not in presets; develop presets are separate (step 4 above).
 
