@@ -153,6 +153,7 @@ add_executable(arraw-widget-tests
         test_CurveEditor.cpp
         test_DevelopPanel.cpp
         test_ExportDialog.cpp
+        test_HistogramPanel.cpp
         test_MainWindowHistory.cpp
         test_MainWindowLens.cpp
         test_MainWindowView.cpp

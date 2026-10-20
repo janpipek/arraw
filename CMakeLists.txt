@@ -624,6 +624,10 @@ add_library(arraw-app-ui STATIC
         src/app/ui/DevelopPanel.h
         src/app/ui/ExportDialog.cpp
         src/app/ui/ExportDialog.h
+        src/app/ui/HistogramPanel.cpp
+        src/app/ui/HistogramPanel.h
+        src/app/ui/HistogramView.cpp
+        src/app/ui/HistogramView.h
         src/app/ui/FilmStrip.cpp
         src/app/ui/FilmStrip.h
         src/app/ui/LensPickerDialog.cpp
