@@ -315,6 +315,9 @@ add_library(arraw STATIC
         include/Sidecar.h
         src/core/Sidecar.cpp
         src/core/ImageBuffer.cpp
+        include/ConfigDirectory.h
+        src/core/ConfigDirectory.cpp
+        src/core/ConfigDirectoryRules.h
         include/ExportSettings.h
         src/core/ExportSettings.cpp
         src/core/ImageExport.cpp
