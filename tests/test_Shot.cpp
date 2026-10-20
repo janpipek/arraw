@@ -1,3 +1,4 @@
+#include "support/ReferenceListing.h"
 #include "support/TempDir.h"
 
 #include <ImageImport.h>
@@ -6,13 +7,16 @@
 #include <Shot.h>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <vector>
 
 using namespace arraw;
@@ -413,4 +417,217 @@ TEST_CASE("The listed-folder rule refuses hidden, junk and linked folders",
         CHECK(isListedFolder(entry) == (name == "real"));
     }
     CHECK(linked == fs::is_symlink(directory.file("link")));
+}
+
+TEST_CASE("Reading one folder gives its shots and the subfolders the listing enters",
+          "[shot][list][folder]") {
+    const test::TempDir directory;
+    for (const char* name : {"sub10", "sub2", "Rome", ".hidden", "@eaDir"}) {
+        fs::create_directories(directory.file(name));
+    }
+    touch(directory.file("IMG_2.ARW"));
+    touch(directory.file("IMG_2.JPG"));
+    touch(directory.file("IMG_10.jpg"));
+    touch(directory.file(".hidden.jpg"));
+    touch(directory.file("notes.txt"));
+    touch(directory.file("sub2/deep.jpg"));
+    std::error_code error;
+    fs::create_directory_symlink(directory.file("Rome"), directory.file("linked"), error);
+    const bool linked = !error;
+    fs::create_symlink(directory.file("IMG_10.jpg"), directory.file("alias.jpg"), error);
+    const bool aliased = linked && !error;
+
+    const FolderListing listing = listFolder(directory.path());
+    // Not recursive: sub2's photograph is not among the shots.
+    std::vector expectedShots{shotOf(directory.file("IMG_2.ARW"), {directory.file("IMG_2.JPG")}),
+                              shotOf(directory.file("IMG_10.jpg"))};
+    if (aliased) {
+        // A link to a photograph lists, as before.
+        expectedShots.insert(expectedShots.begin(), shotOf(directory.file("alias.jpg")));
+    }
+    CHECK(listing.shots == expectedShots);
+    // No hidden, junk or linked folder; natural order.
+    CHECK(listing.folders ==
+          std::vector{directory.file("Rome"), directory.file("sub2"), directory.file("sub10")});
+    CHECK(listing.shots == listShots(directory.path()));
+}
+
+TEST_CASE("Reading an empty folder gives nothing", "[shot][list][folder]") {
+    const test::TempDir directory;
+    REQUIRE(listFolder(directory.path()) == FolderListing{});
+}
+
+TEST_CASE("Folder order is natural, component by component, a folder before its subtree",
+          "[shot][list][order]") {
+    const std::vector<fs::path> expected{"/p",
+                                         "/p/a01",
+                                         "/p/a01/x",
+                                         "/p/a1",
+                                         "/p/a1/y",
+                                         "/p/Rome",
+                                         "/p/Rome/2",
+                                         "/p/Rome/10",
+                                         "/p/rome",
+                                         "/p/Rome 2",
+                                         "/p/sub2",
+                                         "/p/sub10",
+                                         "/p/sub10/sub2",
+                                         "/p/sub10/z",
+                                         "/p/Trip",
+                                         "/p/Trip/day1",
+                                         "/p/Trip-2",
+                                         "/q"};
+    std::vector<fs::path> folders(expected.rbegin(), expected.rend());
+    std::ranges::sort(folders, folderPrecedes);
+    CHECK(folders == expected);
+
+    // A strict total order: irreflexive, and exactly one of a < b, b < a for distinct paths.
+    for (std::size_t i = 0; i < expected.size(); ++i) {
+        for (std::size_t j = 0; j < expected.size(); ++j) {
+            CAPTURE(expected[i], expected[j]);
+            CHECK(folderPrecedes(expected[i], expected[j]) == (i < j));
+        }
+    }
+}
+
+TEST_CASE("Sorted folders keep every subtree in one run", "[shot][list][order]") {
+    // Names equal in natural order (case, leading zeros) still keep their subtrees apart.
+    std::vector<fs::path> folders{"r/a1/y",  "r/A1",        "r/a01", "r/a1", "r/A1/z",
+                                  "r/a01/x", "r/a1/y/deep", "r/b",   "r"};
+    std::ranges::sort(folders, folderPrecedes);
+    for (const fs::path& root : folders) {
+        const auto under = [&root](const fs::path& folder) {
+            auto [end, it] = std::ranges::mismatch(root, folder);
+            return end == root.end();
+        };
+        const auto first = std::ranges::find_if(folders, under);
+        const auto afterRun = std::find_if_not(first, folders.end(), under);
+        CAPTURE(root);
+        CHECK(std::find_if(afterRun, folders.end(), under) == folders.end());
+        CHECK(*first == root);
+    }
+}
+
+TEST_CASE("Listing recursively is a pre-order walk over the folders' own listings",
+          "[shot][list][recursive]") {
+    const test::TempDir directory;
+    for (const char* name : {"Rome/raw", "Rome 2", "Trip-2", "Trip/day1", "sub2", "sub10/deep",
+                             "empty/inner", ".hidden", "@eaDir", "z"}) {
+        fs::create_directories(directory.file(name));
+    }
+    for (const char* name :
+         {"IMG_1.ARW", "IMG_1.JPG", "Rome/IMG_10.jpg", "Rome/IMG_2.jpg", "Rome/raw/IMG_2.CR2",
+          "Rome/raw/img_2.jpg", "Rome 2/a.png", "Trip/x.jpg", "Trip/day1/x.jpg", "Trip-2/x.jpg",
+          "sub2/a.jpg", "sub10/a.jpg", "sub10/deep/b.ARW", "empty/inner/c.tif", ".hidden/d.jpg",
+          "@eaDir/e.jpg", "z/.f.jpg", "z/g.txt"}) {
+        touch(directory.file(name));
+    }
+
+    const auto shots = listShots(directory.path(), true);
+    // The same result as the listing before it walked folder by folder.
+    CHECK(shots == test::reference::listShotsRecursively(directory.path()));
+
+    // And the same as a pre-order walk by hand.
+    std::vector<Shot> walked;
+    const auto walk = [&walked](const auto& self, const fs::path& folder) -> void {
+        FolderListing listing = listFolder(folder);
+        std::ranges::move(listing.shots, std::back_inserter(walked));
+        for (const auto& child : listing.folders) {
+            self(self, child);
+        }
+    };
+    walk(walk, directory.path());
+    CHECK(shots == walked);
+    CHECK(shots.size() == 12);
+
+    // Folder-major in folderPrecedes order.
+    for (std::size_t i = 1; i < shots.size(); ++i) {
+        const fs::path before = shots[i - 1].primary.parent_path();
+        const fs::path after = shots[i].primary.parent_path();
+        CAPTURE(before, after);
+        CHECK_FALSE(folderPrecedes(after, before));
+    }
+}
+
+TEST_CASE("Listing recursively keeps the subtrees of names equal in natural order apart",
+          "[shot][list][recursive][order]") {
+    const test::TempDir directory;
+    for (const char* name : {"a01/x", "a1/y"}) {
+        fs::create_directories(directory.file(name));
+        touch(directory.file(name) / "p.jpg");
+    }
+    touch(directory.file("a01/p.jpg"));
+    touch(directory.file("a1/p.jpg"));
+    std::vector<fs::path> folders;
+    for (const auto& shot : listShots(directory.path(), true)) {
+        folders.push_back(shot.primary.parent_path());
+    }
+    // Before step 1 of the incremental-refresh plan this came out a01, a1, a01/x, a1/y.
+    CHECK(folders == std::vector{directory.file("a01"), directory.file("a01/x"),
+                                 directory.file("a1"), directory.file("a1/y")});
+}
+
+TEST_CASE("A folder that cannot be read reports why", "[shot][list][folder][error]") {
+    const test::TempDir directory;
+    const auto failure = [](const fs::path& folder,
+                            bool recursive) -> std::optional<fs::filesystem_error> {
+        try {
+            if (recursive) {
+                (void)listShots(folder, true);
+            } else {
+                (void)listFolder(folder);
+            }
+        } catch (const fs::filesystem_error& error) {
+            return error;
+        }
+        return std::nullopt;
+    };
+
+    SECTION("gone: missing") {
+        for (const bool recursive : {false, true}) {
+            const auto error = failure(directory.file("missing"), recursive);
+            REQUIRE(error);
+            CHECK(error->path1() == directory.file("missing"));
+            CHECK(error->code() == std::errc::no_such_file_or_directory);
+            CHECK(classifyFolderError(error->code()) == FolderError::Gone);
+            CHECK(std::string(error->what()).find("missing") != std::string::npos);
+        }
+    }
+    SECTION("gone: a file, not a directory") {
+        touch(directory.file("file.jpg"));
+        const auto error = failure(directory.file("file.jpg"), false);
+        REQUIRE(error);
+        CHECK(classifyFolderError(error->code()) == FolderError::Gone);
+    }
+    SECTION("no permission") {
+        fs::create_directories(directory.file("locked"));
+        fs::permissions(directory.file("locked"), fs::perms::none);
+        const auto error = failure(directory.file("locked"), false);
+        fs::permissions(directory.file("locked"), fs::perms::owner_all);
+        if (!error) {
+            SKIP("permissions are not enforced here (running as the superuser?)");
+        }
+        CHECK(error->code() == std::errc::permission_denied);
+        CHECK(classifyFolderError(error->code()) == FolderError::NoPermission);
+    }
+    SECTION("other") {
+        CHECK(classifyFolderError(std::make_error_code(std::errc::io_error)) == FolderError::Other);
+        CHECK(classifyFolderError(std::make_error_code(std::errc::timed_out)) ==
+              FolderError::Other);
+        CHECK(classifyFolderError(std::make_error_code(std::errc::operation_not_permitted)) ==
+              FolderError::NoPermission);
+        CHECK(classifyFolderError(std::make_error_code(std::errc::not_a_directory)) ==
+              FolderError::Gone);
+    }
+}
+
+TEST_CASE("An unreadable folder's error text is the folder, then the reason", "[shot]") {
+    const test::TempDir directory;
+    const auto missing = directory.file("missing");
+    try {
+        (void)listShots(missing);
+        FAIL("a missing folder must throw");
+    } catch (const std::exception& error) {
+        CHECK_THAT(std::string(error.what()), Catch::Matchers::StartsWith(missing.string() + ": "));
+    }
 }

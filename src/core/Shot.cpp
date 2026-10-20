@@ -7,8 +7,9 @@
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
+#include <iterator>
 #include <map>
-#include <stdexcept>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -152,123 +153,137 @@ std::vector<Shot> arraw::groupShots(std::vector<std::filesystem::path> paths) {
     return shots;
 }
 
-bool arraw::isListedFolder(const std::filesystem::directory_entry& entry) {
-    std::error_code error;
-    if (entry.symlink_status(error).type() != std::filesystem::file_type::directory) {
-        return false;
-    }
-    const std::string name = utf8(entry.path().filename());
-    return !name.starts_with('.') && name != "@eaDir" && name != "#recycle" &&
-           name != "$RECYCLE.BIN" && name != "System Volume Information";
-}
-
 namespace {
 
-/// @brief Lists the regular files of one folder, throwing if it cannot be read.
-std::vector<std::filesystem::path> filesOf(const std::filesystem::path& folder) {
-    std::error_code error;
-    std::filesystem::directory_iterator entries(folder, error);
-    if (error) {
-        throw std::runtime_error(folder.string() + ": " + error.message());
-    }
-    std::vector<std::filesystem::path> files;
-    for (const std::filesystem::directory_iterator end; entries != end; entries.increment(error)) {
-        if (error) {
-            throw std::runtime_error(folder.string() + ": " + error.message());
-        }
-        const std::filesystem::path& path = entries->path();
-        std::error_code ignored;
-        if (!path.filename().native().starts_with('.') &&
-            std::filesystem::is_regular_file(path, ignored)) {
-            files.push_back(path);
-        }
-    }
-    if (error) {
-        throw std::runtime_error(folder.string() + ": " + error.message());
-    }
-    return files;
+/// @brief Tells whether a folder name is one the recursive listing enters: not hidden, not clutter.
+bool isListedFolderName(const std::filesystem::path& name) {
+    const std::string text = utf8(name);
+    return !text.starts_with('.') && text != "@eaDir" && text != "#recycle" &&
+           text != "$RECYCLE.BIN" && text != "System Volume Information";
 }
 
-/// @brief Lists the regular files of a folder tree, folder by folder.
-///
-/// Only the root can make it throw. Any other folder that cannot be opened or read to
-/// the end (permission denied, vanished, a dead mount) is skipped, and the walk goes on
-/// with its siblings.
-std::vector<std::filesystem::path> filesUnder(const std::filesystem::path& root) {
-    std::vector<std::filesystem::path> files;
-    std::vector<std::filesystem::path> pending{root};
-    while (!pending.empty()) {
-        const std::filesystem::path folder = std::move(pending.back());
-        pending.pop_back();
-        std::error_code error;
-        std::filesystem::directory_iterator entries(folder, error);
-        if (error) {
-            if (folder == root) {
-                throw std::runtime_error(folder.string() + ": " + error.message());
-            }
-            continue;
-        }
-        for (const std::filesystem::directory_iterator end; entries != end;
-             entries.increment(error)) {
-            if (error) {
-                break;
-            }
-            const std::filesystem::path& path = entries->path();
-            if (isListedFolder(*entries)) {
-                pending.push_back(path);
-                continue;
-            }
-            std::error_code ignored;
-            if (!path.filename().native().starts_with('.') &&
-                std::filesystem::is_regular_file(path, ignored)) {
-                files.push_back(path);
-            }
-        }
+/// @brief Compares two path components: natural order, then the exact bytes.
+int compareComponents(const std::filesystem::path& left, const std::filesystem::path& right) {
+    const std::string a = utf8(left);
+    const std::string b = utf8(right);
+    if (const int order = compareNatural(a, b); order != 0) {
+        return order;
     }
-    return files;
+    return a.compare(b);
 }
 
-/// @brief Compares two folders component by component, so that a folder's subtree follows it.
-int compareFolders(const std::filesystem::path& left, const std::filesystem::path& right) {
-    auto a = left.begin();
-    auto b = right.begin();
-    for (; a != left.end() && b != right.end(); ++a, ++b) {
-        if (const int order = compareNatural(utf8(*a), utf8(*b)); order != 0) {
-            return order;
-        }
+/// @brief The error of a folder that cannot be read; its text is `<folder>: <reason>`, as the
+/// application's dialog and the command line show it.
+class UnreadableFolder : public std::filesystem::filesystem_error {
+public:
+    UnreadableFolder(const std::filesystem::path& folder, std::error_code error)
+        : filesystem_error("cannot read the folder", folder, error),
+          text_(folder.string() + ": " + error.message()) {}
+
+    [[nodiscard]] const char* what() const noexcept override {
+        return text_.c_str();
     }
-    if (a == left.end() && b == right.end()) {
-        return 0;
-    }
-    return a == left.end() ? -1 : 1;
+
+private:
+    std::string text_;
+};
+
+/// @brief Throws the error of a folder that cannot be read, naming it.
+[[noreturn]] void throwUnreadable(const std::filesystem::path& folder, std::error_code error) {
+    throw UnreadableFolder(folder, error);
 }
 
 } // namespace
 
-std::vector<Shot> arraw::listShots(const std::filesystem::path& folder, bool recursive) {
-    if (!recursive) {
-        return groupShots(filesOf(folder));
-    }
-    // Folder by folder, so that the order is folder-major and nothing pairs across folders.
-    std::map<std::filesystem::path, std::vector<std::filesystem::path>> byFolder;
-    for (auto& file : filesUnder(folder)) {
-        byFolder[file.parent_path()].push_back(std::move(file));
-    }
-    std::vector<std::filesystem::path> folders;
-    for (const auto& entry : byFolder) {
-        folders.push_back(entry.first);
-    }
-    std::ranges::sort(folders, [](const auto& left, const auto& right) {
-        if (const int order = compareFolders(left, right); order != 0) {
+bool arraw::isListedFolder(const std::filesystem::directory_entry& entry) {
+    std::error_code error;
+    return entry.symlink_status(error).type() == std::filesystem::file_type::directory &&
+           isListedFolderName(entry.path().filename());
+}
+
+bool arraw::folderPrecedes(const std::filesystem::path& a, const std::filesystem::path& b) {
+    auto left = a.begin();
+    auto right = b.begin();
+    for (; left != a.end() && right != b.end(); ++left, ++right) {
+        if (const int order = compareComponents(*left, *right); order != 0) {
             return order < 0;
         }
-        return utf8(left) < utf8(right);
-    });
-    std::vector<Shot> shots;
-    for (const auto& parent : folders) {
-        for (auto& shot : groupShots(std::move(byFolder[parent]))) {
-            shots.push_back(std::move(shot));
+    }
+    // One is a prefix of the other: the folder comes before its subtree.
+    return left == a.end() && right != b.end();
+}
+
+FolderListing arraw::listFolder(const std::filesystem::path& folder) {
+    std::error_code error;
+    std::filesystem::directory_iterator entries(folder, error);
+    if (error) {
+        throwUnreadable(folder, error);
+    }
+    FolderListing listing;
+    std::vector<std::filesystem::path> files;
+    for (const std::filesystem::directory_iterator end; entries != end; entries.increment(error)) {
+        const std::filesystem::directory_entry& entry = *entries;
+        // The type the directory read reported (d_type, or the find data on Windows); one
+        // lstat only where the filesystem reports none.
+        std::error_code ignored;
+        const std::filesystem::file_type type = entry.symlink_status(ignored).type();
+        const std::filesystem::path name = entry.path().filename();
+        if (type == std::filesystem::file_type::directory) {
+            if (isListedFolderName(name)) {
+                listing.folders.push_back(entry.path());
+            }
+            continue;
         }
+        if (name.native().starts_with('.')) {
+            continue;
+        }
+        // A link is followed, so a link to a photograph lists; that costs the one stat.
+        if (type == std::filesystem::file_type::regular ||
+            (type == std::filesystem::file_type::symlink && entry.is_regular_file(ignored))) {
+            files.push_back(entry.path());
+        }
+    }
+    // A failed increment leaves the iterator at its end, so the loop has stopped on it.
+    if (error) {
+        throwUnreadable(folder, error);
+    }
+    std::ranges::sort(listing.folders, folderPrecedes);
+    listing.shots = groupShots(std::move(files));
+    return listing;
+}
+
+FolderError arraw::classifyFolderError(const std::error_code& error) {
+    if (error == std::errc::no_such_file_or_directory || error == std::errc::not_a_directory) {
+        return FolderError::Gone;
+    }
+    if (error == std::errc::permission_denied || error == std::errc::operation_not_permitted) {
+        return FolderError::NoPermission;
+    }
+    return FolderError::Other;
+}
+
+std::vector<Shot> arraw::listShots(const std::filesystem::path& folder, bool recursive) {
+    FolderListing root = listFolder(folder);
+    if (!recursive) {
+        return std::move(root.shots);
+    }
+    // Pre-order, children in folderPrecedes order: the stack holds them reversed, so the
+    // first child is read next. Only the root may throw; a subfolder that cannot be read
+    // (permission denied, vanished, a dead mount) is skipped and its siblings still listed.
+    std::vector<Shot> shots = std::move(root.shots);
+    std::vector<std::filesystem::path> pending(std::make_move_iterator(root.folders.rbegin()),
+                                               std::make_move_iterator(root.folders.rend()));
+    while (!pending.empty()) {
+        const std::filesystem::path current = std::move(pending.back());
+        pending.pop_back();
+        FolderListing listing;
+        try {
+            listing = listFolder(current);
+        } catch (const std::filesystem::filesystem_error&) {
+            continue;
+        }
+        std::ranges::move(listing.shots, std::back_inserter(shots));
+        std::ranges::move(listing.folders | std::views::reverse, std::back_inserter(pending));
     }
     return shots;
 }
