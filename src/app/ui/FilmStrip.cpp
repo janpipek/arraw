@@ -333,6 +333,7 @@ FilmStrip::FilmStrip(QWidget* parent, ThumbnailCache cache, LensDatabaseSource l
     connect(&model_, &QAbstractItemModel::rowsInserted, this,
             [this](const QModelIndex&, int first, int last) { takeInsertedRows(first, last); });
     connect(&model_, &ShotModel::listingChanged, this, &FilmStrip::onListingChanged);
+    connect(&model_, &ShotModel::refreshingChanged, this, &FilmStrip::onRefreshingChanged);
     busyTimer_.setInterval(busyNoteMs);
     connect(&busyTimer_, &QTimer::timeout, this, &FilmStrip::updateFolderLabel);
     // A change too scattered to merge by runs resets the model (see ShotModel::applyFolders);
@@ -572,6 +573,18 @@ void FilmStrip::setFolder(const fs::path& folder, std::optional<fs::path> activa
     emit activeChanged();
 }
 
+QList<QKeySequence> refreshFolderKeys() {
+    // keyBindings, not QKeySequence(StandardKey), which keeps only the first binding: on GNOME
+    // that is Ctrl+R, and F5 would do nothing (review R1).
+    QList<QKeySequence> keys{QKeySequence(Qt::Key_F5)};
+    for (const QKeySequence& key : QKeySequence::keyBindings(QKeySequence::Refresh)) {
+        if (!keys.contains(key)) {
+            keys.append(key);
+        }
+    }
+    return keys;
+}
+
 void FilmStrip::setMaxWatchedFolders(int limit) {
     watcher_.setMaxWatchedFolders(limit);
 }
@@ -607,7 +620,8 @@ void FilmStrip::updateNotice() {
             .arg(watchStatus_.limit)
             .arg(unwatched)
             .arg(watchStatus_.directories)
-            .arg(QKeySequence(QKeySequence::Refresh).toString(QKeySequence::NativeText)));
+            .arg(QKeySequence::listToString(refreshFolderKeys(), QKeySequence::NativeText)
+                     .replace(QStringLiteral("; "), tr(" or "))));
     noticeButton_->show();
 }
 
@@ -667,6 +681,16 @@ void FilmStrip::onListingChanged(bool listing) {
     updateEmptyHint();
 }
 
+void FilmStrip::onRefreshingChanged(bool refreshing) {
+    if (refreshing) {
+        listingClock_.start();
+        busyTimer_.start();
+    } else if (!model_.isListing()) {
+        busyTimer_.stop();
+    }
+    updateFolderLabel();
+}
+
 void FilmStrip::updateFolderLabel() {
     QString text = toQString(model_.folder().lexically_normal());
     folderLabel_->setToolTip(text);
@@ -675,6 +699,9 @@ void FilmStrip::updateFolderLabel() {
     }
     if (model_.isListing() && listingClock_.isValid() && listingClock_.elapsed() >= busyNoteMs) {
         text += tr(" — listing… %1 shots").arg(QLocale().toString(model_.rowCount()));
+    } else if (model_.isRefreshing() && listingClock_.isValid() &&
+               listingClock_.elapsed() >= busyNoteMs) {
+        text += tr(" — refreshing… %1 shots").arg(QLocale().toString(model_.rowCount()));
     }
     folderLabel_->setText(text);
 }

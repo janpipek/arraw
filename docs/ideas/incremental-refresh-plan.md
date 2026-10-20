@@ -445,7 +445,9 @@ Give the notice and the toggle an `objectName` (review N12).
   - the per-directory refresh after touching one file;
   - an interleaved copy of 2 000 shots.
 - Targets: first batch under 100 ms locally, no GUI stall over 50 ms at 50 000 shots, and a
-  one-folder refresh under 30 ms.
+  one-folder refresh under 30 ms of work after the debounce. The bench runs with a 0 ms debounce;
+  what a user sees is the debounce (300 ms) plus that work, so about 315 ms for the measured
+  ~13 ms.
 
 ## 8. Steps
 

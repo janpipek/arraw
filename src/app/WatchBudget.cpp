@@ -10,8 +10,6 @@ namespace arraw::app {
 
 namespace fs = std::filesystem;
 
-namespace {} // namespace
-
 bool WatchBudget::Key::operator<(const Key& other) const {
     if (depth != other.depth) {
         return depth < other.depth;
@@ -50,8 +48,8 @@ std::vector<fs::path> WatchBudget::remove(std::span<const fs::path> paths) {
             continue;
         }
         const Key key{known->second, path};
-        if (watched_.erase(key) == 0) {
-            waiting_.erase(key);
+        if (watched_.erase(key) == 0 && waiting_.erase(key) == 0) {
+            refused_.erase(key);
         }
         depths_.erase(known);
     }
@@ -75,13 +73,17 @@ void WatchBudget::refused(const fs::path& path) {
     if (at == watched_.end()) {
         return;
     }
-    waiting_.insert(watched_.extract(at));
+    // Set aside, not among the waiting: a place freed later goes to a directory that may get a
+    // watch, not to this one again (review R3).
+    refused_.insert(watched_.extract(at));
     // The system took this many and no more.
     cap_ = static_cast<int>(watched_.size());
 }
 
 WatchBudget::Moves WatchBudget::setCap(int cap) {
     cap_ = std::max(cap, 0);
+    // The refused are tried again, in their order among the others.
+    waiting_.merge(refused_);
     Moves moves;
     moves.evicted = shrink();
     moves.promoted = promote();
@@ -92,6 +94,7 @@ void WatchBudget::reset(int cap) {
     cap_ = std::max(cap, 0);
     watched_.clear();
     waiting_.clear();
+    refused_.clear();
     depths_.clear();
 }
 

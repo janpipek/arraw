@@ -162,6 +162,37 @@ TEST_CASE("A refused watch shrinks the budget to what the system gave", "[watchb
     REQUIRE(grant.evict == fs::path("/r/b"));
 }
 
+TEST_CASE("A refused directory does not take the places freed after it", "[watchbudget]") {
+    // Review R3: a refusal of one directory alone (a share without change notification).
+    WatchBudget budget(4);
+    for (const char* path : {"/r", "/r/a", "/r/b", "/r/c", "/r/d"}) {
+        add(budget, path);
+    }
+    budget.refused("/r/a");
+    REQUIRE(budget.cap() == 3);
+    REQUIRE(budget.unwatched() == 2);
+
+    // The place /r/b leaves goes to /r/d, which waited, not to /r/a again.
+    REQUIRE(budget.remove("/r/b") == fs::path("/r/d"));
+    REQUIRE(budget.isWatched("/r/d"));
+    REQUIRE_FALSE(budget.isWatched("/r/a"));
+    REQUIRE(budget.cap() == 3);
+    // Nothing else waits: the next place freed stays free.
+    REQUIRE_FALSE(budget.remove("/r/c"));
+    REQUIRE(budget.watched() == 2);
+    REQUIRE(budget.unwatched() == 1);
+
+    // The next walk tries it again; one that goes meanwhile is forgotten.
+    auto moves = budget.setCap(4);
+    REQUIRE(moves.promoted == std::vector<fs::path>{"/r/a"});
+    REQUIRE(budget.isWatched("/r/a"));
+    budget.refused("/r/a");
+    REQUIRE_FALSE(budget.remove("/r/a"));
+    REQUIRE(budget.unwatched() == 0);
+    moves = budget.setCap(4);
+    REQUIRE(moves.promoted.empty());
+}
+
 TEST_CASE("A new cap lifts or lowers the budget", "[watchbudget]") {
     WatchBudget budget(2);
     for (const char* path : {"/r", "/r/a", "/r/b", "/r/c"}) {

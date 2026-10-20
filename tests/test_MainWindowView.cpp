@@ -276,7 +276,15 @@ TEST_CASE("F5 refreshes the folder, with the menu bar shown or hidden", "[app][w
     Window w;
     QAction& refresh = w.action("refreshFolderAction");
     CHECK(refresh.text() == "&Refresh Folder");
-    CHECK(refresh.shortcut() == QKeySequence(QKeySequence::Refresh));
+    // F5 first and on every platform, then every one of the platform's Refresh keys, not only the
+    // first (review R1: on GNOME that is Ctrl+R).
+    const QList<QKeySequence> keys = refresh.shortcuts();
+    REQUIRE_FALSE(keys.isEmpty());
+    CHECK(keys.front() == QKeySequence(Qt::Key_F5));
+    for (const QKeySequence& key : QKeySequence::keyBindings(QKeySequence::Refresh)) {
+        CHECK(keys.contains(key));
+    }
+    CHECK(keys.count(QKeySequence(Qt::Key_F5)) == 1);
     CHECK(refresh.isEnabled());
     CHECK(w.window.actions().contains(&refresh));
     CHECK(w.window.menuBar()->actions().size() > 0);

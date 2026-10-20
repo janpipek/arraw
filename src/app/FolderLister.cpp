@@ -73,9 +73,16 @@ QStringList FolderLister::watchedDirectories() const {
     return {watchedCopy_.begin(), watchedCopy_.end()};
 }
 
-void FolderLister::simulateDirectoryChanged(const fs::path& directory) {
+void FolderLister::simulateDirectoryChanged(const fs::path& directory, bool watchDropped) {
     QMetaObject::invokeMethod(
-        this, [this, path = toQString(directory)] { onDirectoryChanged(path); },
+        this,
+        [this, path = toQString(directory), watchDropped] {
+            if (watchDropped && watcher_) {
+                // As Qt does for a directory removed, moved or unmounted: its own books only.
+                watcher_->removePath(path);
+            }
+            onDirectoryChanged(path);
+        },
         Qt::QueuedConnection);
 }
 
@@ -106,9 +113,14 @@ void FolderLister::begin(const fs::path& root, bool recursive, std::uint64_t wal
         dirty_.clear();
         debounceTimer_->stop();
         root_ = folder;
-    } else if (!dirty_.empty()) {
-        // Reports put off while no walk was wanted.
-        debounceTimer_->start(0);
+    } else {
+        // A watch Qt dropped while its report could not be taken (review R2) is had again: the
+        // walk watches before it reads what is not watched.
+        forgetDroppedWatches();
+        if (!dirty_.empty()) {
+            // Reports put off while no walk was wanted.
+            debounceTimer_->start(0);
+        }
     }
     recursive_ = recursive;
     walk_ = walk;
@@ -182,10 +194,10 @@ void FolderLister::step() {
     dir.recheck = false;
     // Watch, then read: a change after the read is reported, one before it is in the read.
     const fs::path path = directory->first;
+    // A watch refused for a directory that did not open, kept for after the read.
+    bool retry = false;
     if (!dir.watched && budget_.isWatched(path)) {
-        std::vector<fs::path> promoted;
-        watch(directory, promoted);
-        applyMoves({.promoted = std::move(promoted), .evicted = {}});
+        retry = !watch(directory) && budget_.isWatched(path);
     }
 
     ReadHook hook;
@@ -217,6 +229,11 @@ void FolderLister::step() {
         }
         dropSubtree(directory);
     } else {
+        if (retry && watch(directory)) {
+            // It opens after all (replaced between the two, or a share's hiccup): watched now,
+            // after the read, so read once more (plan, section 4, rule 2; review R4).
+            enqueue(directory, false, true);
+        }
         if (walking_) {
             summary_.shots += static_cast<int>(listing->shots.size());
         }
@@ -308,7 +325,7 @@ FolderLister::Tree::iterator FolderLister::track(const fs::path& path, int depth
     return entry;
 }
 
-bool FolderLister::watch(Tree::iterator directory, std::vector<fs::path>& promoted) {
+bool FolderLister::watch(Tree::iterator directory) {
     const QString path = toQString(directory->first);
     WatchGate gate;
     {
@@ -322,13 +339,14 @@ bool FolderLister::watch(Tree::iterator directory, std::vector<fs::path>& promot
         return true;
     }
     // Refused. A directory that opens is out of watches (ENOSPC, shared with other programs):
-    // the budget shrinks to what the system gave. One that does not is going, or gone.
+    // the budget shrinks to what the system gave. One that does not is going, or gone: it keeps
+    // its place until its read settles it, dropped with its subtree or watched after all. Its
+    // place is not handed on now, as under a vanished root or mount the next one would fail too,
+    // and the next, through every waiting directory (review R4, R5).
     std::error_code error;
     const fs::directory_iterator probe(directory->first, error);
     if (!error) {
         budget_.refused(directory->first);
-    } else if (auto next = budget_.remove(directory->first)) {
-        promoted.push_back(std::move(*next));
     }
     return false;
 }
@@ -342,22 +360,16 @@ void FolderLister::applyMoves(WatchBudget::Moves moves) {
         }
     }
     unwatch(released);
-    // A place may go to a directory that is gone, whose refusal frees it for the next.
-    std::deque<fs::path> promoted(std::make_move_iterator(moves.promoted.begin()),
-                                  std::make_move_iterator(moves.promoted.end()));
-    while (!promoted.empty()) {
-        const auto entry = tree_.find(promoted.front());
-        promoted.pop_front();
+    for (const fs::path& path : moves.promoted) {
+        const auto entry = tree_.find(path);
         if (entry == tree_.end() || entry->second.watched) {
             continue;
         }
-        std::vector<fs::path> more;
         // A watch got after the read: read once more, so nothing between the two is missed
-        // (plan, section 4, rule 2).
-        if (watch(entry, more)) {
+        // (plan, section 4, rule 2). One refused is not handed on (see watch).
+        if (watch(entry)) {
             enqueue(entry, false, true);
         }
-        promoted.insert(promoted.end(), more.begin(), more.end());
     }
     scheduleStep();
 }
@@ -385,6 +397,20 @@ void FolderLister::unwatchAll() {
     watchedCopy_.clear();
 }
 
+void FolderLister::forgetDroppedWatches() {
+    const QStringList listed = watcher_->directories();
+    const QSet<QString> present(listed.begin(), listed.end());
+    const std::scoped_lock lock(watchedMutex_);
+    for (auto& [path, dir] : tree_) {
+        if (dir.watched) {
+            if (const QString spelled = toQString(path); !present.contains(spelled)) {
+                dir.watched = false;
+                watchedCopy_.remove(spelled);
+            }
+        }
+    }
+}
+
 void FolderLister::publishStatus(bool force) {
     const WatchStatus status{.watched = budget_.watched(),
                              .directories = static_cast<int>(tree_.size()),
@@ -397,12 +423,16 @@ void FolderLister::publishStatus(bool force) {
 }
 
 void FolderLister::onDirectoryChanged(const QString& path) {
-    if (!current()) {
-        return;
-    }
     fs::path directory(path.toStdU16String());
     if (!tree_.contains(directory)) {
         return; // Dropped from the tree since; its parent's read said so.
+    }
+    if (!current()) {
+        // Between a walk's start and its begin: kept for that walk, which reads it first if it
+        // is of this tree, and drops it if not (review R2). It may be Qt's report of a watch it
+        // dropped, which nothing else would tell.
+        dirty_.insert(std::move(directory));
+        return;
     }
     const auto now = Clock::now();
     if (dirty_.empty()) {

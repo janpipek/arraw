@@ -20,6 +20,7 @@
 #include <fstream>
 #include <functional>
 #include <iterator>
+#include <memory>
 #include <set>
 #include <string>
 #include <vector>
@@ -235,19 +236,29 @@ TEST_CASE("A model takes its rows from the walk it asked for, and drops other wa
         model.finishListing(walk, {});
         REQUIRE(finished == 1);
     }
-    SECTION("A refresh asked for during the listing waits for its end, then merges") {
+    SECTION("A refresh asked for during the listing or a refresh is taken in by that walk") {
+        std::vector<bool> refreshing;
+        QObject::connect(&model, &ShotModel::refreshingChanged, &model,
+                         [&](bool now) { refreshing.push_back(now); });
         model.applyFolders(walk, {{root, {jpeg(root / "IMG_1.jpg")}},
                                   {root / "gone", {jpeg(root / "gone/IMG_1.jpg")}}});
-        model.refresh();
+        // The listing reads everything: no second walk after it (review R6).
         model.refresh();
         REQUIRE(walks == 1);
-        REQUIRE(model.isRefreshing());
+        REQUIRE_FALSE(model.isRefreshing());
         model.finishListing(walk, {});
-        // One walk for both, under a number of its own; the loader's generation is not changed.
+        REQUIRE(walks == 1);
+        REQUIRE(refreshing.empty());
+
+        // A refresh, under a number of its own; the loader's generation is not changed. A second
+        // press while it runs is folded into it.
+        model.refresh();
+        model.refresh();
         REQUIRE(walks == 2);
         REQUIRE(model.walk() == walk + 1);
         REQUIRE_FALSE(model.isListing());
         REQUIRE(model.isRefreshing());
+        REQUIRE(refreshing == std::vector<bool>{true});
         log.events.clear();
         // The refresh finds a new shot in the root and no "gone": that folder's rows go at the end.
         model.applyFolders(model.walk(),
@@ -255,9 +266,57 @@ TEST_CASE("A model takes its rows from the walk it asked for, and drops other wa
         REQUIRE(model.rowCount() == 3);
         model.finishListing(model.walk(), {});
         REQUIRE_FALSE(model.isRefreshing());
+        REQUIRE(walks == 2);
+        REQUIRE(refreshing == std::vector<bool>{true, false});
         REQUIRE(log.events == std::vector<std::string>{"+1..1", "-2..2"});
         REQUIRE(primaries(model) == std::vector<fs::path>{root / "IMG_1.jpg", root / "IMG_2.jpg"});
         REQUIRE(listing == std::vector<bool>{true, false});
+
+        // A new folder ends a refresh under way.
+        model.refresh();
+        model.setFolder(root, true);
+        REQUIRE_FALSE(model.isRefreshing());
+        REQUIRE(refreshing == std::vector<bool>{true, false, true, false});
+    }
+    SECTION("A batch that holds a new folder before the one ahead of it puts each in its place") {
+        // Review B1: a parent read again for a change finds a new folder that sorts before the
+        // one the walk read last, in the same batch.
+        model.applyFolders(walk, {{root, {jpeg(root / "IMG_1.jpg")}},
+                                  {root / "2026", {}},
+                                  {root / "2026/10-19", {jpeg(root / "2026/10-19/A.jpg")}}});
+        model.applyFolders(walk, {{root / "2026/10-21", {jpeg(root / "2026/10-21/C.jpg")}},
+                                  {root / "2026", {}},
+                                  {root / "2026/10-20", {jpeg(root / "2026/10-20/B.jpg")}}});
+        const std::vector<fs::path> expected{root / "IMG_1.jpg", root / "2026/10-19/A.jpg",
+                                             root / "2026/10-20/B.jpg", root / "2026/10-21/C.jpg"};
+        REQUIRE(primaries(model) == expected);
+        for (int row = 0; row < static_cast<int>(expected.size()); ++row) {
+            REQUIRE(model.rowOf(expected[static_cast<std::size_t>(row)]) == row);
+        }
+        // The spans agree with the rows: each folder goes with one remove.
+        model.removeSubtree(walk, root / "2026/10-20");
+        REQUIRE(primaries(model) == std::vector<fs::path>{root / "IMG_1.jpg",
+                                                          root / "2026/10-19/A.jpg",
+                                                          root / "2026/10-21/C.jpg"});
+        REQUIRE(model.rowOf(root / "2026/10-21/C.jpg") == 2);
+    }
+    SECTION("A batch that holds a folder twice takes its later read, once") {
+        // Review B1: a directory read by the walk, then again for a change, before the batch went.
+        model.applyFolders(walk, {{root, {jpeg(root / "IMG_1.jpg")}}});
+        model.applyFolders(walk,
+                           {{root / "a", {jpeg(root / "a/IMG_1.jpg")}},
+                            {root / "b", {jpeg(root / "b/IMG_1.jpg")}},
+                            {root / "a", {jpeg(root / "a/IMG_1.jpg"), jpeg(root / "a/IMG_2.jpg")}},
+                            {root / "b", {}}});
+        const std::vector<fs::path> expected{root / "IMG_1.jpg", root / "a/IMG_1.jpg",
+                                             root / "a/IMG_2.jpg"};
+        REQUIRE(primaries(model) == expected);
+        REQUIRE(model.rowCount() == 3);
+        for (int row = 0; row < 3; ++row) {
+            REQUIRE(model.rowOf(expected[static_cast<std::size_t>(row)]) == row);
+        }
+        model.removeSubtree(walk, root / "a");
+        REQUIRE(primaries(model) == std::vector<fs::path>{root / "IMG_1.jpg"});
     }
     SECTION("After the walk, a folder read again is merged, a new one inserted, a gone one "
             "removed with its subtree in one go") {
@@ -447,6 +506,26 @@ std::set<fs::path> readSince(const test::ListingGate& gate, std::size_t from) {
 /// A path as the watcher spells it.
 QString qtPath(const fs::path& path) {
     return QString::fromStdU16String(path.u16string());
+}
+
+/// A read hook that runs an action once, on the lister's thread, before a directory is read.
+FolderLister::ReadHook onceBefore(fs::path at, std::function<void()> action) {
+    auto done = std::make_shared<std::atomic<bool>>(false);
+    return [at = std::move(at), action = std::move(action), done](const fs::path& directory) {
+        if (directory == at && !done->exchange(true)) {
+            action();
+        }
+    };
+}
+
+/// Tells whether every row is the one the model's index gives for its shot.
+bool indexAgrees(const ShotModel& model) {
+    for (int row = 0; row < model.rowCount(); ++row) {
+        if (model.rowOf(model.shot(row).primary) != row) {
+            return false;
+        }
+    }
+    return true;
 }
 
 } // namespace
@@ -678,6 +757,81 @@ TEST_CASE("The watcher goes while changes are pending or being read", "[watcher]
     REQUIRE(model.rowCount() == 1);
 }
 
+TEST_CASE("A directory read again within a batch of the first listing keeps its rows once",
+          "[watcher][listing][refresh]") {
+    // Review B1, end to end and without a debounce: a's read reports a change of a itself, so a
+    // is read again a few directories later, in the batch that holds its first read.
+    const test::TempDir folder;
+    for (const char* name :
+         {"IMG_1.jpg", "a/IMG_1.jpg", "b/IMG_1.jpg", "c/IMG_1.jpg", "d/IMG_1.jpg", "e/IMG_1.jpg"}) {
+        addJpeg(folder.file(name));
+    }
+    ShotModel model;
+    FolderWatcher watcher(model, std::chrono::milliseconds(0));
+    watcher.setReadHook(onceBefore(folder.file("a"), [&] {
+        addJpeg(folder.file("a/IMG_2.jpg"));
+        watcher.simulateDirectoryChanged(folder.file("a"));
+    }));
+    model.setFolder(folder.path(), true);
+    REQUIRE(waitUntil(
+        [&] { return !model.isListing() && model.rowOf(folder.file("a/IMG_2.jpg")) >= 0; }));
+    REQUIRE(primaries(model) == primaries(listShots(folder.path(), true)));
+    REQUIRE(indexAgrees(model));
+}
+
+TEST_CASE("A new folder found by a parent's re-read during the first listing goes in its place",
+          "[watcher][listing][refresh]") {
+    // Review B1, end to end and without a debounce: bb appears while c is read, the root (which
+    // has no shots of its own) reports it, and bb is read in the batch that holds c, while the
+    // walk still has c's later siblings to read.
+    const test::TempDir folder;
+    for (const char* sub : {"a", "b", "c", "d", "e", "f", "g", "h"}) {
+        addJpeg(folder.path() / sub / "IMG_1.jpg");
+    }
+    ShotModel model;
+    FolderWatcher watcher(model, std::chrono::milliseconds(0));
+    watcher.setReadHook(onceBefore(folder.file("c"), [&] {
+        addJpeg(folder.file("bb/IMG_1.jpg"));
+        watcher.simulateDirectoryChanged(folder.path());
+    }));
+    model.setFolder(folder.path(), true);
+    REQUIRE(waitUntil(
+        [&] { return !model.isListing() && model.rowOf(folder.file("bb/IMG_1.jpg")) >= 0; }));
+    REQUIRE(primaries(model) == primaries(listShots(folder.path(), true)));
+    REQUIRE(model.rowOf(folder.file("bb/IMG_1.jpg")) == 2);
+    REQUIRE(indexAgrees(model));
+}
+
+TEST_CASE("A watch Qt drops just before a walk begins is had again by that walk",
+          "[watcher][listing][refresh]") {
+    // Review R2: the report comes between the start of a refresh and its begin on the lister
+    // thread, where it used to be dropped, and with it the only sign that b lost its watch.
+    const test::TempDir folder;
+    for (const char* name : {"IMG_1.jpg", "a/IMG_1.jpg", "b/IMG_1.jpg"}) {
+        addJpeg(folder.file(name));
+    }
+    ShotModel model;
+    FolderWatcher watcher(model, std::chrono::milliseconds(0));
+    model.setFolder(folder.path(), true);
+    REQUIRE(waitUntil([&] { return !model.isListing() && model.pendingLoads() == 0; }));
+    const test::ListingGate gate(folder.file("a"));
+    watcher.setReadHook(gate.hook());
+    // The lister is held in a change read of a; what is posted to it now waits behind that read,
+    // in order: Qt drops b's watch and reports it, then the refresh's walk begins.
+    watcher.simulateDirectoryChanged(folder.file("a"));
+    REQUIRE(waitUntil([&] { return gate.reached(); }));
+    watcher.simulateDirectoryChanged(folder.file("b"), true);
+    watcher.refreshAll();
+    REQUIRE(model.isRefreshing());
+    gate.release();
+    REQUIRE(waitUntil([&] { return !model.isRefreshing(); }));
+
+    // b is watched again: a file written there shows without another refresh.
+    addJpeg(folder.file("b/IMG_2.jpg"));
+    REQUIRE(waitUntil([&] { return model.rowOf(folder.file("b/IMG_2.jpg")) >= 0; }));
+    REQUIRE_FALSE(model.isRefreshing());
+}
+
 // Step 5 of the plan: the cap on watches, the notice's status, and the refresh of all.
 
 namespace {
@@ -827,4 +981,67 @@ TEST_CASE("A watch the system refuses shrinks the cap, and the next walk tries a
     REQUIRE(status.last.limit == FolderWatcher::maxWatchedFolders);
     REQUIRE(watcher.watchedDirectories().size() == 4);
     REQUIRE(status.last.unwatched() == 0);
+}
+
+TEST_CASE("A directory whose watch failed because it did not open is watched once it reads",
+          "[watcher][listing][budget]") {
+    // Review R4: c is moved away for its watch and back for its read (replaced in between, or a
+    // share's hiccup). It must stay in the budget and get its watch, not be left out for good.
+    const test::TempDir folder;
+    for (const char* name : {"IMG_1.jpg", "a/IMG_1.jpg", "c/IMG_1.jpg"}) {
+        addJpeg(folder.file(name));
+    }
+    const fs::path c = folder.file("c");
+    const fs::path aside = folder.file("c-aside");
+    auto moved = std::make_shared<std::atomic<bool>>(false);
+    ShotModel model;
+    FolderWatcher watcher(model, std::chrono::milliseconds(20));
+    watcher.setWatchGate([moved, c, aside](const fs::path& directory) {
+        if (directory == c && !moved->exchange(true)) {
+            fs::rename(c, aside);
+            return false;
+        }
+        return true;
+    });
+    watcher.setReadHook(onceBefore(c, [c, aside] { fs::rename(aside, c); }));
+    model.setFolder(folder.path(), true);
+    REQUIRE(waitUntil(
+        [&] { return !model.isListing() && watcher.watchedDirectories().contains(qtPath(c)); }));
+    REQUIRE(moved->load());
+    REQUIRE(model.rowOf(folder.file("c/IMG_1.jpg")) >= 0);
+
+    addJpeg(folder.file("c/IMG_2.jpg"));
+    REQUIRE(waitUntil([&] { return model.rowOf(folder.file("c/IMG_2.jpg")) >= 0; }));
+}
+
+TEST_CASE("A root that vanishes is dropped without a watch tried on every waiting directory",
+          "[watcher][listing][budget]") {
+    // Review R5: ten subfolders, two watches. The root goes at once (an unmount, a share asleep).
+    const test::TempDir folder;
+    const fs::path root = folder.file("photos");
+    addJpeg(root / "IMG_1.jpg");
+    for (int n = 0; n < 10; ++n) {
+        addJpeg(root / ("d" + std::to_string(n)) / "IMG_1.jpg");
+    }
+    auto asked = std::make_shared<std::atomic<int>>(0);
+    ShotModel model;
+    FolderWatcher watcher(model, std::chrono::milliseconds(0));
+    watcher.setMaxWatchedFolders(2);
+    StatusLog status(watcher);
+    watcher.setWatchGate([asked](const fs::path&) {
+        ++*asked;
+        return true;
+    });
+    model.setFolder(root, true);
+    REQUIRE(waitUntil([&] { return !model.isListing() && status.last.directories == 11; }));
+    REQUIRE(status.last.unwatched() == 9);
+    REQUIRE(model.rowCount() == 11);
+
+    asked->store(0);
+    fs::rename(root, folder.file("gone"));
+    // Qt drops the root's watch and reports it; not left to the system's timing.
+    watcher.simulateDirectoryChanged(root, true);
+    REQUIRE(waitUntil([&] { return model.rowCount() == 0 && status.last.directories == 0; }));
+    // The root's own watch is tried again before its read, and nothing more.
+    REQUIRE(asked->load() <= 2);
 }

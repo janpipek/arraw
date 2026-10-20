@@ -306,6 +306,7 @@ void ShotModel::setFolder(const std::filesystem::path& folder, bool recursive) {
     {
         const fs::directory_iterator probe(folder);
     }
+    const bool wasRefreshing = walking_ == Walking::Refresh;
     beginResetModel();
     loader_->clear();
     ++generation_;
@@ -317,13 +318,15 @@ void ShotModel::setFolder(const std::filesystem::path& folder, bool recursive) {
     spans_.clear();
     index_.clear();
     seen_.clear();
-    refreshWanted_ = false;
     incoming_.clear();
     nextFolder_ = 0;
     nextShot_ = 0;
     applyTimer_.stop();
     walking_ = Walking::Listing;
     endResetModel();
+    if (wasRefreshing) {
+        emit refreshingChanged(false);
+    }
     emit listingChanged(true);
     emit walkRequested();
 }
@@ -341,20 +344,15 @@ std::filesystem::path ShotModel::shownName(const Shot& shot) const {
 }
 
 void ShotModel::refresh() {
-    if (folder_.empty()) {
+    // A first listing reads everything, and a refresh under way is what was asked for: either
+    // takes the call in, rather than a second walk of the whole tree after it (review R6).
+    if (folder_.empty() || walking_ != Walking::None) {
         return;
     }
-    refreshWanted_ = true;
-    if (walking_ == Walking::None) {
-        startRefresh();
-    }
-}
-
-void ShotModel::startRefresh() {
-    refreshWanted_ = false;
     ++walk_;
     seen_.clear();
     walking_ = Walking::Refresh;
+    emit refreshingChanged(true);
     emit walkRequested();
 }
 
@@ -471,14 +469,12 @@ void ShotModel::endWalk() {
         removeFolder(spans_.find(*folder));
     }
     seen_.clear();
-    const bool wasListing = walking_ == Walking::Listing;
+    const Walking was = walking_;
     walking_ = Walking::None;
-    if (wasListing) {
+    if (was == Walking::Listing) {
         emit listingChanged(false);
-    }
-    if (refreshWanted_ && walking_ == Walking::None) {
-        startRefresh();
-        return;
+    } else if (was == Walking::Refresh) {
+        emit refreshingChanged(false);
     }
     reportIfLoaded();
 }
@@ -540,9 +536,19 @@ void ShotModel::insertRun(std::vector<fs::path>& added) {
     std::vector<Piece> pieces;
     std::vector<Row> fresh;
     std::optional<Spans::iterator> place; // The span the run goes before.
+    std::optional<fs::path> previous;     // The folder before in the run, with shots or not.
+    const FolderOrder precedes;
     while (nextFolder_ < batch.size() && fresh.size() < maxInsertRows) {
         std::vector<Shot>& shots = batch[nextFolder_].shots;
         fs::path folder = withoutTrailingSeparator(batch[nextFolder_].folder);
+        // The spans are made after the loop, so a run holds only folders in strict folder
+        // order: one read twice (a change re-read during a walk) or one that sorts before the
+        // last (a new folder found by a parent's re-read) is the next step's, which sees the
+        // spans of this one.
+        if (previous && !precedes(*previous, folder)) {
+            break;
+        }
+        previous = folder;
         const bool extends = nextShot_ > 0;
         const auto found = spans_.find(folder);
         if (!extends && (found != spans_.end() || batch[nextFolder_].gone)) {

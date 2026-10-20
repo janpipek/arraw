@@ -112,7 +112,10 @@ public:
     ///
     /// A seam for tests, which do not depend on the system's timing this way.
     /// @param directory Directory, spelled as the listing spells it.
-    void simulateDirectoryChanged(const std::filesystem::path& directory);
+    /// @param watchDropped Whether the system watcher first drops its watch, as Qt does when a
+    /// watched directory is removed, moved or unmounted.
+    void simulateDirectoryChanged(const std::filesystem::path& directory,
+                                  bool watchDropped = false);
 
 signals:
     /// @brief Announces that the watch status changed: when a walk ends, and when a change in the

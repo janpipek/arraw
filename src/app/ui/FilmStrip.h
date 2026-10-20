@@ -12,6 +12,8 @@
 
 #include <QElapsedTimer>
 #include <QImage>
+#include <QKeySequence>
+#include <QList>
 #include <QString>
 #include <QTimer>
 #include <QWidget>
@@ -33,6 +35,11 @@ class QToolButton;
 namespace arraw::app {
 
 class FilmStripDelegate;
+
+/// @brief Lists the keys of Refresh Folder: F5 on every platform and desktop, then the
+/// platform's own `QKeySequence::Refresh` bindings (such as Ctrl+R or the keyboard's Refresh key).
+/// @return The keys, F5 first, without repeats.
+[[nodiscard]] QList<QKeySequence> refreshFolderKeys();
 
 /// @brief Strip of the shots of a folder, to cull and to pick the photograph to develop.
 ///
@@ -91,6 +98,12 @@ public:
     /// @return True from ::arraw::app::FilmStrip::setFolder until the walk has read everything.
     [[nodiscard]] bool isListing() const noexcept {
         return model_.isListing();
+    }
+
+    /// @brief Tells whether a refresh of the folder is under way.
+    /// @return True from ::arraw::app::FilmStrip::refreshFolder until its walk has ended.
+    [[nodiscard]] bool isRefreshing() const noexcept {
+        return model_.isRefreshing();
     }
 
     /// @brief Sets a function the lister calls on its thread before it reads each directory.
@@ -236,8 +249,9 @@ public:
     /// @brief Walks the folder again in the background and merges what it finds, for the changes
     /// no watch reported (a folder beyond the limit on watches, a sidecar rewritten in place).
     ///
-    /// The selection and the active shot stay, and every sidecar is checked. Does nothing before
-    /// a folder is shown.
+    /// The selection and the active shot stay, and every sidecar is checked. The folder label
+    /// says so while it runs. Does nothing before a folder is shown, and while a listing or a
+    /// refresh is under way (that walk takes the request in).
     void refreshFolder();
 
     /// @brief Tells whether some folders are not watched, so that the notice shows.
@@ -326,6 +340,10 @@ private:
     /// @brief Follows the start and the end of a listing.
     /// @param listing Whether a listing is under way now.
     void onListingChanged(bool listing);
+
+    /// @brief Follows the start and the end of a refresh: the busy note says so.
+    /// @param refreshing Whether a refresh is under way now.
+    void onRefreshingChanged(bool refreshing);
 
     /// @brief Takes a thumbnail from the worker.
     void receiveThumbnail(const ThumbnailResult& result);
@@ -442,9 +460,9 @@ private:
     bool firstShotSent_ = false;
     /// Number of the listing under way, so that a queued first shot of an earlier one is dropped.
     std::uint64_t listingNumber_ = 0;
-    /// Time since the listing under way began.
+    /// Time since the listing or the refresh under way began.
     QElapsedTimer listingClock_;
-    /// Updates the folder label's busy note while a listing runs.
+    /// Updates the folder label's busy note while a listing or a refresh runs.
     QTimer busyTimer_;
     QTimer activeCheck_;
     bool updatingCells_ = false;

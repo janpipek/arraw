@@ -78,8 +78,9 @@ void FolderWatcher::setWatchGate(FolderLister::WatchGate gate) {
     lister_->setWatchGate(std::move(gate));
 }
 
-void FolderWatcher::simulateDirectoryChanged(const std::filesystem::path& directory) {
-    lister_->simulateDirectoryChanged(directory);
+void FolderWatcher::simulateDirectoryChanged(const std::filesystem::path& directory,
+                                             bool watchDropped) {
+    lister_->simulateDirectoryChanged(directory, watchDropped);
 }
 
 void FolderWatcher::refreshAll() {

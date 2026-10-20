@@ -21,8 +21,9 @@ inline constexpr int defaultMaxWatchedFolders = 1000;
 /// order they were added in. It only keeps the books; the caller makes the system calls, and
 /// reports one that the system refused.
 ///
-/// Invariant: apart from directories the system refused, every watched directory comes before
-/// every waiting one, and as many are watched as the cap allows.
+/// Invariant: every watched directory comes before every waiting one, and as many are watched as
+/// the cap allows. Directories the system refused are neither: they are set aside until the cap is
+/// set anew.
 class WatchBudget {
 public:
     /// @brief What the caller must do about a directory just added.
@@ -65,7 +66,9 @@ public:
     /// @brief Takes the system's refusal of a watch: the limit is reached, so the cap shrinks to
     /// the watches there are.
     ///
-    /// The directory waits, to be tried again when a place is freed or the cap is set anew.
+    /// The directory is set aside, to be tried again when the cap is set anew (the next walk). A
+    /// place freed before then goes to a waiting directory, not to it: a refusal of this one
+    /// directory alone (a share without change notification) must not take every freed place.
     /// @param path Directory the budget had granted a watch.
     void refused(const std::filesystem::path& path);
 
@@ -86,9 +89,9 @@ public:
         return static_cast<int>(watched_.size());
     }
 
-    /// @brief Counts the directories without a place.
+    /// @brief Counts the directories without a place: the waiting and the refused.
     [[nodiscard]] int unwatched() const noexcept {
-        return static_cast<int>(waiting_.size());
+        return static_cast<int>(waiting_.size() + refused_.size());
     }
 
     /// @brief Gives the cap now: the one set, or less after a refusal.
@@ -126,8 +129,10 @@ private:
     std::map<std::filesystem::path, int, PathLess> depths_;
     /// Directories to be watched.
     std::set<Key> watched_;
-    /// Directories without a place.
+    /// Directories without a place, to be promoted when one is free.
     std::set<Key> waiting_;
+    /// Directories the system refused a watch, set aside until the cap is set anew.
+    std::set<Key> refused_;
 };
 
 } // namespace arraw::app

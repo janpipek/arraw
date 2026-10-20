@@ -223,7 +223,8 @@ MainWindow::MainWindow(DebugLog& debugLog, QWidget* parent, PhotoLoader::Decoder
     viewMenu_->addSeparator();
     refreshFolderAction_ = viewMenu_->addAction(tr("&Refresh Folder"));
     refreshFolderAction_->setObjectName("refreshFolderAction");
-    refreshFolderAction_->setShortcut(QKeySequence::Refresh);
+    // F5 everywhere, and the platform's Refresh keys besides (review R1).
+    refreshFolderAction_->setShortcuts(refreshFolderKeys());
     refreshFolderAction_->setEnabled(false);
     connect(refreshFolderAction_, &QAction::triggered, filmStrip_, &FilmStrip::refreshFolder);
     connect(filmStrip_, &FilmStrip::folderChanged, this,

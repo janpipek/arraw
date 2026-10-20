@@ -29,7 +29,7 @@ its rows from *Planned* to *Current* in the same change that wires them.
 | `0` | Unrated | Culling actions |
 | `X` | Reject (outside cropping) | Culling actions |
 | `R` `Y` `G` `B` `P` | Red, yellow, green, blue, purple colour label | Culling actions |
-| `F5` | Refresh Folder: walk the strip's folder again (`Ctrl+R` on some platforms) | View menu (`QKeySequence::Refresh`), the strip's context menu and its "not watched" notice |
+| `F5` | Refresh Folder: walk the strip's folder again. F5 on every platform, plus the platform's own Refresh keys (`Ctrl+R` on GNOME, `Shift+Cmd+R` on macOS, the keyboard's Refresh key) | View menu (F5 and all of `QKeySequence::keyBindings(Refresh)`), the strip's context menu and its "not watched" notice |
 | `F7` | Toggle History panel | View menu |
 | `F8` | Toggle Adjustments panel | View menu |
 | `F11` | Full screen | View menu |

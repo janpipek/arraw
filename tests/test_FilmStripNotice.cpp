@@ -1,8 +1,10 @@
+#include "support/ListingGate.h"
 #include "support/TempDir.h"
 #include "ui/FilmStrip.h"
 
 #include <QApplication>
 #include <QContextMenuEvent>
+#include <QLabel>
 #include <QListView>
 #include <QMenu>
 #include <QTest>
@@ -11,6 +13,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 
@@ -158,10 +161,52 @@ TEST_CASE("Refresh Folder is in the strip's context menu", "[app][filmstrip][not
     };
     REQUIRE(chooseRefresh(list->visualRect(list->model()->index(0, 0)).center()));
     REQUIRE(QTest::qWaitFor([&] { return hasShot(strip, tree.folder.file("sub2/f.jpg")); }, 10000));
+    // A press while that refresh runs would be taken in by it.
+    REQUIRE(QTest::qWaitFor([&] { return !strip.isRefreshing(); }, 10000));
 
     touch(tree.folder.file("sub3/g.jpg"));
     const QPoint empty(list->viewport()->width() - 4, list->viewport()->height() / 2);
     REQUIRE_FALSE(list->indexAt(empty).isValid());
     REQUIRE(chooseRefresh(empty));
     REQUIRE(QTest::qWaitFor([&] { return hasShot(strip, tree.folder.file("sub3/g.jpg")); }, 10000));
+}
+
+TEST_CASE("Refresh Folder says that it runs, and a press during a walk is taken in",
+          "[app][filmstrip][notice]") {
+    // Review R6.
+    Tree tree;
+    Strip holder;
+    FilmStrip& strip = holder.strip;
+    const auto& label = *strip.titleBar()->findChild<QLabel*>("filmStripFolderLabel");
+    strip.setIncludeSubfolders(true);
+
+    // During the first listing, which reads everything anyway: no walk after it.
+    const test::ListingGate listing(tree.folder.file("sub2"));
+    strip.setListingHook(listing.hook());
+    strip.setFolder(tree.folder.path());
+    REQUIRE(QTest::qWaitFor([&] { return listing.reached(); }, 10000));
+    strip.refreshFolder();
+    CHECK_FALSE(strip.isRefreshing());
+    listing.release();
+    REQUIRE(listed(strip));
+    CHECK_FALSE(strip.isRefreshing());
+
+    // A refresh held in its walk: the folder label says so.
+    const test::ListingGate refresh(tree.folder.file("sub2"));
+    strip.setListingHook(refresh.hook());
+    strip.refreshFolder();
+    REQUIRE(strip.isRefreshing());
+    REQUIRE(QTest::qWaitFor([&] { return refresh.reached(); }, 10000));
+    REQUIRE(QTest::qWaitFor([&] { return label.text().contains("refreshing… 4 shots"); }, 10000));
+    CHECK_FALSE(label.text().contains("listing…"));
+    // A second press is folded into it.
+    strip.refreshFolder();
+    refresh.release();
+    REQUIRE(QTest::qWaitFor([&] { return !strip.isRefreshing(); }, 10000));
+    // Ended for good, not followed by a second walk; the note goes with it.
+    QApplication::processEvents();
+    CHECK_FALSE(strip.isRefreshing());
+    CHECK_FALSE(label.text().contains("refreshing"));
+    const std::vector<fs::path> read = refresh.read();
+    CHECK(std::ranges::count(read, tree.folder.path()) == 1);
 }

@@ -130,11 +130,11 @@ public:
         return walking_ == Walking::Listing;
     }
 
-    /// @brief Tells whether a refresh walk is under way, or put off until the one under way ends.
+    /// @brief Tells whether a refresh walk is under way.
     /// @return True from ::arraw::app::ShotModel::refresh until its walk is finished; a directory
     /// read again after a change is no refresh.
     [[nodiscard]] bool isRefreshing() const noexcept {
-        return walking_ == Walking::Refresh || refreshWanted_;
+        return walking_ == Walking::Refresh;
     }
 
     /// @brief Most rows one insert brings.
@@ -220,8 +220,9 @@ public:
     /// The manual refresh of all, for what no watch reports. Asynchronous:
     /// ::arraw::app::ShotModel::walkRequested asks for a walk, whose batches are merged by
     /// ::arraw::app::ShotModel::applyFolders and whose end removes the folders it did not find
-    /// (::arraw::app::ShotModel::finishListing). While a walk is under way the refresh is put off
-    /// until it ends, several such calls gathered into one.
+    /// (::arraw::app::ShotModel::finishListing). While a walk is under way (a first listing, which
+    /// reads everything anyway, or another refresh) the call does nothing: it is folded into
+    /// that walk, not queued as another.
     ///
     /// The sidecar of every loaded row is checked on the loader thread, and re-read when the
     /// modification time is not the one last seen; ::arraw::app::ShotModel::sidecarRefreshed
@@ -302,6 +303,10 @@ signals:
     /// @brief Announces that a first listing of the folder began or ended.
     /// @param listing The new ::arraw::app::ShotModel::isListing.
     void listingChanged(bool listing);
+
+    /// @brief Announces that a refresh walk began or ended (or was dropped for a new folder).
+    /// @param refreshing The new ::arraw::app::ShotModel::isRefreshing.
+    void refreshingChanged(bool refreshing);
 
     /// @brief Announces that a sidecar was re-read because its file changed since it was last seen.
     ///
@@ -400,7 +405,9 @@ private:
     /// @brief Inserts the rows of the next new directories of the first queued batch that go to
     /// one place, at most ::arraw::app::ShotModel::maxInsertRows, with one insert.
     ///
-    /// A directory whose rows do not all fit is continued by the next call.
+    /// The directories of one insert each follow the one before in folder order; one that does
+    /// not (read twice in the batch, or sorting before the last) waits for the next call. A
+    /// directory whose rows do not all fit is continued by the next call.
     /// @param added Receives the primaries inserted.
     void insertRun(std::vector<std::filesystem::path>& added);
 
@@ -451,9 +458,6 @@ private:
     /// @param folder Folder, without a trailing separator.
     void removeTree(const std::filesystem::path& folder);
 
-    /// @brief Starts a refresh walk now.
-    void startRefresh();
-
     /// @brief Announces the end of the loading, if nothing is owed and no walk is under way.
     void reportIfLoaded();
 
@@ -495,9 +499,6 @@ private:
 
     /// Folders the walk under way has read, spelled as span keys.
     std::unordered_set<std::filesystem::path> seen_;
-
-    /// Whether a refresh is put off until the walk under way ends.
-    bool refreshWanted_ = false;
 
     /// Batches and ends of walks not applied yet, in the order they came.
     std::deque<Incoming> incoming_;

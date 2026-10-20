@@ -152,7 +152,10 @@ public:
     /// @brief Takes a directory's report of a change as if the system had sent it. Safe from any
     /// thread; a seam for tests, which do not depend on the system's timing this way.
     /// @param directory Directory, spelled as the lister spells it.
-    void simulateDirectoryChanged(const std::filesystem::path& directory);
+    /// @param watchDropped Whether the system watcher first drops the directory's watch, as Qt
+    /// does when a watched directory is removed, moved or unmounted.
+    void simulateDirectoryChanged(const std::filesystem::path& directory,
+                                  bool watchDropped = false);
 
 private:
     /// @brief A directory of the tree.
@@ -212,12 +215,12 @@ private:
 
     /// @brief Asks the system for the watch the budget granted a directory.
     ///
-    /// A refusal for a directory that can be read is the system's limit: the budget shrinks to
-    /// the watches there are. One for a directory that cannot be read frees its place.
+    /// A refusal for a directory that can be opened is the system's limit: the budget shrinks to
+    /// the watches there are. One for a directory that cannot be opened changes nothing: the
+    /// directory keeps its place until its read drops it or it is watched after all.
     /// @param directory Directory the budget put among the watched.
-    /// @param promoted Receives the directories that a freed place goes to.
     /// @return Whether it is watched now.
-    bool watch(Tree::iterator directory, std::vector<std::filesystem::path>& promoted);
+    bool watch(Tree::iterator directory);
 
     /// @brief Carries out the changes of places a budget reports: unwatches the evicted, watches
     /// the promoted and queues a read of each (plan, section 4, rule 2).
@@ -230,6 +233,10 @@ private:
 
     /// @brief Releases every watch.
     void unwatchAll();
+
+    /// @brief Marks as unwatched the directories whose watch the system watcher no longer has,
+    /// so that the walk watches them again before it reads them.
+    void forgetDroppedWatches();
 
     /// @brief Hands the watch status over if it differs from the last one, or if asked to.
     /// @param force Whether to hand it over whatever the last one was.
