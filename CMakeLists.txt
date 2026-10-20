@@ -544,6 +544,9 @@ add_library(arraw-app-core STATIC
         src/app/QtMessageCapture.h
         src/app/FilmStripRules.cpp
         src/app/FilmStripRules.h
+        src/app/FolderLister.cpp
+        src/app/FolderLister.h
+        src/app/FolderResult.h
         src/app/FolderWatcher.cpp
         src/app/FolderWatcher.h
         src/app/HistoryModel.cpp

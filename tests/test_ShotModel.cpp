@@ -2,6 +2,7 @@
 #include "ShotFilterModel.h"
 #include "ShotModel.h"
 #include "support/Fixtures.h"
+#include "support/ListingFeed.h"
 #include "support/TempDir.h"
 
 #include <Sidecar.h>
@@ -28,7 +29,8 @@ using namespace arraw;
 using namespace arraw::app;
 
 /// The film strip's shots: a model over a folder, a filter proxy over that, and a watcher that
-/// keeps the first in step with the disk (src/app/ShotModel.h and neighbours).
+/// keeps the first in step with the disk (src/app/ShotModel.h and neighbours). The model reads no
+/// folder itself: without a watcher, test::listNow answers each walk it asks for at once.
 
 namespace {
 
@@ -53,9 +55,10 @@ bool waitUntil(const std::function<bool()>& condition,
     return true;
 }
 
-/// Lets the model finish its reading.
+/// Lets the model finish its listing, its refresh and its reading.
 bool settle(const ShotModel& model) {
-    return waitUntil([&] { return model.pendingLoads() == 0; });
+    return waitUntil(
+        [&] { return !model.isListing() && !model.isRefreshing() && model.pendingLoads() == 0; });
 }
 
 /// Puts a photograph with EXIF in a folder under a name.
@@ -96,6 +99,7 @@ TEST_CASE("The model lists the shots of a folder in natural order, with their ro
     ShotModel model;
     REQUIRE(model.rowCount() == 0);
     model.setFolder(folder.path());
+    test::listNow(model);
 
     // Listed at once, before anything is read.
     REQUIRE(model.rowCount() == 2);
@@ -118,6 +122,7 @@ TEST_CASE("Marks and EXIF arrive from the loader thread", "[shotmodel]") {
     writeSidecarMarks(two, {.rating = 4, .label = ColorLabel::Green});
     ShotModel model;
     model.setFolder(folder.path());
+    test::listNow(model);
     REQUIRE(settle(model));
 
     const QModelIndex first = model.index(model.rowOf(one));
@@ -142,6 +147,7 @@ TEST_CASE("Marks that cannot be read leave the defaults and do not stop the load
     std::ofstream(folder.file("IMG_1.xmp")) << "not xml";
     ShotModel model;
     model.setFolder(folder.path());
+    test::listNow(model);
     REQUIRE(settle(model));
     REQUIRE(model.marks(0) == PhotoMarks{});
     REQUIRE(model.index(0).data(ShotModel::MarksLoadedRole).toBool());
@@ -159,7 +165,9 @@ TEST_CASE("Changing the folder drops what the loader was doing for the old one",
     }
     ShotModel model;
     model.setFolder(older.path());
+    test::listNow(model);
     model.setFolder(newer.path());
+    test::listNow(model);
     REQUIRE(model.folder() == newer.path());
     REQUIRE(settle(model));
     for (int row = 0; row < model.rowCount(); ++row) {
@@ -176,6 +184,7 @@ TEST_CASE("A folder that cannot be read is refused and leaves the model as it wa
     addRaw(folder, "IMG_1.dng");
     ShotModel model;
     model.setFolder(folder.path());
+    test::listNow(model);
     REQUIRE_THROWS_AS(model.setFolder(folder.file("missing")), std::runtime_error);
     REQUIRE(model.rowCount() == 1);
     REQUIRE(model.folder() == folder.path());
@@ -186,6 +195,7 @@ TEST_CASE("setMarks updates the row, and a reading under way cannot undo it", "[
     const fs::path one = addRaw(folder, "IMG_1.dng");
     ShotModel model;
     model.setFolder(folder.path());
+    test::listNow(model);
     int changes = 0;
     QObject::connect(&model, &QAbstractItemModel::dataChanged, &model,
                      [&](const QModelIndex&, const QModelIndex&, const QList<int>& roles) {
@@ -207,6 +217,7 @@ TEST_CASE("The thumbnail role is empty until a thumbnail is set", "[shotmodel]")
     const fs::path one = addRaw(folder, "IMG_1.dng");
     ShotModel model;
     model.setFolder(folder.path());
+    test::listNow(model);
     QImage thumbnail(4, 3, QImage::Format_RGB32);
     thumbnail.fill(Qt::red);
     model.setThumbnail(one, thumbnail);
@@ -238,6 +249,7 @@ TEST_CASE("The filter proxy shows a shot whose marks are not read yet", "[shotmo
     ShotFilterModel proxy;
     proxy.setSourceModel(&model);
     model.setFolder(folder.path());
+    test::listNow(model);
     // So that the view does not flicker as the loader catches up.
     proxy.setFilter(filterOf(5));
     REQUIRE(proxy.rowCount() == 2);
@@ -259,6 +271,7 @@ TEST_CASE("The filter proxy shows the shots that pass a MarksFilter", "[shotmode
     ShotFilterModel proxy;
     proxy.setSourceModel(&model);
     model.setFolder(folder.path());
+    test::listNow(model);
 
     REQUIRE(settle(model));
     REQUIRE(proxy.rowCount() == 4);
@@ -428,6 +441,7 @@ TEST_CASE("The sidecar role says whether a sidecar file exists", "[shotmodel][si
                          }
                      });
     model.setFolder(folder.path());
+    test::listNow(model);
     // False until the marks are read.
     REQUIRE_FALSE(model.index(1).data(ShotModel::HasSidecarRole).toBool());
     REQUIRE(settle(model));
@@ -440,9 +454,11 @@ TEST_CASE("The sidecar role says whether a sidecar file exists", "[shotmodel][si
     SECTION("A sidecar that appears and disappears") {
         writeSidecarMarks(one, {.rating = 4});
         model.refresh();
+        test::listNow(model);
         REQUIRE(waitUntil([&] { return model.index(0).data(ShotModel::HasSidecarRole).toBool(); }));
         fs::remove(sidecarPath(two));
         model.refresh();
+        test::listNow(model);
         REQUIRE(
             waitUntil([&] { return !model.index(1).data(ShotModel::HasSidecarRole).toBool(); }));
         REQUIRE(settle(model));
@@ -469,10 +485,12 @@ TEST_CASE("A recursive model lists the subfolders and names them in the tooltip"
     const fs::path inB = addRaw(folder, "b/IMG_1.dng");
     ShotModel model;
     model.setFolder(folder.path());
+    test::listNow(model);
     REQUIRE(model.rowCount() == 1);
     REQUIRE_FALSE(model.recursive());
 
     model.setFolder(folder.path(), true);
+    test::listNow(model);
     REQUIRE(model.recursive());
     REQUIRE(model.rowCount() == 3);
     REQUIRE(model.rowOf(top) == 0);
@@ -491,6 +509,7 @@ TEST_CASE("The display role is the bare file name, also in a subfolder", "[shotm
     addRaw(folder, "day1/raw/IMG_0042.dng");
     ShotModel model;
     model.setFolder(folder.path(), true);
+    test::listNow(model);
     REQUIRE(model.rowCount() == 1);
     CHECK(display(model, 0) == "IMG_0042.dng");
     CHECK(model.index(0)
@@ -536,6 +555,8 @@ TEST_CASE("The watcher watches the folders the listing enters and no others",
     ShotModel model;
     FolderWatcher watcher(model, std::chrono::milliseconds(20));
     model.setFolder(folder.path(), true);
+    // Watched once the walk that finds them is over.
+    REQUIRE(waitUntil([&] { return !model.isListing(); }));
 
     std::set<fs::path> expected{folder.path(), folder.file("real"), folder.file("real/deep")};
     std::set<fs::path> watched;
@@ -586,6 +607,7 @@ TEST_CASE("A refresh signals one insert or remove per run of rows", "[shotmodel]
     }
     ShotModel model;
     model.setFolder(folder.path());
+    test::listNow(model);
     REQUIRE(settle(model));
     SignalLog log(model);
 
@@ -594,6 +616,7 @@ TEST_CASE("A refresh signals one insert or remove per run of rows", "[shotmodel]
             addJpeg(folder, name);
         }
         model.refresh();
+        test::listNow(model);
         REQUIRE(log.events == std::vector<std::string>{"+2..2", "+5..5", "+8..9"});
         REQUIRE(model.rowCount() == 10);
         REQUIRE(model.rowOf(folder.file("IMG_10.jpg")) == 9);
@@ -605,6 +628,7 @@ TEST_CASE("A refresh signals one insert or remove per run of rows", "[shotmodel]
             fs::remove(folder.file(name));
         }
         model.refresh();
+        test::listNow(model);
         REQUIRE(log.events == std::vector<std::string>{"-5..5", "-1..3"});
         REQUIRE(names(model) == std::vector<std::string>{"IMG_01.jpg", "IMG_07.jpg"});
         REQUIRE(model.rowOf(folder.file("IMG_07.jpg")) == 1);
@@ -612,6 +636,7 @@ TEST_CASE("A refresh signals one insert or remove per run of rows", "[shotmodel]
     }
     SECTION("A change that touches nothing sends nothing") {
         model.refresh();
+        test::listNow(model);
         REQUIRE(log.events.empty());
         REQUIRE(model.pendingLoads() >= 0);
     }
@@ -624,6 +649,7 @@ TEST_CASE("Rows keep their marks, EXIF and thumbnail through a merge", "[shotmod
     const fs::path five = addRaw(folder, "IMG_5.dng");
     ShotModel model;
     model.setFolder(folder.path());
+    test::listNow(model);
     REQUIRE(settle(model));
     model.setMarks(three, {.rating = 4, .label = ColorLabel::Red});
     QImage thumbnail(4, 3, QImage::Format_RGB32);
@@ -634,6 +660,7 @@ TEST_CASE("Rows keep their marks, EXIF and thumbnail through a merge", "[shotmod
     const fs::path two = addRaw(folder, "IMG_2.dng");
     fs::remove(one);
     model.refresh();
+    test::listNow(model);
     REQUIRE(names(model) == std::vector<std::string>{"IMG_2.dng", "IMG_3.dng", "IMG_5.dng"});
     REQUIRE(tracked.row() == 2);
     REQUIRE(model.marks(model.rowOf(three)) == PhotoMarks{.rating = 4, .label = ColorLabel::Red});
@@ -651,6 +678,7 @@ TEST_CASE("A companion that joins is an update in place", "[shotmodel][merge]") 
     addRaw(folder, "IMG_2.dng");
     ShotModel model;
     model.setFolder(folder.path());
+    test::listNow(model);
     REQUIRE(settle(model));
     SignalLog log(model);
     std::vector<int> changedRows;
@@ -662,6 +690,7 @@ TEST_CASE("A companion that joins is an update in place", "[shotmodel][merge]") 
                      });
     addJpeg(folder, "IMG_2.jpg");
     model.refresh();
+    test::listNow(model);
     REQUIRE(log.events.empty());
     REQUIRE(changedRows == std::vector<int>{1});
     REQUIRE(model.index(1).data(ShotModel::FormatLabelRole).toString() == "DNG+JPEG");
@@ -679,6 +708,7 @@ TEST_CASE("Folders are merged where they stand: new, vanished and changed ones",
     addJpeg(folder, "d/IMG_1.jpg");
     ShotModel model;
     model.setFolder(folder.path(), true);
+    test::listNow(model);
     REQUIRE(settle(model));
     REQUIRE(model.rowCount() == 4);
     SignalLog log(model);
@@ -690,6 +720,7 @@ TEST_CASE("Folders are merged where they stand: new, vanished and changed ones",
     fs::remove_all(folder.file("d"));
     addJpeg(folder, "b/IMG_3.jpg");
     model.refresh();
+    test::listNow(model);
     REQUIRE(settle(model));
 
     REQUIRE(model.rowCount() == 6);
@@ -723,6 +754,7 @@ TEST_CASE("A scattered change resets the model and keeps what the rows know",
     }
     ShotModel model;
     model.setFolder(folder.path());
+    test::listNow(model);
     REQUIRE(settle(model));
     model.setMarks(folder.file(name(100)), {.rating = 3});
     QImage thumbnail(2, 2, QImage::Format_RGB32);
@@ -735,6 +767,7 @@ TEST_CASE("A scattered change resets the model and keeps what the rows know",
         addJpeg(folder, name(n));
     }
     model.refresh();
+    test::listNow(model);
     REQUIRE(log.resets == 1);
     REQUIRE(log.events.empty());
     REQUIRE(model.rowCount() == 200);
@@ -752,6 +785,7 @@ TEST_CASE("A scattered change resets the model and keeps what the rows know",
         fs::remove(folder.file(name(n)));
     }
     model.refresh();
+    test::listNow(model);
     REQUIRE(log.resets == 0);
     REQUIRE(log.events.size() == 64);
     REQUIRE(model.rowCount() == 200 - 64);
@@ -768,33 +802,39 @@ TEST_CASE("A refresh checks the sidecars of the folders that changed, or that it
     }
     ShotModel model;
     model.setFolder(folder.path(), true);
+    test::listNow(model);
     REQUIRE(settle(model));
     const std::vector<fs::path> none;
 
     SECTION("Nothing changed and nobody called: nothing is read") {
         model.refresh(none);
+        test::listNow(model);
         REQUIRE(model.pendingLoads() == 0);
     }
     SECTION("A changed folder is checked, and so are the new rows' first reads") {
         addJpeg(folder, "a/IMG_4.jpg");
         model.refresh(none);
+        test::listNow(model);
         // Three rechecks in a, then marks and EXIF of the new shot.
         REQUIRE(model.pendingLoads() == 3 + 2);
         REQUIRE(settle(model));
     }
     SECTION("A folder that was told about is checked, whatever its listing") {
         model.refresh(std::vector<fs::path>{folder.file("b") / ""});
+        test::listNow(model);
         REQUIRE(model.pendingLoads() == 4);
         REQUIRE(settle(model));
     }
     SECTION("A vanished folder checks no one") {
         fs::remove_all(folder.file("b"));
         model.refresh(none);
+        test::listNow(model);
         REQUIRE(model.pendingLoads() == 0);
         REQUIRE(model.rowCount() == 3);
     }
     SECTION("Without a list of folders every loaded row is checked") {
         model.refresh();
+        test::listNow(model);
         REQUIRE(model.pendingLoads() == 7);
         REQUIRE(settle(model));
     }

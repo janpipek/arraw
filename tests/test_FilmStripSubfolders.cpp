@@ -47,6 +47,11 @@ void touch(const fs::path& path) {
     std::ofstream(path) << "x";
 }
 
+/// Waits for the strip's listing, which runs on the watcher's thread, to bring every shot.
+bool listed(const FilmStrip& strip) {
+    return QTest::qWaitFor([&] { return !strip.isListing(); }, 10000);
+}
+
 QToolButton* subfoldersButton(const FilmStrip& strip) {
     for (auto* button : strip.titleBar()->findChildren<QToolButton*>()) {
         if (button->isCheckable() && button->toolTip() == "Include subfolders") {
@@ -67,6 +72,7 @@ TEST_CASE("The film strip's subfolder toggle re-lists the folder and keeps the a
     Strip holder;
     FilmStrip& strip = holder.strip;
     strip.setFolder(folder.path());
+    REQUIRE(listed(strip));
     auto* button = subfoldersButton(strip);
     REQUIRE(button);
     REQUIRE_FALSE(button->isChecked());
@@ -76,6 +82,7 @@ TEST_CASE("The film strip's subfolder toggle re-lists the folder and keeps the a
     button->click();
     REQUIRE(strip.includeSubfolders());
     REQUIRE(toggled.count() == 1);
+    REQUIRE(listed(strip));
     REQUIRE(strip.shotContaining(folder.file("sub/b.jpg")));
     REQUIRE(strip.activePrimary() == folder.file("a.jpg"));
 
@@ -84,12 +91,14 @@ TEST_CASE("The film strip's subfolder toggle re-lists the folder and keeps the a
     fs::create_directories(other.file("deeper"));
     touch(other.file("deeper/c.jpg"));
     strip.setFolder(other.path());
+    REQUIRE(listed(strip));
     REQUIRE(strip.shotContaining(other.file("deeper/c.jpg")));
 
     // Off again: the active shot in a subfolder goes with it.
     strip.setActive(other.file("deeper/c.jpg"));
     button->click();
     REQUIRE_FALSE(strip.includeSubfolders());
+    REQUIRE(listed(strip));
     REQUIRE_FALSE(strip.shotContaining(other.file("deeper/c.jpg")));
     REQUIRE_FALSE(strip.activePrimary());
 }
@@ -102,6 +111,7 @@ TEST_CASE("The film strip's cells are taller than wide, by a caption line, and f
     FilmStrip& strip = holder.strip;
     strip.resize(600, 200);
     strip.setFolder(folder.path());
+    REQUIRE(listed(strip));
     strip.show();
     auto* list = strip.findChild<QListView*>();
     REQUIRE(list);
@@ -165,10 +175,17 @@ struct Window {
         return *window.findChild<PhotoView*>();
     }
 
-    /// Opens a file as File > Open does, and waits for its first render.
+    /// Opens a file as File > Open does, and waits for its first render and the strip's listing.
     void open(const fs::path& path) {
         window.openInitialPath(path);
         REQUIRE(QTest::qWaitFor([this] { return !view().wholeFrameImage().isNull(); }, 20000));
+        REQUIRE(listed(strip()));
+    }
+
+    /// Sets the strip's subfolder flag as a menu would, and waits for the listing.
+    void includeSubfolders(bool include) const {
+        strip().setIncludeSubfolders(include);
+        REQUIRE(listed(strip()));
     }
 
     /// Edits the open photograph, so that leaving it asks.
@@ -208,7 +225,7 @@ TEST_CASE("A photograph the strip does not list switches the strip to its folder
           "[app][window][subfolders]") {
     Window w;
     w.open(w.folder.file("a.dng"));
-    w.strip().setIncludeSubfolders(true);
+    w.includeSubfolders(true);
     REQUIRE(w.strip().shotContaining(w.folder.file("sub/b.dng")));
 
     // Below the folder, but in a hidden one, which the listing skips.
@@ -222,7 +239,7 @@ TEST_CASE("Only the strip's folder is remembered, not the folder of a photograph
           "[app][window][subfolders]") {
     Window w;
     w.open(w.folder.file("a.dng"));
-    w.strip().setIncludeSubfolders(true);
+    w.includeSubfolders(true);
 
     w.open(w.folder.file("sub/b.dng"));
     CHECK(w.strip().folder() == w.folder.path());
@@ -249,7 +266,7 @@ TEST_CASE("Switching subfolders off with a subfolder photograph open asks about 
     SECTION("Cancel keeps the toggle on, the strip and the photograph") {
         Window w;
         w.open(w.folder.file("a.dng"));
-        w.strip().setIncludeSubfolders(true);
+        w.includeSubfolders(true);
         w.open(w.folder.file("sub/b.dng"));
         w.edit();
         auto* button = subfoldersButton(w.strip());
@@ -266,7 +283,7 @@ TEST_CASE("Switching subfolders off with a subfolder photograph open asks about 
     SECTION("Discard lists the folder alone and opens its first shot") {
         Window w;
         w.open(w.folder.file("a.dng"));
-        w.strip().setIncludeSubfolders(true);
+        w.includeSubfolders(true);
         w.open(w.folder.file("sub/b.dng"));
         w.edit();
         auto* button = subfoldersButton(w.strip());
@@ -282,43 +299,47 @@ TEST_CASE("Switching subfolders off with a subfolder photograph open asks about 
     SECTION("Save writes the sidecar first") {
         Window w;
         w.open(w.folder.file("a.dng"));
-        w.strip().setIncludeSubfolders(true);
+        w.includeSubfolders(true);
         w.open(w.folder.file("sub/b.dng"));
         w.edit();
         w.answer(QMessageBox::Save);
         subfoldersButton(w.strip())->click();
         CHECK(w.boxes == 1);
         CHECK(fs::exists(sidecarPath(w.folder.file("sub/b.dng"))));
-        CHECK(w.strip().activePrimary() == w.folder.file("a.dng"));
+        REQUIRE(QTest::qWaitFor([&] { return w.strip().activePrimary() == w.folder.file("a.dng"); },
+                                5000));
     }
     SECTION("No edits, no question") {
         Window w;
         w.open(w.folder.file("a.dng"));
-        w.strip().setIncludeSubfolders(true);
+        w.includeSubfolders(true);
         w.open(w.folder.file("sub/b.dng"));
         subfoldersButton(w.strip())->click();
         CHECK(w.boxes == 0);
-        CHECK(w.strip().activePrimary() == w.folder.file("a.dng"));
+        REQUIRE(QTest::qWaitFor([&] { return w.strip().activePrimary() == w.folder.file("a.dng"); },
+                                5000));
     }
     SECTION("A photograph that stays listed is not asked about") {
         Window w;
         w.open(w.folder.file("a.dng"));
-        w.strip().setIncludeSubfolders(true);
+        w.includeSubfolders(true);
         w.edit();
         subfoldersButton(w.strip())->click();
         CHECK(w.boxes == 0);
         CHECK_FALSE(w.strip().includeSubfolders());
+        REQUIRE(listed(w.strip()));
         CHECK(w.strip().activePrimary() == w.folder.file("a.dng"));
     }
     SECTION("An empty listing leaves the photograph open") {
         Window w(false);
         w.open(w.folder.file("sub/b.dng"));
         w.strip().setFolder(w.folder.path());
-        w.strip().setIncludeSubfolders(true);
+        w.includeSubfolders(true);
         w.strip().setActive(w.folder.file("sub/b.dng"));
         subfoldersButton(w.strip())->click();
         CHECK(w.boxes == 0);
         CHECK_FALSE(w.strip().includeSubfolders());
+        REQUIRE(listed(w.strip()));
         CHECK_FALSE(w.strip().activePrimary());
         CHECK_FALSE(w.view().wholeFrameImage().isNull());
     }
@@ -334,6 +355,7 @@ TEST_CASE("The film strip keeps its selection when a refresh is too scattered to
     Strip holder;
     FilmStrip& strip = holder.strip;
     strip.setFolder(folder.path());
+    REQUIRE(listed(strip));
     auto* list = strip.findChild<QListView*>();
     REQUIRE(list);
     REQUIRE(list->model()->rowCount() == 100);

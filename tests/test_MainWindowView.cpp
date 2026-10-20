@@ -39,6 +39,9 @@ struct Window {
         REQUIRE(QTest::qWaitForWindowExposed(&window));
         REQUIRE(QTest::qWaitFor(
             [this] { return !window.findChild<PhotoView*>()->wholeFrameImage().isNull(); }, 20000));
+        // The strip's folder is listed in the background; its shots are what the keys step through.
+        REQUIRE(QTest::qWaitFor([this] { return !window.findChild<FilmStrip*>()->isListing(); },
+                                10000));
     }
 
     [[nodiscard]] QDockWidget& dock(const char* name) const {

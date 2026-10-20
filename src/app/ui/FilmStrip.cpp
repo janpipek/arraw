@@ -13,6 +13,7 @@
 #include <QItemSelectionModel>
 #include <QLabel>
 #include <QListView>
+#include <QLocale>
 #include <QMenu>
 #include <QMessageBox>
 #include <QMetaObject>
@@ -42,6 +43,10 @@ constexpr int borderWidth = 4;
 
 /// Below this content height the stars and the format chip are illegible, and left out.
 constexpr int marksMinHeight = 64;
+
+/// Time a listing runs before the folder label says so, and between two updates of the note;
+/// the anti-flicker rule of the render progress.
+constexpr int busyNoteMs = 250;
 
 /// Returns the font of the file name caption: the widget's, a little smaller.
 QFont captionFont(QFont font) {
@@ -292,6 +297,7 @@ FilmStrip::FilmStrip(QWidget* parent, ThumbnailCache cache, LensDatabaseSource l
     layout->addWidget(list_, 1);
 
     emptyHint_ = new QLabel(tr("No shots match the filter"), list_->viewport());
+    emptyHint_->setObjectName(QStringLiteral("filmStripEmptyHint"));
     emptyHint_->setAlignment(Qt::AlignCenter);
     emptyHint_->setAttribute(Qt::WA_TransparentForMouseEvents);
     emptyHint_->setStyleSheet(QStringLiteral("color: gray;"));
@@ -320,15 +326,13 @@ FilmStrip::FilmStrip(QWidget* parent, ThumbnailCache cache, LensDatabaseSource l
                 emit sidecarChangedExternally(primary);
             });
 
-    // Shots appear by refresh (the watcher); a new folder is handled in setFolder.
+    // Shots appear as the walk brings them, and by refresh (the watcher). Connected after the
+    // proxy, which has taken the rows in by the time this runs.
     connect(&model_, &QAbstractItemModel::rowsInserted, this,
-            [this](const QModelIndex&, int first, int last) {
-                std::vector<fs::path> added;
-                for (int row = first; row <= last; ++row) {
-                    added.push_back(model_.shot(row).primary);
-                }
-                thumbnails_.addShots(added);
-            });
+            [this](const QModelIndex&, int first, int last) { takeInsertedRows(first, last); });
+    connect(&model_, &ShotModel::listingChanged, this, &FilmStrip::onListingChanged);
+    busyTimer_.setInterval(busyNoteMs);
+    connect(&busyTimer_, &QTimer::timeout, this, &FilmStrip::updateFolderLabel);
     // A refresh that is too scattered to merge by runs resets the model (see ShotModel::refresh);
     // the selection is carried over it. A new folder is not carried, and gets its thumbnails in
     // setFolder.
@@ -393,9 +397,11 @@ void FilmStrip::buildTitleBar() {
     subfoldersButton_->setToolTip(tr("Include subfolders"));
     subfoldersButton_->setFocusPolicy(Qt::NoFocus);
     connect(subfoldersButton_, &QToolButton::toggled, this, [this](bool include) {
+        // A shot still waiting for its listing counts as the active one.
+        const fs::path active = active_.empty() ? pendingActive_.value_or(fs::path()) : active_;
         const bool leaves =
-            !include && !active_.empty() && !model_.folder().empty() &&
-            active_.parent_path().lexically_normal() != model_.folder().lexically_normal();
+            !include && !active.empty() && !model_.folder().empty() &&
+            active.parent_path().lexically_normal() != model_.folder().lexically_normal();
         if (leaves && subfoldersLeaveGuard_ && !subfoldersLeaveGuard_()) {
             subfoldersButton_->blockSignals(true);
             subfoldersButton_->setChecked(true);
@@ -407,6 +413,7 @@ void FilmStrip::buildTitleBar() {
     layout->addWidget(subfoldersButton_);
 
     folderLabel_ = new QLabel(tr("No folder"), titleBar_);
+    folderLabel_->setObjectName(QStringLiteral("filmStripFolderLabel"));
     folderLabel_->setTextInteractionFlags(Qt::TextSelectableByMouse);
     // Yields room to the filter controls when the window is narrow.
     folderLabel_->setMinimumWidth(0);
@@ -520,7 +527,7 @@ void FilmStrip::restoreSelection() {
     }
 }
 
-void FilmStrip::listFolder(const fs::path& folder) {
+void FilmStrip::listFolder(const fs::path& folder, std::optional<fs::path> activate) {
     changingFolder_ = true;
     try {
         model_.setFolder(folder, includeSubfolders_);
@@ -530,24 +537,68 @@ void FilmStrip::listFolder(const fs::path& folder) {
     }
     changingFolder_ = false;
     live_.clear();
-    {
-        std::vector<fs::path> shots;
-        shots.reserve(static_cast<std::size_t>(model_.rowCount()));
-        for (int row = 0; row < model_.rowCount(); ++row) {
-            shots.push_back(model_.shot(row).primary);
-        }
-        thumbnails_.setShots(std::move(shots));
-    }
+    // The rows come as the walk brings them; each insert hands its shots to the worker.
+    thumbnails_.setShots({});
     visibleTimer_.start();
     active_.clear();
+    pendingActive_ = std::move(activate);
+    firstShotSent_ = false;
+    ++listingNumber_;
     delegate_->setActive({});
     updateFolderLabel();
     updateEmptyHint();
 }
 
-void FilmStrip::setFolder(const fs::path& folder) {
-    listFolder(folder);
+void FilmStrip::setFolder(const fs::path& folder, std::optional<fs::path> activate) {
+    listFolder(folder, std::move(activate));
     emit activeChanged();
+}
+
+void FilmStrip::takeInsertedRows(int first, int last) {
+    std::vector<fs::path> added;
+    added.reserve(static_cast<std::size_t>(last - first + 1));
+    std::optional<fs::path> found;
+    for (int row = first; row <= last; ++row) {
+        const Shot& shot = model_.shot(row);
+        added.push_back(shot.primary);
+        if (pendingActive_ && !found &&
+            (shot.primary == *pendingActive_ ||
+             std::ranges::find(shot.companions, *pendingActive_) != shot.companions.end())) {
+            found = shot.primary;
+        }
+    }
+    thumbnails_.addShots(added);
+    if (found) {
+        pendingActive_.reset();
+        setActive(*found);
+    }
+    if (!firstShotSent_ && model_.isListing() && proxy_.rowCount() > 0) {
+        firstShotSent_ = true;
+        // Sent from the event loop, not from within the model's insert: the window may open the
+        // shot and ask about unsaved edits in a dialog, whose loop must not deliver the next
+        // batch into the middle of this one.
+        QMetaObject::invokeMethod(
+            this,
+            [this, listing = listingNumber_, primary = toQString(primaryAt(proxy_.index(0, 0)))] {
+                if (listing == listingNumber_) {
+                    emit firstShotListed(primary);
+                }
+            },
+            Qt::QueuedConnection);
+    }
+}
+
+void FilmStrip::onListingChanged(bool listing) {
+    if (listing) {
+        listingClock_.start();
+        busyTimer_.start();
+    } else {
+        busyTimer_.stop();
+        // The listing is complete without it: the photograph stays open, and no shot is active.
+        pendingActive_.reset();
+    }
+    updateFolderLabel();
+    updateEmptyHint();
 }
 
 void FilmStrip::updateFolderLabel() {
@@ -555,6 +606,9 @@ void FilmStrip::updateFolderLabel() {
     folderLabel_->setToolTip(text);
     if (includeSubfolders_ && !model_.folder().empty()) {
         text += tr(" (+ subfolders)");
+    }
+    if (model_.isListing() && listingClock_.isValid() && listingClock_.elapsed() >= busyNoteMs) {
+        text += tr(" — listing… %1 shots").arg(QLocale().toString(model_.rowCount()));
     }
     folderLabel_->setText(text);
 }
@@ -564,13 +618,17 @@ void FilmStrip::setIncludeSubfolders(bool include) {
         return;
     }
     const fs::path folder = model_.folder();
-    const fs::path active = active_;
+    std::optional<fs::path> active = pendingActive_;
+    if (!active_.empty()) {
+        active = active_;
+    }
     if (!folder.empty()) {
-        // Listed first, so that a folder that cannot be read leaves everything as it was.
+        // Checked first, so that a folder that cannot be opened leaves everything as it was.
         const bool before = includeSubfolders_;
         includeSubfolders_ = include;
         try {
-            listFolder(folder);
+            // The active shot is active again if the new listing brings it.
+            listFolder(folder, std::move(active));
         } catch (const std::exception&) {
             includeSubfolders_ = before;
             subfoldersButton_->blockSignals(true);
@@ -578,11 +636,7 @@ void FilmStrip::setIncludeSubfolders(bool include) {
             subfoldersButton_->blockSignals(false);
             return;
         }
-        if (!active.empty() && model_.rowOf(active) >= 0) {
-            setActive(active);
-        } else {
-            emit activeChanged();
-        }
+        emit activeChanged();
     } else {
         includeSubfolders_ = include;
     }
@@ -603,8 +657,12 @@ fs::path FilmStrip::primaryAt(const QModelIndex& index) {
 
 void FilmStrip::setActive(const fs::path& primary) {
     if (model_.rowOf(primary) < 0) {
+        if (model_.isListing()) {
+            pendingActive_ = primary;
+        }
         return;
     }
+    pendingActive_.reset();
     QModelIndex index = proxyIndexOf(primary);
     if (!index.isValid()) {
         // The photograph is open, so the strip has to show it.
@@ -622,6 +680,7 @@ void FilmStrip::setActive(const fs::path& primary) {
 
 void FilmStrip::clearActive() {
     active_.clear();
+    pendingActive_.reset();
     delegate_->setActive({});
     list_->selectionModel()->clear();
     list_->viewport()->update();
@@ -852,7 +911,18 @@ void FilmStrip::ensureActiveShown() {
 }
 
 void FilmStrip::updateEmptyHint() {
-    const bool show = proxy_.filter().isActive() && proxy_.rowCount() == 0;
+    QString text;
+    if (proxy_.rowCount() == 0 && !model_.folder().empty()) {
+        if (model_.isListing()) {
+            text = tr("Listing folder…");
+        } else if (model_.rowCount() == 0) {
+            text = tr("No photographs in this folder");
+        } else if (proxy_.filter().isActive()) {
+            text = tr("No shots match the filter");
+        }
+    }
+    const bool show = !text.isEmpty();
+    emptyHint_->setText(text);
     if (show) {
         emptyHint_->setGeometry(list_->viewport()->rect());
         emptyHint_->raise();

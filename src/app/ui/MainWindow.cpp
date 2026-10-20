@@ -12,6 +12,7 @@
 #include "ExportDialog.h"
 #include "ExportSettings.h"
 #include "FilmStrip.h"
+#include "FolderResult.h"
 #include "HistoryModel.h"
 #include "LensPickerDialog.h"
 #include "MaskOverlay.h"
@@ -36,6 +37,7 @@
 #include <LensResolution.h>
 #include <LocalAdjustmentEdits.h>
 #include <Photo.h>
+#include <Shot.h>
 #include <Sidecar.h>
 #include <WhiteBalance.h>
 
@@ -1559,6 +1561,39 @@ void MainWindow::showDevice(const PreviewResult& result) {
 
 namespace {
 
+/// @brief Tells whether a listing of a folder brings a file.
+///
+/// The file lies in the folder itself or, when subfolders are listed, below it in folders that
+/// the listing enters (::arraw::isListedFolder), however deep.
+/// @param root Folder listed.
+/// @param recursive Whether its subfolders are listed.
+/// @param file File to look for.
+bool listingReaches(const std::filesystem::path& root, bool recursive,
+                    const std::filesystem::path& file) {
+    const std::filesystem::path folder = withoutTrailingSeparator(root).lexically_normal();
+    const std::filesystem::path parent = file.parent_path().lexically_normal();
+    if (parent == folder) {
+        return true;
+    }
+    if (!recursive) {
+        return false;
+    }
+    const std::filesystem::path relative = parent.lexically_relative(folder);
+    if (relative.empty() || *relative.begin() == "..") {
+        return false;
+    }
+    std::filesystem::path at = folder;
+    for (const std::filesystem::path& part : relative) {
+        at /= part;
+        std::error_code error;
+        const std::filesystem::directory_entry entry(at, error);
+        if (error || !isListedFolder(entry)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 /// @brief Builds the open dialog's name filters from the extensions arraw opens.
 ///
 /// All images first, then one group each for RAW, JPEG, PNG and TIFF, so the
@@ -1644,12 +1679,18 @@ void MainWindow::openFile(const std::filesystem::path& path) {
         }
         const std::filesystem::path folder = path.parent_path();
         // Asked of the strip's own listing: a path under a folder it skips (a symbolic link,
-        // a hidden folder) or has not refreshed yet is not listed, however it is spelled.
+        // a hidden folder) or has not refreshed yet is not listed, however it is spelled. One
+        // that the listing under way is still to bring stays where it is, and waits for it.
         const bool listed = filmStrip_->shotContaining(path).has_value();
-        if (!listed) {
+        const bool coming =
+            !listed && filmStrip_->isListing() &&
+            listingReaches(filmStrip_->folder(), filmStrip_->includeSubfolders(), path);
+        // A file chosen now wins over the first shot of a folder opened before.
+        activateFirstListed_ = false;
+        if (!listed && !coming) {
             try {
                 const detail::TimingSpan folderTiming("window.folder.scan");
-                filmStrip_->setFolder(folder);
+                filmStrip_->setFolder(folder, path);
             } catch (const std::exception& error) {
                 // The photograph itself opened; only the strip cannot show its folder.
                 statusLine_->showMessage(
@@ -1660,9 +1701,12 @@ void MainWindow::openFile(const std::filesystem::path& path) {
         }
         showPhoto(std::move(photo));
         // The shot that holds the file, as its primary or as a companion; the file the user
-        // chose stays the one developed.
+        // chose stays the one developed. While the strip is listed, it becomes active when it
+        // arrives.
         if (const auto shot = filmStrip_->shotContaining(path)) {
             filmStrip_->setActive(*shot);
+        } else if (filmStrip_->isListing()) {
+            filmStrip_->setActive(path);
         } else {
             filmStrip_->clearActive();
         }
@@ -1695,9 +1739,8 @@ void MainWindow::openFolder(const std::filesystem::path& folder) {
     }
     rememberFolder(filmStrip_->folder());
     QSettings().remove("lastFile");
-    if (const auto first = filmStrip_->firstVisible()) {
-        activateShot(toQString(*first));
-    }
+    // The first shot the strip shows opens once the listing brings it (firstShotListed).
+    activateFirstListed_ = true;
 }
 
 void MainWindow::activateShot(const QString& primary) {
@@ -1754,16 +1797,17 @@ void MainWindow::buildFilmStripDock() {
     // unsaved edits first, and move on to the first shot that is left.
     filmStrip_->setSubfoldersLeaveGuard([this] { return confirmLeavingPhoto(); });
     connect(filmStrip_, &FilmStrip::includeSubfoldersToggled, this, [this](bool include) {
-        if (include || !open_) {
-            return;
+        // The open photograph is active again if the new listing brings it, before the first
+        // shot is announced; if it does not, the first shot opens. An empty listing leaves the
+        // photograph open, without an active shot.
+        if (!include && open_) {
+            activateFirstListed_ = true;
         }
-        const auto& path = open_->session.photo().path();
-        if (filmStrip_->shotContaining(path).has_value()) {
-            return;
-        }
-        // An empty listing leaves the photograph open, without an active shot.
-        if (const auto first = filmStrip_->firstVisible()) {
-            activateShot(toQString(*first));
+    });
+    connect(filmStrip_, &FilmStrip::firstShotListed, this, [this](const QString& primary) {
+        // Not when the user, or a file opened since, has made a shot active already.
+        if (std::exchange(activateFirstListed_, false) && !filmStrip_->activePrimary()) {
+            activateShot(primary);
         }
     });
     connect(filmStrip_, &FilmStrip::folderRequested, this, &MainWindow::openFolderWithDialog);

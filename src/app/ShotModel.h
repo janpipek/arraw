@@ -1,5 +1,7 @@
 #pragma once
 
+#include "FolderResult.h"
+
 #include <ExifInfo.h>
 #include <PhotoMarks.h>
 #include <Shot.h>
@@ -13,10 +15,14 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
+#include <span>
 #include <unordered_map>
 #include <vector>
 
 namespace arraw::app {
+
+struct FolderDiff;
 
 /// @brief Tells the stamp of a file's modification time.
 ///
@@ -44,18 +50,23 @@ namespace arraw::app {
 
 /// @brief Rows of the shots of one folder, with their marks and capture information.
 ///
-/// The listing is made at once and opens no file (ADR 029). The marks of each
-/// sidecar and the EXIF of each photograph are read afterwards on one
-/// background thread, marks of every shot before any EXIF, and handed back to
-/// this thread, so a folder of a thousand files does not block the window. EXIF
-/// is read by that loader rather than on the first tooltip request: a tooltip
-/// is drawn on the GUI thread, which must not open a RAW. Changing the folder
-/// drops what the loader has not done and ignores what it is still doing.
+/// The model reads no directory itself (but for the check that a new folder opens): its rows
+/// come from walks of the folder that a ::arraw::app::FolderWatcher runs on a thread of its own
+/// and hands over directory by directory (::arraw::app::ShotModel::applyFolders), so a tree of
+/// fifty thousand shots does not block the window. The model asks for a walk with
+/// ::arraw::app::ShotModel::walkRequested, and numbers each one; batches of another walk are
+/// stale and dropped. Opening no file is part of listing (ADR 029). The marks of each sidecar
+/// and the EXIF of each photograph are read afterwards on one background thread, marks of
+/// every shot before any EXIF, and handed back to this thread. EXIF is read by that loader
+/// rather than on the first tooltip request: a tooltip is drawn on the GUI thread, which must
+/// not open a RAW. Changing the folder drops what the loader has not done and ignores what it
+/// is still doing.
 ///
-/// The rows are kept as one contiguous span per folder, folders in
-/// ::arraw::folderPrecedes order. The model changes by inserting and removing runs of rows rather
-/// than by resetting (see ::arraw::app::ShotModel::refresh), so views keep their selection; only
-/// a change too scattered for that, past ::arraw::app::maxFolderRuns runs in a folder, resets it.
+/// The rows are kept as one contiguous span per folder, folders in ::arraw::folderPrecedes
+/// order, which is the order a walk comes in, so the rows of a first listing are only ever
+/// appended. Each directory a walk reads replaces its span: the model changes by inserting and
+/// removing runs of rows rather than by resetting, so views keep their selection; only a change
+/// too scattered for that, past ::arraw::app::maxFolderRuns runs in a folder, resets it.
 class ShotModel : public QAbstractListModel {
     Q_OBJECT
 
@@ -79,16 +90,66 @@ public:
     /// @brief Stops the loader and waits for the file it is reading.
     ~ShotModel() override;
 
-    /// @brief Shows the shots of a folder.
+    /// @brief Starts to show the shots of a folder.
     ///
-    /// Lists them synchronously, resets the model, and queues the marks and EXIF
-    /// reads. Anything the loader was doing for the previous folder is dropped.
+    /// Checks that the folder opens, empties the model with a reset, and starts the first
+    /// listing of it: ::arraw::app::ShotModel::isListing turns true, and
+    /// ::arraw::app::ShotModel::walkRequested asks for the walk whose results fill the rows.
+    /// Anything the loader was doing for the previous folder is dropped, and so is the walk of
+    /// it that may still be under way.
     /// @param folder Folder to list.
     /// @param recursive Whether to list its subfolders too (see ::arraw::listShots); remembered
     /// for ::arraw::app::ShotModel::refresh. Changing it for the same folder resets the model
     /// like a new folder does.
-    /// @throws std::runtime_error if the folder cannot be read; the model is left as it was.
+    /// @throws std::runtime_error (a std::filesystem::filesystem_error) if the folder cannot be
+    /// opened; the model is left as it was.
     void setFolder(const std::filesystem::path& folder, bool recursive = false);
+
+    /// @brief Numbers the walk that results are wanted from.
+    /// @return The number of the last walk asked for, 0 before any.
+    [[nodiscard]] std::uint64_t walk() const noexcept {
+        return walk_;
+    }
+
+    /// @brief Tells whether the first listing of the folder is under way.
+    /// @return True from ::arraw::app::ShotModel::setFolder until its walk is finished.
+    [[nodiscard]] bool isListing() const noexcept {
+        return walking_ == Walking::Listing;
+    }
+
+    /// @brief Tells whether a refresh walk is under way, or put off until the one under way ends.
+    /// @return True from ::arraw::app::ShotModel::refresh until its walk is finished.
+    [[nodiscard]] bool isRefreshing() const noexcept {
+        return walking_ == Walking::Refresh || refreshWanted_;
+    }
+
+    /// @brief Takes a batch of a walk: each directory's shots replace its rows.
+    ///
+    /// A directory that has no rows yet gets its span where the folder order puts it, with one
+    /// insert; one that has rows is merged with them in linear time (see
+    /// ::arraw::app::diffFolder): rows of shots that are still there stay, with their marks,
+    /// EXIF and thumbnail; shots that went are removed and new ones inserted, in order, one
+    /// insert or remove per run of adjacent rows, so a view's selection follows its shot. A
+    /// shot whose companions changed is updated in place. If a directory needs more than
+    /// ::arraw::app::maxFolderRuns runs, the model is reset instead (rows still keep their
+    /// data), and views must restore their selection.
+    ///
+    /// New rows are queued for their marks and EXIF. In a refresh, the loaded rows of a merged
+    /// directory are queued for a check of their sidecars as well, if the refresh checks it (see
+    /// ::arraw::app::ShotModel::refresh).
+    /// @param walk Number of the walk; a batch of any but the last one asked for is dropped.
+    /// @param batch Directories read, in walk order.
+    void applyFolders(std::uint64_t walk, const std::vector<FolderResult>& batch);
+
+    /// @brief Takes the end of a walk.
+    ///
+    /// The rows of every folder the walk did not read (a folder that went, or could not be read)
+    /// are removed. Then the walk is over: ::arraw::app::ShotModel::listingChanged reports the
+    /// end of a first listing, a refresh that was put off starts, and
+    /// ::arraw::app::ShotModel::loadingFinished follows once the loader is done too.
+    /// @param walk Number of the walk; any but the last one asked for is ignored.
+    /// @param summary What it saw.
+    void finishListing(std::uint64_t walk, const ListingSummary& summary);
 
     /// @brief Tells whether the subfolders are listed.
     /// @return The flag of the last ::arraw::app::ShotModel::setFolder.
@@ -102,22 +163,18 @@ public:
         return folder_;
     }
 
-    /// @brief Lists the folder again and merges the result in, folder by folder.
+    /// @brief Asks for the folder to be walked again, and merged in folder by folder.
     ///
-    /// Lists synchronously (the whole tree, if the model is recursive). Each folder's shots are
-    /// compared in linear time with its span of rows (see ::arraw::app::diffFolder). Rows of
-    /// shots that are still there stay, with their marks, EXIF and thumbnail; shots that went are
-    /// removed and new ones inserted, in order, one insert or remove per run of adjacent rows, so
-    /// a view's selection follows its shot. A shot whose companions changed is updated in place.
-    /// If some folder needs more than ::arraw::app::maxFolderRuns runs, the whole model is reset
-    /// instead (rows still keep their data), and views must restore their selection.
+    /// Asynchronous: ::arraw::app::ShotModel::walkRequested asks for a walk, whose batches are
+    /// merged by ::arraw::app::ShotModel::applyFolders and whose end removes the folders it did
+    /// not find (::arraw::app::ShotModel::finishListing). While a walk is under way the refresh
+    /// is put off until it ends, the folders of several such calls gathered into one.
     ///
-    /// Then the sidecars are checked on the loader thread, and re-read when the modification
-    /// time is not the one last seen; ::arraw::app::ShotModel::sidecarRefreshed reports each of
-    /// those. Only the rows of some folders are checked, not all: with @p dirty, those of the
-    /// folders it names and of the folders whose listing changed; without it, every loaded row.
-    /// New rows are loaded as for a new folder. A folder that can no longer be read counts as
-    /// empty.
+    /// The sidecars of merged rows are checked on the loader thread, and re-read when the
+    /// modification time is not the one last seen; ::arraw::app::ShotModel::sidecarRefreshed
+    /// reports each of those. Only the rows of some folders are checked, not all: with @p dirty,
+    /// those of the folders it names and of the folders whose listing changed; without it,
+    /// every loaded row. A folder that can no longer be read counts as empty.
     /// @param dirty Folders where something happened (such as a sidecar written, which no
     /// listing shows), spelled as the watcher spells them; nothing to check every row.
     void refresh(const std::optional<std::vector<std::filesystem::path>>& dirty = std::nullopt);
@@ -183,8 +240,19 @@ public:
     }
 
 signals:
-    /// @brief Announces that the loader has nothing left to do.
+    /// @brief Announces that the loader has nothing left to do, and no walk is under way.
     void loadingFinished();
+
+    /// @brief Asks for a walk of the folder.
+    ///
+    /// For ::arraw::app::ShotModel::folder, ::arraw::app::ShotModel::recursive and
+    /// ::arraw::app::ShotModel::walk as they are when it is sent; a
+    /// ::arraw::app::FolderWatcher answers it.
+    void walkRequested();
+
+    /// @brief Announces that a first listing of the folder began or ended.
+    /// @param listing The new ::arraw::app::ShotModel::isListing.
+    void listingChanged(bool listing);
 
     /// @brief Announces that a sidecar was re-read because its file changed since it was last seen.
     ///
@@ -247,25 +315,62 @@ private:
         }
     };
 
-    struct FolderPlan;
+    /// @brief Rows of each folder, in folder order.
+    using Spans = std::map<std::filesystem::path, Span, FolderOrder>;
 
-    /// @brief Finds the spans of the rows as they are.
-    /// @return The span of each folder with rows.
-    [[nodiscard]] std::map<std::filesystem::path, Span, FolderOrder> spansOfRows() const;
+    /// @brief What a walk is for.
+    enum class Walking {
+        None,    ///< No walk is under way.
+        Listing, ///< The first listing of the folder.
+        Refresh, ///< A refresh, merged into the rows there are.
+    };
+
+    struct Job;
 
     /// @brief Points the path index of the rows from a row on at their places.
     /// @param from First row that moved.
     void reindexFrom(int from);
 
-    /// @brief Replaces all rows by a listing, keeping the data of the shots that stay.
-    /// @param listing Shots in folder order.
-    /// @param added Receives the primaries that were not rows before.
-    void resetTo(const std::vector<Shot>& listing, std::vector<std::filesystem::path>& added);
+    /// @brief Moves the first row of the spans from one on.
+    /// @param from First span to move.
+    /// @param delta Rows to move them by.
+    void shiftSpans(Spans::iterator from, int delta);
 
-    /// @brief Applies the diff of each folder with a signal per run.
-    /// @param plans One per folder of the old and the new rows, in folder order.
+    /// @brief Replaces the rows of one folder by its shots now.
+    /// @param result Folder and its shots.
     /// @param added Receives the primaries that were not rows before.
-    void applyPlans(std::vector<FolderPlan>& plans, std::vector<std::filesystem::path>& added);
+    /// @param rechecks Receives the sidecar checks of the rows that stay.
+    void applyFolder(const FolderResult& result, std::vector<std::filesystem::path>& added,
+                     std::vector<Job>& rechecks);
+
+    /// @brief Inserts the rows of a folder that has none.
+    void insertFolder(const std::filesystem::path& folder, std::span<const Shot> shots,
+                      std::vector<std::filesystem::path>& added);
+
+    /// @brief Applies the diff of a folder with a signal per run.
+    /// @param first First row of the folder.
+    /// @param diff What turns its rows into @p fresh.
+    /// @param fresh Its shots now.
+    /// @param added Receives the primaries that were not rows before.
+    void applyDiff(int first, const FolderDiff& diff, std::span<const Shot> fresh,
+                   std::vector<std::filesystem::path>& added);
+
+    /// @brief Replaces the rows of a folder with a reset, keeping the data of the shots that stay.
+    /// @param span Its rows now.
+    /// @param fresh Its shots now.
+    /// @param added Receives the primaries that were not rows before.
+    void resetFolder(Span span, std::span<const Shot> fresh,
+                     std::vector<std::filesystem::path>& added);
+
+    /// @brief Removes the rows of one folder.
+    /// @param span The folder's span; erased.
+    void removeFolder(Spans::iterator span);
+
+    /// @brief Starts a refresh walk now.
+    void startRefresh();
+
+    /// @brief Announces the end of the loading, if nothing is owed and no walk is under way.
+    void reportIfLoaded();
 
     /// @brief Queues the first reads of shots.
     /// @param primaries Shots that were just added.
@@ -286,7 +391,7 @@ private:
     std::vector<Row> rows_;
 
     /// Rows of each folder that has any; folders in order, and each span follows the one before.
-    std::map<std::filesystem::path, Span, FolderOrder> spans_;
+    Spans spans_;
 
     /// Row of each primary.
     std::unordered_map<std::filesystem::path, int> index_;
@@ -294,8 +399,32 @@ private:
     /// Reads still owed for the current folder.
     int pending_ = 0;
 
-    /// Folder generation; results of another one are stale.
+    /// Folder generation, for the loader; results of another one are stale.
     std::uint64_t generation_ = 0;
+
+    /// Number of the last walk asked for; batches of another one are stale.
+    std::uint64_t walk_ = 0;
+
+    /// What the walk under way is for.
+    Walking walking_ = Walking::None;
+
+    /// Folders the walk under way has read, spelled as span keys.
+    std::set<std::filesystem::path> seen_;
+
+    /// Whether the refresh under way checks the sidecars of every row it merges.
+    bool recheckAll_ = false;
+
+    /// Folders whose sidecars the refresh under way checks, normalised.
+    std::set<std::filesystem::path> dirtyFolders_;
+
+    /// Whether a refresh is put off until the walk under way ends.
+    bool refreshWanted_ = false;
+
+    /// Whether the refresh put off checks every row.
+    bool wantedAll_ = false;
+
+    /// Folders the refresh put off checks, normalised.
+    std::set<std::filesystem::path> wantedFolders_;
 
     /// Declared last, so that the thread stops before anything it hands results to is gone.
     std::unique_ptr<Loader> loader_;

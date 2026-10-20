@@ -1,4 +1,4 @@
-// Measurements for the folder listing (incremental-refresh plan, step 1). Hidden: build in
+// Measurements for the folder listing (incremental-refresh plan, steps 1 and 3). Hidden: build in
 // Release and run
 //   build/release/tests/arraw-tests "[listing-bench]"
 // (the case carries [.bench] and [listing-bench], so it runs only when a tag filter names it).
@@ -6,10 +6,17 @@
 // directory; set ARRAW_BENCH_TREE to a folder to list a real tree, a NAS share for instance,
 // instead.
 
+#include "FolderWatcher.h"
+#include "ShotFilterModel.h"
+#include "ShotModel.h"
 #include "support/ReferenceListing.h"
+#include "support/StallProbe.h"
 #include "support/TempDir.h"
 
 #include <Shot.h>
+
+#include <QCoreApplication>
+#include <QElapsedTimer>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -55,6 +62,18 @@ void generateTree(const fs::path& root) {
     }
 }
 
+/// @brief Gives the tree to measure: ARRAW_BENCH_TREE, or a generated one kept in @p generated.
+fs::path benchTree(std::optional<test::TempDir>& generated) {
+    if (const char* tree = std::getenv("ARRAW_BENCH_TREE"); tree != nullptr && *tree != '\0') {
+        return tree;
+    }
+    generated.emplace();
+    const double generating = timed([&] { generateTree(generated->path()); });
+    std::cout << "generated 200 x 250 shots (150 000 files) in " << std::fixed
+              << std::setprecision(0) << generating << " ms\n";
+    return generated->path();
+}
+
 /// @brief Collects every listed folder of a tree, root first, in walk order.
 std::vector<fs::path> foldersOf(const fs::path& root) {
     std::vector<fs::path> folders;
@@ -74,16 +93,7 @@ std::vector<fs::path> foldersOf(const fs::path& root) {
 TEST_CASE("Listing a large tree: the walk over listFolder against the old listing",
           "[.bench][listing-bench]") {
     std::optional<test::TempDir> generated;
-    fs::path root;
-    if (const char* tree = std::getenv("ARRAW_BENCH_TREE"); tree != nullptr && *tree != '\0') {
-        root = tree;
-    } else {
-        generated.emplace();
-        root = generated->path();
-        const double generating = timed([&] { generateTree(root); });
-        std::cout << "generated 200 x 250 shots (150 000 files) in " << std::fixed
-                  << std::setprecision(0) << generating << " ms\n";
-    }
+    const fs::path root = benchTree(generated);
 
     std::vector<Shot> before;
     std::vector<Shot> after;
@@ -127,4 +137,58 @@ TEST_CASE("Listing a large tree: the walk over listFolder against the old listin
               << "listFolder of the root: " << first << " ms\n"
               << "listFolder of the slowest folder (" << slowest.filename().string()
               << "): " << bestOneFolder << " ms (best of 5)\n";
+}
+
+TEST_CASE("Listing a large tree in the background: time to the first batch, and GUI stalls",
+          "[.bench][listing-bench]") {
+    std::optional<test::TempDir> generated;
+    const fs::path root = benchTree(generated);
+    (void)listShots(root, true); // A warm cache, as for the case above.
+
+    // The model as the strip has it: a filter proxy over it, and the watcher with its lister.
+    app::ShotModel model;
+    app::ShotFilterModel proxy;
+    proxy.setSourceModel(&model);
+    app::FolderWatcher watcher(model);
+    QElapsedTimer clock;
+    double firstBatch = -1;
+    int batches = 0;
+    QObject::connect(&model, &QAbstractItemModel::rowsInserted, &model, [&] {
+        if (firstBatch < 0) {
+            firstBatch = static_cast<double>(clock.nsecsElapsed()) / 1e6;
+        }
+        ++batches;
+    });
+    const auto runUntil = [](const std::function<bool()>& done) {
+        while (!done()) {
+            // The probe's 1 ms timer wakes the loop.
+            QCoreApplication::processEvents(QEventLoop::AllEvents | QEventLoop::WaitForMoreEvents);
+        }
+    };
+    test::StallProbe probe;
+    // The first run lists into an empty model; the later ones replace 50 000 rows, as a change
+    // of folder does.
+    for (int run = 1; run <= 3; ++run) {
+        firstBatch = -1;
+        batches = 0;
+        probe.start();
+        clock.start();
+        model.setFolder(root, true);
+        const double returned = static_cast<double>(clock.nsecsElapsed()) / 1e6;
+        runUntil([&] { return !model.isListing(); });
+        const double listed = static_cast<double>(clock.nsecsElapsed()) / 1e6;
+        const double listingStall = probe.longestMs();
+        runUntil([&] { return model.pendingLoads() == 0; });
+        const double loaded = static_cast<double>(clock.nsecsElapsed()) / 1e6;
+        const double loadingStall = probe.longestMs();
+        probe.stop();
+        std::cout << std::fixed << std::setprecision(1) << "background listing, run " << run << ": "
+                  << model.rowCount() << " shots in " << batches
+                  << " inserts; setFolder returned in " << returned << " ms, first batch at "
+                  << firstBatch << " ms, listing finished at " << listed
+                  << " ms, longest GUI stall while listing " << listingStall
+                  << " ms; marks and EXIF read at " << loaded
+                  << " ms, longest GUI stall until then " << loadingStall << " ms\n";
+        REQUIRE(model.rowCount() == static_cast<int>(listShots(root, true).size()));
+    }
 }

@@ -202,7 +202,9 @@ private:
     /// @brief Opens a photograph the user chose, and shows its folder in the film strip.
     ///
     /// The file itself is developed, even when it is a companion of a shot (a JPEG beside a
-    /// RAW); the strip selects the shot that holds it. Nothing changes if the file's
+    /// RAW); the strip selects the shot that holds it, once listed: a file below the strip's
+    /// folder that its listing under way has yet to bring keeps the strip as it is. Nothing
+    /// changes if the file's
     /// description cannot be read or the user cancels leaving the open photograph; its pixels
     /// are decoded afterwards, off the GUI thread (showPhoto()).
     /// @param path File to open.
@@ -213,7 +215,8 @@ private:
 
     /// @brief Fills the film strip with a folder and develops its first shot.
     ///
-    /// Asks about unsaved changes first. The first shot is the first the strip's filter shows.
+    /// Asks about unsaved changes first. The first shot is the first the strip's filter shows;
+    /// it is opened when the listing brings it, unless a shot was made active by then.
     /// @param folder Folder to open.
     void openFolder(const std::filesystem::path& folder);
 
@@ -574,6 +577,9 @@ private:
     DebugWindow* debugWindow_ = nullptr;
     PhotoView* photoView_ = nullptr;
     FilmStrip* filmStrip_ = nullptr;
+    /// Whether the first shot the strip's listing brings is to be opened (a folder was opened,
+    /// or the subfolders that held the open photograph were dropped).
+    bool activateFirstListed_ = false;
     QDockWidget* stripDock_ = nullptr;
     QMenu* viewMenu_ = nullptr;
     CullingActions* culling_ = nullptr;
