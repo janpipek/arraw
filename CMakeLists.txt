@@ -565,6 +565,8 @@ add_library(arraw-app-core STATIC
         src/app/FolderWatcher.h
         src/app/WatchBudget.cpp
         src/app/WatchBudget.h
+        src/app/HistogramCounter.cpp
+        src/app/HistogramCounter.h
         src/app/HistoryModel.cpp
         src/app/HistoryModel.h
         src/app/LensSupport.cpp
