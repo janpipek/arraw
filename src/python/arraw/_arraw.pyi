@@ -2116,6 +2116,58 @@ def curve_histogram(source: Photo, state: DevelopState | None = None, *, size: i
     Decode a photograph, sample it at Tap.CURVE_INPUT with its own state unless `state` is given, and count it; `size` and the resize as for a decoded buffer.
     """
 
+OUTPUT_HISTOGRAM_BINS: int = 256
+
+class OutputHistogram:
+    """
+    Pixel counts of a finished picture by 8-bit code, OUTPUT_HISTOGRAM_BINS bins per channel, in the output encoding; not constructible from Python.
+    """
+
+    @property
+    def luma(self) -> Annotated[NDArray[numpy.uint64], dict(shape=(256), writable=False)]:
+        """
+        Read-only uint64 array of the luma counts: the output space's luminance, encoded and rounded to a code.
+        """
+
+    @property
+    def red(self) -> Annotated[NDArray[numpy.uint64], dict(shape=(256), writable=False)]:
+        """Read-only uint64 array of the red counts."""
+
+    @property
+    def green(self) -> Annotated[NDArray[numpy.uint64], dict(shape=(256), writable=False)]:
+        """Read-only uint64 array of the green counts."""
+
+    @property
+    def blue(self) -> Annotated[NDArray[numpy.uint64], dict(shape=(256), writable=False)]:
+        """Read-only uint64 array of the blue counts."""
+
+    @property
+    def pixels(self) -> int:
+        """Number of pixels counted; fully transparent ones are not."""
+
+    @property
+    def shadows_clipped(self) -> int:
+        """Number of pixels with any of R, G, B at code 0."""
+
+    @property
+    def highlights_clipped(self) -> int:
+        """Number of pixels with any of R, G, B at code 255."""
+
+    @property
+    def encoding(self) -> NamedEncoding:
+        """Output encoding the codes are in."""
+
+    def __eq__(self, arg: OutputHistogram, /) -> bool: ...
+
+    def __repr__(self) -> str: ...
+
+    __hash__: None = None
+
+def output_histogram(image: ImageBuffer, encoding: NamedEncoding | None = None) -> OutputHistogram:
+    """
+    Count the 8-bit picture an output shows. A developed buffer in the working encoding is converted to `encoding` (default NamedEncoding.SRGB) as save() would at 8 bits; a buffer already in SRGB, DISPLAY_P3 or ADOBE_RGB is counted as it is, and `encoding` must then be None or equal to it. Any other encoding raises ValueError.
+    """
+
 def resolved_size(size: int | tuple[int, int] | float, cropped: ImageSize, *, allow_upscale: bool = False) -> ImageSize:
     """
     Resolve a develop `size` against the size after the crop, as develop does.
