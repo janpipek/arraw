@@ -1847,7 +1847,7 @@ void MainWindow::buildFilmStripDock() {
     // A listing that brought no shot opens nothing, now or at a later listing.
     connect(filmStrip_, &FilmStrip::listingEnded, this, [this] { activateFirstListed_ = false; });
     connect(filmStrip_, &FilmStrip::folderRequested, this, &MainWindow::openFolderWithDialog);
-    connect(filmStrip_, &FilmStrip::exportRequested, this, &MainWindow::exportWithDialog);
+    connect(filmStrip_, &FilmStrip::exportRequested, this, &MainWindow::exportShots);
     connect(filmStrip_, &FilmStrip::sidecarChangedExternally, this,
             &MainWindow::sidecarChangedOnDisk);
 }
@@ -1950,7 +1950,14 @@ void MainWindow::exportWithDialog() {
         const ExportSettings settings = dialog.settings();
         saveSettings(settings, store);
 
-        const std::filesystem::path suggested = suggestedPath(photo.path(), settings.format);
+        // Starts in the folder of the last export, of one photograph or of several.
+        std::filesystem::path suggested = suggestedPath(photo.path(), settings.format);
+        const std::filesystem::path lastFolder(
+            store.value(QStringLiteral("export/lastFolder")).toString().toStdU16String());
+        std::error_code lastError;
+        if (!lastFolder.empty() && std::filesystem::is_directory(lastFolder, lastError)) {
+            suggested = lastFolder / suggested.filename();
+        }
         const QString chosen = QFileDialog::getSaveFileName(
             this, tr("Export Image"), toQString(suggested), nameFilterFor(settings.format));
         if (chosen.isEmpty()) {
@@ -1958,6 +1965,7 @@ void MainWindow::exportWithDialog() {
         }
         const std::filesystem::path typed(chosen.toStdU16String());
         const std::filesystem::path path = withSuffix(typed, settings.format);
+        store.setValue(QStringLiteral("export/lastFolder"), toQString(path.parent_path()));
         if (isSameFile(path, photo.path())) {
             QMessageBox::warning(this, tr("Cannot Export Photograph"),
                                  tr("%1\n\nThis is the photograph itself; the export would "
@@ -1997,6 +2005,147 @@ void MainWindow::exportWithDialog() {
     }
 }
 
+void MainWindow::exportShots(const QStringList& primaries) {
+    if (primaries.isEmpty()) {
+        return;
+    }
+    try {
+        std::vector<std::filesystem::path> sources;
+        for (const QString& primary : primaries) {
+            sources.emplace_back(primary.toStdU16String());
+        }
+        // The jobs use the saved state of every shot, the open one included; say so if that
+        // leaves something out.
+        QString note;
+        if (open_) {
+            developPanel_->finishPendingEdit();
+            const auto& photo = open_->session.photo();
+            if (open_->session.hasUnsavedChanges() &&
+                std::ranges::any_of(
+                    sources, [&](const auto& each) { return isSameFile(each, photo.path()); })) {
+                note = tr("exported the saved settings of %1; its unsaved edits are not included")
+                           .arg(toQString(photo.path().filename()));
+            }
+        }
+
+        QSettings store;
+        const ExportSettings initial = restoreSettings(store);
+        // The custom size starts at the stored box; there is no one frame to start it at.
+        const ImageSize frame = initial.width > 0 && initial.height > 0
+                                    ? ImageSize{initial.width, initial.height}
+                                    : ImageSize{3840, 2160};
+        std::optional<ExportSettings> chosen;
+        if (exportPrompts_.settings) {
+            chosen = exportPrompts_.settings(initial, frame);
+        } else {
+            ExportDialog dialog(initial, frame, this);
+            if (dialog.exec() == QDialog::Accepted) {
+                chosen = dialog.settings();
+            }
+        }
+        if (!chosen) {
+            return;
+        }
+        const ExportSettings settings = *chosen;
+        saveSettings(settings, store);
+
+        const QString lastKey = QStringLiteral("export/lastFolder");
+        std::filesystem::path start(store.value(lastKey).toString().toStdU16String());
+        std::error_code ignored;
+        if (start.empty() || !std::filesystem::is_directory(start, ignored)) {
+            start = sources.front().parent_path();
+        }
+        std::filesystem::path folder;
+        if (exportPrompts_.folder) {
+            folder = exportPrompts_.folder(start);
+        } else {
+            folder = std::filesystem::path(
+                QFileDialog::getExistingDirectory(this, tr("Export To"), toQString(start))
+                    .toStdU16String());
+        }
+        if (folder.empty()) {
+            return;
+        }
+        store.setValue(lastKey, toQString(folder));
+
+        const std::vector<std::filesystem::path> targets =
+            targetPaths(sources, folder, settings.format);
+        auto batch = std::make_shared<ExportBatch>();
+        std::vector<std::size_t> wanted;
+        std::size_t existing = 0;
+        for (std::size_t i = 0; i < targets.size(); ++i) {
+            // The names avoid the listed sources; this also catches links and letter case.
+            if (std::ranges::any_of(
+                    sources, [&](const auto& source) { return isSameFile(targets[i], source); })) {
+                ++batch->skipped;
+                batch->details << tr("%1 skipped: the export would overwrite a photograph")
+                                      .arg(toQString(targets[i]));
+                continue;
+            }
+            if (std::filesystem::exists(targets[i], ignored)) {
+                ++existing;
+            }
+            wanted.push_back(i);
+        }
+        bool skipExisting = false;
+        if (existing > 0) {
+            ExistingChoice choice = ExistingChoice::Cancel;
+            if (exportPrompts_.existing) {
+                choice = exportPrompts_.existing(existing);
+            } else {
+                QMessageBox box(
+                    QMessageBox::Question, tr("Export Images"),
+                    tr("%n file(s) already exist.", nullptr, static_cast<int>(existing)),
+                    QMessageBox::NoButton, this);
+                QPushButton* replace = box.addButton(tr("Replace all"), QMessageBox::AcceptRole);
+                QPushButton* skip = box.addButton(tr("Skip existing"), QMessageBox::AcceptRole);
+                box.addButton(QMessageBox::Cancel);
+                box.setDefaultButton(skip);
+                box.exec();
+                if (box.clickedButton() == replace) {
+                    choice = ExistingChoice::ReplaceAll;
+                } else if (box.clickedButton() == skip) {
+                    choice = ExistingChoice::SkipExisting;
+                }
+            }
+            if (choice == ExistingChoice::Cancel) {
+                return;
+            }
+            skipExisting = choice == ExistingChoice::SkipExisting;
+        }
+
+        batch->note = note;
+        for (const std::size_t i : wanted) {
+            if (skipExisting && std::filesystem::exists(targets[i], ignored)) {
+                ++batch->skipped;
+                continue;
+            }
+            ExportJob job;
+            job.fromSaved = true;
+            job.input = sources[i];
+            job.request = requestOf(settings);
+            job.options = optionsOf(settings);
+            job.path = targets[i];
+            job.metadata = ExportMetadata{
+                .source = sources[i], .marks = {}, .selection = selectionOf(settings)};
+            const std::uint64_t id = exportQueue_.enqueue(std::move(job));
+            ++batch->total;
+            exportBatches_.emplace(id, batch);
+            exportNames_.emplace(id, toQString(targets[i].filename()));
+        }
+        if (batch->total == 0) {
+            statusLine_->showMessage(tr("Nothing to export: %n file(s) skipped.", nullptr,
+                                        static_cast<int>(batch->skipped)),
+                                     8000, batch->details.join(QLatin1Char('\n')));
+            return;
+        }
+        showExportProgress();
+    } catch (const std::exception& error) {
+        QMessageBox::warning(this, tr("Cannot Export Photographs"),
+                             QString::fromUtf8(error.what()));
+    }
+}
+
 void MainWindow::showExportProgress() {
     if (exportNames_.empty()) {
         return;
@@ -2009,6 +2158,50 @@ void MainWindow::showExportProgress() {
 }
 
 void MainWindow::showExportResult(const ExportResult& result) {
+    // A job of exportShots reports into its batch: one summary at the end, no box per file.
+    if (const auto batchIt = exportBatches_.find(result.id); batchIt != exportBatches_.end()) {
+        const std::shared_ptr<ExportBatch> batch = batchIt->second;
+        exportBatches_.erase(batchIt);
+        exportNames_.erase(result.id);
+        constexpr qsizetype maxDetails = 8;
+        if (result.error.empty()) {
+            ++batch->written;
+            for (const auto& notice : result.lensNotices) {
+                batch->details << QString::fromStdString(notice);
+            }
+            for (const auto& warning : result.warnings) {
+                batch->details << QString::fromStdString(warning);
+            }
+        } else {
+            ++batch->failed;
+            batch->details.prepend(tr("%1: %2").arg(toQString(result.path.filename()),
+                                                    QString::fromStdString(result.error)));
+        }
+        if (batch->written + batch->failed < batch->total) {
+            showExportProgress();
+        } else {
+            QString text = tr("Exported %1 of %2 files").arg(batch->written).arg(batch->total);
+            if (batch->failed > 0) {
+                text += tr(", %1 failed").arg(batch->failed);
+            }
+            if (batch->skipped > 0) {
+                text += tr(", %1 skipped").arg(batch->skipped);
+            }
+            if (!batch->note.isEmpty()) {
+                text += tr("; %1").arg(batch->note);
+            }
+            QStringList shown = batch->details.mid(0, maxDetails);
+            if (batch->details.size() > maxDetails) {
+                shown << tr("…and %1 more").arg(batch->details.size() - maxDetails);
+            }
+            statusLine_->showMessage(text, batch->failed > 0 ? 20000 : 8000,
+                                     shown.join(QLatin1Char('\n')));
+        }
+        if (exportNames_.empty() && closeWhenIdle_) {
+            close();
+        }
+        return;
+    }
     // A result names its job; one whose job was cancelled has no name left.
     if (const auto found = exportNames_.find(result.id); found != exportNames_.end()) {
         const QString name = found->second;
@@ -2142,6 +2335,7 @@ void MainWindow::closeEvent(QCloseEvent* event) {
         const std::size_t dropped = exportQueue_.cancelQueued();
         // Identifiers increase, so the dropped jobs are the newest names.
         for (std::size_t i = 0; i < dropped && !exportNames_.empty(); ++i) {
+            exportBatches_.erase(std::prev(exportNames_.end())->first);
             exportNames_.erase(std::prev(exportNames_.end()));
         }
         QMainWindow::closeEvent(event);

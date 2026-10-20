@@ -200,16 +200,6 @@ adjustments (user, 2026-10-08; `docs/ideas/local-adjustment-plan.md`):
 - **Spots and Info tabs** in the develop dock, as `old` had (Q switched to
   Spots there).
 
-- **Export from the film strip's context menu** (user, 2026-10-20): with several shots
-  selected, a right-click must offer Export (as in `old`), running the export dialog
-  once for the whole selection through the export queue. The strip's context menu
-  exists since the Refresh Folder work (step 5 of the incremental-refresh plan).
-  **Decided (user, 2026-10-20):** one settings dialog, then one folder picker (starting at
-  the last export folder), files named `<stem>.<suffix>` there; if any exist, one question
-  "Replace all / Skip existing / Cancel"; same-stem shots from different folders in one run
-  get `_2`, `_3` so they never overwrite each other. Jobs go through the export queue with
-  each shot's saved state (sidecar), not the open session's. Implement after the film-strip
-  work.
 - **Export presets** (user, 2026-10-19): the export dialog should allow named presets
   (`ExportSettings`: format, encoding, bit depth, size box, quality, sharpening,
   metadata). At the least, some default sizes to scale to (e.g. a choice of long
@@ -222,6 +212,15 @@ adjustments (user, 2026-10-08; `docs/ideas/local-adjustment-plan.md`):
   separate: individual files, one per preset. The JSON file here is app config
   (export presets and the like). To scope: the config file's layout and its
   versioning as in ADR 051.
+
+Done (user, 2026-10-20): **export from the film strip's context menu.** Export… is offered for
+one shot or the selection; `MainWindow::exportShots` asks the settings once, then one folder
+(starting at `export/lastFolder`, which the single-photo save dialog also uses), names the files
+with `targetPaths` (`_2`, `_3` for equal stems), asks once about files that exist (Replace all /
+Skip existing / Cancel) and queues one `ExportJob` per file with `fromSaved`: the export thread
+opens the photograph and uses its sidecar's state, so nothing is read on the interface thread.
+The jobs report as one batch ("Exported N of M files", failures in the tooltip); the saved state is
+used for the open photograph too, and the summary says when its unsaved edits are left out.
 
 Done (ADR 042): the render pie is always present at the left of the status
 bar, in the new `StatusLine` widget that also owns the message, device label

@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <span>
 #include <string_view>
+#include <vector>
 
 namespace arraw::app {
 
@@ -66,6 +67,20 @@ struct ExportSettings {
 /// @return `<folder of source>/<stem of source>.<suffix>`.
 [[nodiscard]] std::filesystem::path suggestedPath(const std::filesystem::path& source,
                                                   ImageFileFormat format);
+
+/// @brief Names the files of an export of several photographs into one folder.
+///
+/// Each file is `<stem of its source>.<suffix>`; a stem met again, in any letter case, gets `_2`,
+/// `_3`, … so that two photographs from different folders never write the same file, and no name
+/// is a path in sources (the export never replaces a photograph). Deterministic: the first
+/// photograph of a stem keeps the plain name.
+/// @param sources Files the photographs were read from, in the order to name them.
+/// @param folder Folder to write to.
+/// @param format Format being written.
+/// @return One path per source, in the same order; empty for no sources.
+[[nodiscard]] std::vector<std::filesystem::path>
+targetPaths(std::span<const std::filesystem::path> sources, const std::filesystem::path& folder,
+            ImageFileFormat format);
 
 /// @brief Lists the long edges, in pixels, the export dialog offers besides the original size.
 [[nodiscard]] std::span<const std::uint32_t> presetLongEdges();

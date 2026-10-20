@@ -149,6 +149,7 @@ add_executable(arraw-widget-tests
         test_MainWindowLens.cpp
         test_MainWindowView.cpp
         test_MainWindowCopy.cpp
+        test_MainWindowExport.cpp
         test_MainWindowCrop.cpp
         test_MainWindowMasks.cpp
         test_MainWindowNegative.cpp

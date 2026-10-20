@@ -15,6 +15,7 @@
 #include <QKeySequence>
 #include <QList>
 #include <QString>
+#include <QStringList>
 #include <QTimer>
 #include <QWidget>
 
@@ -294,8 +295,9 @@ signals:
     /// @brief Announces that the folder button was pressed.
     void folderRequested();
 
-    /// @brief Asks for the active shot to be exported, from its context menu.
-    void exportRequested();
+    /// @brief Asks for the shots the context menu acts on to be exported.
+    /// @param primaries Primary files of the shots, the selection when the click was on it.
+    void exportRequested(const QStringList& primaries);
 
     /// @brief Announces that the active shot changed.
     void activeChanged();

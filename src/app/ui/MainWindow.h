@@ -4,6 +4,7 @@
 #include "CopySections.h"
 #include "CropEditing.h"
 #include "ExportQueue.h"
+#include "ExportSettings.h"
 #include "LensSupport.h"
 #include "MaskEditing.h"
 #include "PhotoLoader.h"
@@ -24,9 +25,11 @@
 #include <QPointF>
 #include <QSize>
 #include <QString>
+#include <QStringList>
 #include <QTimer>
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <filesystem>
@@ -84,6 +87,33 @@ public:
 
     /// @brief Cuts the panel's signals off before the members they use are gone.
     ~MainWindow() override;
+
+    /// @brief Answer to the question about files that already exist in an export's folder.
+    enum class ExistingChoice {
+        ReplaceAll,   ///< Write every file, replacing those that exist.
+        SkipExisting, ///< Write only the files that do not exist yet.
+        Cancel,       ///< Export nothing.
+    };
+
+    /// @brief The questions exportShots asks, which a test may answer without a dialog.
+    ///
+    /// Each member left empty is the real dialog.
+    struct ExportPrompts {
+        /// Gives the settings to export with, or nothing when cancelled; receives the settings
+        /// stored last and a frame size to start the custom size at.
+        std::function<std::optional<ExportSettings>(const ExportSettings&, ImageSize)> settings;
+        /// Gives the folder to export into, or an empty path when cancelled; receives where
+        /// to start.
+        std::function<std::filesystem::path(const std::filesystem::path&)> folder;
+        /// Answers for the number of files that exist.
+        std::function<ExistingChoice(std::size_t)> existing;
+    };
+
+    /// @brief Replaces the dialogs of exportShots; for tests.
+    /// @param prompts Answers; a member left empty keeps the real dialog.
+    void setExportPrompts(ExportPrompts prompts) {
+        exportPrompts_ = std::move(prompts);
+    }
 
     /// @brief Opens a startup file or folder, restoring the last one when none is supplied.
     void openInitialPath(const std::optional<std::filesystem::path>& path = std::nullopt);
@@ -185,6 +215,16 @@ private:
     /// Snapshots the photograph's develop state at this moment; editing
     /// carries on while the export runs.
     void exportWithDialog();
+
+    /// @brief Exports shots as they were saved, into one folder chosen once.
+    ///
+    /// Asks for the settings once, then for the folder (starting at the last one used), names
+    /// the files with ::arraw::app::targetPaths, asks once about files that exist, and queues
+    /// one job per file. The jobs read each shot's sidecar on the export thread, so the open
+    /// photograph's unsaved edits are not included; the summary says so. The jobs report as one
+    /// batch: a summary when the last finishes, not a message per file.
+    /// @param primaries Primary files of the shots.
+    void exportShots(const QStringList& primaries);
 
     /// @brief Reports a finished export, and closes the window if it was waiting for them.
     /// @param result Outcome delivered by the export queue.
@@ -719,6 +759,22 @@ private:
 
     /// Renders of the crop mode on their way, with the state each shows, oldest first.
     std::deque<std::pair<std::uint64_t, DevelopState>> cropRequests_;
+
+    /// @brief What the jobs of one exportShots call have done so far.
+    struct ExportBatch {
+        std::size_t total = 0;   ///< Jobs queued.
+        std::size_t written = 0; ///< Files written.
+        std::size_t failed = 0;  ///< Jobs that failed.
+        std::size_t skipped = 0; ///< Shots left out before queueing.
+        QStringList details;     ///< Failures, then skips and notices, for the tooltip.
+        QString note;            ///< Sentence the summary ends with, or empty.
+    };
+
+    /// Batch of each queued job of exportShots, by the identifier the queue gave.
+    std::map<std::uint64_t, std::shared_ptr<ExportBatch>> exportBatches_;
+
+    /// Answers that replace the export questions; empty members ask.
+    ExportPrompts exportPrompts_;
 
     /// File names of the exports that have not reported yet, by the identifier the queue gave.
     std::map<std::uint64_t, QString> exportNames_;

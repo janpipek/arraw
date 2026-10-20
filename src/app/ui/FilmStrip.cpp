@@ -1215,11 +1215,16 @@ void FilmStrip::showContextMenu(const QPoint& position) {
     connect(menu.addAction(tr("Show in File Manager")), &QAction::triggered, this, [clicked] {
         QDesktopServices::openUrl(QUrl::fromLocalFile(toQString(clicked.parent_path())));
     });
-    // Export belongs to the photograph in the develop view, so it is offered for that one only.
-    if (clicked == active_) {
-        connect(menu.addAction(tr("Export…")), &QAction::triggered, this,
-                &FilmStrip::exportRequested);
-    }
+    // The window runs the export; the strip only says which shots.
+    QAction* exportAction = menu.addAction(tr("Export…"));
+    exportAction->setObjectName(QStringLiteral("filmStripExportAction"));
+    connect(exportAction, &QAction::triggered, this, [this, shots] {
+        QStringList primaries;
+        for (const fs::path& shot : shots) {
+            primaries << toQString(shot);
+        }
+        emit exportRequested(primaries);
+    });
     menu.addSeparator();
     addRefreshAction(menu);
     menu.exec(list_->viewport()->mapToGlobal(position));

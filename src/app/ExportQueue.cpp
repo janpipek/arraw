@@ -83,11 +83,14 @@ private:
 };
 
 /// @brief Runs one job, turning a failure into a result.
-ExportResult execute(std::uint64_t id, const ExportJob& job, GpuExport* gpu,
+ExportResult execute(std::uint64_t id, const ExportJob& queued, GpuExport* gpu,
                      const LensDatabaseSource& lensDatabase) {
+    // The job as it runs; a copy only when it has to be completed from the sidecar.
+    std::optional<ExportJob> resolved;
+    const ExportJob* effective = &queued;
     const detail::TimingSpan timing("export", id);
     ExportResult result{.id = id,
-                        .path = job.path,
+                        .path = queued.path,
                         .error = {},
                         .warnings = {},
                         .onGpu = false,
@@ -96,6 +99,21 @@ ExportResult execute(std::uint64_t id, const ExportJob& job, GpuExport* gpu,
     // Nothing may escape the thread, or the process terminates.
     try {
         CollectedDiagnostics log;
+        if (queued.fromSaved) {
+            if (queued.input.empty()) {
+                throw std::invalid_argument("No photograph to export");
+            }
+            const Photo photo = openPhoto(queued.input, log);
+            resolved = queued;
+            resolved->state = photo.state();
+            resolved->decode = decodeOptionsFor(photo, false);
+            resolved->document = photo;
+            if (resolved->metadata) {
+                resolved->metadata->marks = photo.marks();
+            }
+            effective = &*resolved;
+        }
+        const ExportJob& job = *effective;
         std::shared_ptr<const ImageBuffer> source = job.source;
         if (!source) {
             if (job.input.empty()) {

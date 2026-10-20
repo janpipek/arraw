@@ -7,6 +7,7 @@
 #include <array>
 #include <cctype>
 #include <cstdint>
+#include <set>
 #include <string>
 
 namespace arraw::app {
@@ -91,6 +92,35 @@ std::filesystem::path withSuffix(const std::filesystem::path& path, ImageFileFor
     }
     std::filesystem::path result = path;
     return result.replace_extension("." + std::string(suffixOf(format)));
+}
+
+std::vector<std::filesystem::path> targetPaths(std::span<const std::filesystem::path> sources,
+                                               const std::filesystem::path& folder,
+                                               ImageFileFormat format) {
+    // Names compare in lower case on every platform: a folder may be case-insensitive.
+    const auto key = [](const std::filesystem::path& path) {
+        return lowered(path.generic_string());
+    };
+    std::set<std::string> taken;
+    for (const auto& source : sources) {
+        taken.insert(key(source));
+    }
+    std::vector<std::filesystem::path> targets;
+    targets.reserve(sources.size());
+    for (const auto& source : sources) {
+        const std::string stem = source.stem().string();
+        std::filesystem::path candidate;
+        for (int n = 1;; ++n) {
+            const std::string name = (n == 1 ? stem : stem + "_" + std::to_string(n)) + "." +
+                                     std::string(suffixOf(format));
+            candidate = folder / name;
+            if (taken.insert(key(candidate)).second) {
+                break;
+            }
+        }
+        targets.push_back(std::move(candidate));
+    }
+    return targets;
 }
 
 std::filesystem::path suggestedPath(const std::filesystem::path& source, ImageFileFormat format) {

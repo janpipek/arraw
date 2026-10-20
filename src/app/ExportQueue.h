@@ -31,6 +31,12 @@ namespace arraw::app {
 /// Owns everything it needs, so that the photograph may be edited, or
 /// replaced, while the job waits and runs.
 struct ExportJob {
+    /// Whether the export thread opens input itself, with ::arraw::openPhoto, and takes state,
+    /// decode, document and the metadata's marks from it, the sidecar's saved settings. The
+    /// fields they replace are then ignored. For a photograph that is not open in the window:
+    /// opening reads the file's header and sidecar, which a batch of many would not do on the
+    /// interface thread. What the open reports is part of the result's warnings.
+    bool fromSaved = false;
     /// How the photograph was developed when the export was asked for.
     DevelopState state;
     /// How the photograph must be decoded, from decodeOptionsFor() (ADR 049).

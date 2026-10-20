@@ -4,6 +4,8 @@
 
 #include <QApplication>
 #include <QContextMenuEvent>
+#include <QFileInfo>
+#include <QItemSelectionModel>
 #include <QLabel>
 #include <QListView>
 #include <QMenu>
@@ -349,4 +351,82 @@ TEST_CASE("The notice's tooltip shows a folder's path as it is, never as markup"
     CHECK(tip.contains("&lt;b&gt;2026&lt;/b&gt;"));
     CHECK_FALSE(tip.contains("<b>2026</b>"));
 #endif
+}
+
+TEST_CASE("Export is in the strip's context menu for one shot and for a selection",
+          "[app][filmstrip][export]") {
+    Tree tree;
+    Strip holder;
+    FilmStrip& strip = holder.strip;
+    strip.resize(700, 160);
+    strip.setFolder(tree.folder.path());
+    strip.show();
+    REQUIRE(QTest::qWaitForWindowExposed(&strip));
+    REQUIRE(listed(strip));
+    auto* list = strip.findChild<QListView*>();
+    REQUIRE(list);
+    REQUIRE(QTest::qWaitFor([&] { return list->model()->rowCount() == 1; }, 10000));
+    touch(tree.folder.file("b.jpg"));
+    touch(tree.folder.file("c.jpg"));
+    strip.refreshFolder();
+    REQUIRE(QTest::qWaitFor([&] { return list->model()->rowCount() == 3; }, 10000));
+
+    QStringList asked;
+    QObject::connect(&strip, &FilmStrip::exportRequested, &strip,
+                     [&](const QStringList& primaries) { asked = primaries; });
+    const auto chooseExport = [&](const QModelIndex& at) {
+        bool chosen = false;
+        QTimer pick;
+        QObject::connect(&pick, &QTimer::timeout, &pick, [&] {
+            auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+            if (menu == nullptr) {
+                return;
+            }
+            for (QAction* action : menu->actions()) {
+                if (action->text() == "Export…") {
+                    chosen = true;
+                    action->trigger();
+                }
+            }
+            menu->close();
+        });
+        pick.start(10);
+        const QPoint where = list->visualRect(at).center();
+        QContextMenuEvent event(QContextMenuEvent::Mouse, where,
+                                list->viewport()->mapToGlobal(where));
+        QApplication::sendEvent(list->viewport(), &event);
+        return chosen;
+    };
+    const auto name = [&](int row) {
+        return QString::fromStdU16String(
+            tree.folder.file(row == 0   ? "a.jpg"
+                             : row == 1 ? "b.jpg"
+                                        : "c.jpg")
+                .u16string());
+    };
+    const auto rowOf = [&](const QString& path) {
+        for (int row = 0; row < list->model()->rowCount(); ++row) {
+            if (list->model()->index(row, 0).data(Qt::DisplayRole).toString() ==
+                QFileInfo(path).fileName()) {
+                return row;
+            }
+        }
+        return -1;
+    };
+    REQUIRE(rowOf(name(1)) >= 0);
+
+    // One shot, outside any selection.
+    REQUIRE(chooseExport(list->model()->index(rowOf(name(1)), 0)));
+    CHECK(asked == QStringList{name(1)});
+
+    // Several selected: the menu acts on all of them.
+    list->selectionModel()->select(list->model()->index(rowOf(name(0)), 0),
+                                   QItemSelectionModel::ClearAndSelect);
+    list->selectionModel()->select(list->model()->index(rowOf(name(2)), 0),
+                                   QItemSelectionModel::Select);
+    asked.clear();
+    REQUIRE(chooseExport(list->model()->index(rowOf(name(2)), 0)));
+    CHECK(asked.size() == 2);
+    CHECK(asked.contains(name(0)));
+    CHECK(asked.contains(name(2)));
 }

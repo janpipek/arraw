@@ -11,6 +11,7 @@
 #include <ImageImport.h>
 #include <LensResolution.h>
 #include <Photo.h>
+#include <Sidecar.h>
 
 #include <QImage>
 #include <QString>
@@ -376,4 +377,55 @@ TEST_CASE("An export queued after a lens toggle applies the corrections, and say
     const app::ExportResult skipped = exported(uncalibrated, "uncalibrated.png");
     REQUIRE(skipped.lensNotices.size() == 1);
     CHECK(skipped.lensNotices.front().find("vignetting") != std::string::npos);
+}
+
+TEST_CASE("A job from saved settings develops with the sidecar's state",
+          "[app][export][queue][saved]") {
+    const test::TempDir dir;
+    Collector collector;
+    app::ExportQueue queue(collector.callback(), app::ExportQueue::Device::Cpu);
+    const std::filesystem::path plain = dir.file("plain.dng");
+    const std::filesystem::path bright = dir.file("bright.dng");
+    for (const auto& path : {plain, bright}) {
+        std::filesystem::copy_file(test::fixture("bayer-32x24.dng"), path);
+    }
+    const Photo bare = openPhoto(bright);
+    DevelopState state = bare.state();
+    state.settings.tone.exposure = 2.0F;
+    writeSidecar(Photo(bright, bare.metadata(), state, PhotoMarks{.rating = 4}));
+
+    const auto saved = [&](const std::filesystem::path& input, const char* name) {
+        app::ExportJob job;
+        job.fromSaved = true;
+        job.input = input;
+        job.options.format = ImageFileFormat::Png;
+        job.path = dir.file(name);
+        job.metadata = ExportMetadata{.source = input, .marks = {}, .selection = {}};
+        return job;
+    };
+    (void)queue.enqueue(saved(plain, "plain.png"));
+    (void)queue.enqueue(saved(bright, "bright.png"));
+    REQUIRE(collector.waitFor(2));
+    for (const auto& result : collector.results()) {
+        REQUIRE(result.error.empty());
+    }
+    const QImage a = load(dir.file("plain.png"));
+    const QImage b = load(dir.file("bright.png"));
+    REQUIRE_FALSE(a.isNull());
+    CHECK(qGray(b.pixel(16, 12)) > qGray(a.pixel(16, 12)));
+}
+
+TEST_CASE("A job from saved settings fails on a file that is not a photograph",
+          "[app][export][queue][saved]") {
+    const test::TempDir dir;
+    Collector collector;
+    app::ExportQueue queue(collector.callback(), app::ExportQueue::Device::Cpu);
+    app::ExportJob job;
+    job.fromSaved = true;
+    job.input = dir.file("missing.dng");
+    job.path = dir.file("out.png");
+    (void)queue.enqueue(std::move(job));
+    REQUIRE(collector.waitFor(1));
+    CHECK_FALSE(collector.results().front().error.empty());
+    CHECK_FALSE(std::filesystem::exists(dir.file("out.png")));
 }
