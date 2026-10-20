@@ -288,7 +288,114 @@ private:
     QTimer timer_;
 };
 
+/// @brief Opens the strip's context menu on a row and triggers an item of its preset submenu.
+/// @return Whether the item was found and triggered.
+bool exportWithPresetFromStrip(Window& w, int row, const QString& preset) {
+    auto* list = w.window.findChild<FilmStrip*>()->findChild<QListView*>();
+    bool chosen = false;
+    QTimer pick;
+    QObject::connect(&pick, &QTimer::timeout, &pick, [&] {
+        auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+        if (menu == nullptr) {
+            return;
+        }
+        for (QAction* action : menu->actions()) {
+            if (action->text() == "Export with Preset" && action->menu() != nullptr) {
+                // The submenu is read as it is about to show.
+                emit action->menu()->aboutToShow();
+                for (QAction* item : action->menu()->actions()) {
+                    if (item->text() == preset && item->isEnabled()) {
+                        chosen = true;
+                        item->trigger();
+                    }
+                }
+            }
+        }
+        menu->close();
+    });
+    pick.start(10);
+    const QPoint where = list->visualRect(list->model()->index(row, 0)).center();
+    QContextMenuEvent event(QContextMenuEvent::Mouse, where, list->viewport()->mapToGlobal(where));
+    QApplication::sendEvent(list->viewport(), &event);
+    return chosen;
+}
+
 } // namespace
+
+TEST_CASE("Export with Preset exports several shots without the settings dialog",
+          "[app][window][export][presets]") {
+    Window w;
+    w.presets.save(
+        {.name = "Tiny",
+         .settings = {.format = ImageFileFormat::Png, .resize = true, .width = 16, .height = 16}});
+    w.settingsCancelled = true; // The dialog, if asked, would export nothing.
+    QSettings store;
+    const ExportSettings before = restoreExportSettings(store);
+
+    auto* list = w.window.findChild<FilmStrip*>()->findChild<QListView*>();
+    REQUIRE(QTest::qWaitFor([&] { return list->model()->rowCount() >= 2; }, 10000));
+    list->selectionModel()->select(list->model()->index(0, 0), QItemSelectionModel::Select);
+    list->selectionModel()->select(list->model()->index(1, 0), QItemSelectionModel::Select);
+    REQUIRE(exportWithPresetFromStrip(w, 0, "Tiny"));
+    REQUIRE(QTest::qWaitFor([&] { return w.message().startsWith("Exported"); }, 20000));
+
+    CHECK(w.message() == "Exported 2 of 2 files");
+    CHECK(w.folderAsked == 1);
+    const QImage written(QString::fromStdU16String(w.out.file("a.png").u16string()));
+    REQUIRE_FALSE(written.isNull());
+    CHECK(written.width() == 16);
+    CHECK(fs::exists(w.out.file("b.png")));
+    // The last used settings and the remembered preset are as they were.
+    QSettings after;
+    CHECK(restoreExportSettings(after) == before);
+    CHECK_FALSE(after.contains("export/preset"));
+}
+
+TEST_CASE("Export with Preset lists unusable presets as disabled",
+          "[app][window][export][presets]") {
+    Window w;
+    std::ofstream(w.presets.file(), std::ios::binary)
+        << R"({"arraw": 1, "exportPresets": [{"name": "Tiny", "format": "png"},
+                {"name": "Future", "format": "avif"}]})";
+    auto* menu = w.window.findChild<QMenu*>("exportPresetMenu");
+    REQUIRE(menu != nullptr);
+    CHECK(menu->menuAction()->isEnabled());
+    emit menu->aboutToShow();
+    const auto find = [&](const QString& text) -> QAction* {
+        for (QAction* action : menu->actions()) {
+            if (action->text() == text) {
+                return action;
+            }
+        }
+        return nullptr;
+    };
+    REQUIRE(find("Tiny") != nullptr);
+    CHECK(find("Tiny")->isEnabled());
+    REQUIRE(find("Future") != nullptr);
+    CHECK_FALSE(find("Future")->isEnabled());
+    CHECK_FALSE(find("Future")->toolTip().isEmpty());
+    CHECK(find("Web 2048 px")->isEnabled());
+    CHECK(menu->actions().size() == builtInExportPresets().size() + 2);
+
+    // Choosing one goes to the save prompt, not to the settings dialog.
+    bool saveAsked = false;
+    bool settingsAsked = false;
+    QTimer watch;
+    QObject::connect(&watch, &QTimer::timeout, &watch, [&] {
+        QWidget* modal = QApplication::activeModalWidget();
+        if (auto* dialog = qobject_cast<ExportDialog*>(modal)) {
+            settingsAsked = true;
+            dialog->reject();
+        } else if (auto* file = qobject_cast<QFileDialog*>(modal)) {
+            saveAsked = true;
+            file->reject();
+        }
+    });
+    watch.start(10);
+    find("Tiny")->trigger();
+    CHECK(saveAsked);
+    CHECK_FALSE(settingsAsked);
+}
 
 TEST_CASE("The chosen preset's name is remembered for the next export",
           "[app][window][export][presets]") {

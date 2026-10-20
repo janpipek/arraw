@@ -222,6 +222,12 @@ private:
     /// carries on while the export runs.
     void exportWithDialog();
 
+    /// @brief Queues the export of the open photograph after asking where to, not how.
+    ///
+    /// The settings are not stored as the last used ones, nor is a preset remembered.
+    /// @param settings What to export with, for instance a preset's.
+    void exportPhotoWith(const ExportSettings& settings);
+
     /// @brief Exports shots as they were saved, into one folder chosen once.
     ///
     /// Asks for the settings once, then for the folder (starting at the last one used), names
@@ -231,6 +237,21 @@ private:
     /// batch: a summary when the last finishes, not a message per file.
     /// @param primaries Primary files of the shots.
     void exportShots(const QStringList& primaries);
+
+    /// @brief Exports shots like exportShots, but with settings and without asking for them.
+    ///
+    /// The last used settings are not changed.
+    /// @param primaries Primary files of the shots.
+    /// @param settings What to export with, for instance a preset's.
+    void exportShotsWith(const QStringList& primaries, const ExportSettings& settings);
+
+    /// @brief Shows the export presets as the items of a menu, read now.
+    ///
+    /// Usable presets are enabled; unusable ones are disabled with the reason. With none, one
+    /// disabled "No presets" item.
+    /// @param menu Menu to fill; emptied first.
+    /// @param chosen Called with the settings of the preset the user picks.
+    void fillExportPresetMenu(QMenu& menu, std::function<void(const ExportSettings&)> chosen);
 
     /// @brief Asks the questions of an export and queues it; shared by the entry points above.
     /// @param given Settings to export with; nothing asks in the dialog.
@@ -694,6 +715,7 @@ private:
     /// Settings copied from a photograph; lasts across photographs, which is its use.
     std::optional<SettingsClipboard> clipboard_;
     QAction* exportAction_ = nullptr;
+    QMenu* exportPresetMenu_ = nullptr; ///< File > Export with Preset.
     QShortcut* cancelPickShortcut_ = nullptr;
     /// Enter, Esc, X and O of the crop mode wherever the focus is; enabled only in the mode.
     std::vector<QShortcut*> cropShortcuts_;
