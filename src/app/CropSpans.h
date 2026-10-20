@@ -1,6 +1,6 @@
 #pragma once
 
-#include "OutputHistogramCount.h"
+#include <OutputHistogram.h>
 
 #include <QPointF>
 #include <QSize>

@@ -2,8 +2,10 @@
 
 #include "AppSettings.h"
 #include "ChromeHider.h"
+#include "CollapsibleSection.h"
 #include "CopySettingsDialog.h"
 #include "CropOverlay.h"
+#include "CropSpans.h"
 #include "CullingActions.h"
 #include "DebugDiagnostics.h"
 #include "DebugLog.h"
@@ -14,6 +16,7 @@
 #include "ExportPaths.h"
 #include "FilmStrip.h"
 #include "FolderResult.h"
+#include "HistogramPanel.h"
 #include "HistoryModel.h"
 #include "LensPickerDialog.h"
 #include "MaskOverlay.h"
@@ -76,6 +79,7 @@
 #include <QTabBar>
 #include <QTabWidget>
 #include <QToolButton>
+#include <QVBoxLayout>
 #include <QWindowStateChangeEvent>
 
 #include <algorithm>
@@ -189,6 +193,13 @@ MainWindow::MainWindow(DebugLog& debugLog, QWidget* parent, PhotoLoader::Decoder
                   },
                   Qt::QueuedConnection);
           }),
+      histogramCounter_([this](HistogramCount count) {
+          // On the counter thread. Dropped if the window is gone by the time the GUI thread
+          // would run it.
+          QMetaObject::invokeMethod(
+              this, [this, count = std::move(count)] { showHistogram(count); },
+              Qt::QueuedConnection);
+      }),
       exportQueue_(
           [this](ExportResult result) {
               // On the worker thread, as the preview's.
@@ -531,6 +542,13 @@ MainWindow::~MainWindow() {
     if (developPanel_ != nullptr) {
         developPanel_->disconnect(this);
     }
+    // Hiding the dock while the window comes down must not reach the counter.
+    if (developDock_ != nullptr) {
+        developDock_->disconnect(this);
+    }
+    if (histogramSection_ != nullptr) {
+        histogramSection_->disconnect(this);
+    }
     if (photoView_ != nullptr) {
         // Hiding or deactivating the overlay while the window comes down must not reach it.
         photoView_->maskOverlay().disconnect(this);
@@ -664,11 +682,31 @@ void MainWindow::buildDevelopDock() {
     developTabs_->setMinimumWidth(developPanel_->minimumDockWidth() +
                                   2 * adjustments->frameWidth());
 
+    // The histogram on top, collapsible and remembered, then the tabs (ADR 055, section 7).
+    histogramSection_ = new CollapsibleSection("histogram", tr("Histogram"));
+    histogramPanel_ = new HistogramPanel;
+    auto* histogramLayout = new QVBoxLayout(histogramSection_->body());
+    histogramLayout->setContentsMargins(0, 0, 0, 0);
+    histogramLayout->addWidget(histogramPanel_);
+    auto* column = new QWidget;
+    auto* columnLayout = new QVBoxLayout(column);
+    columnLayout->setContentsMargins(0, 0, 0, 0);
+    columnLayout->setSpacing(0);
+    columnLayout->addWidget(histogramSection_);
+    columnLayout->addWidget(developTabs_, 1);
+    connect(histogramSection_, &CollapsibleSection::toggled, this,
+            [this] { histogramGateChanged(); });
+    connect(photoView_, &PhotoView::pointerColourChanged, histogramPanel_,
+            &HistogramPanel::setPointerColour);
+    connect(&photoView_->cropOverlay(), &CropOverlay::pointerColourChanged, histogramPanel_,
+            &HistogramPanel::setPointerColour);
+
     auto* dock = new QDockWidget(tr("Develop"), this);
     // Closable, and nothing else: QDockWidget offers a toggle action only to a closable dock.
     dock->setObjectName("DevelopDock");
     dock->setFeatures(QDockWidget::DockWidgetClosable);
-    dock->setWidget(developTabs_);
+    dock->setWidget(column);
+    connect(dock, &QDockWidget::visibilityChanged, this, [this] { histogramGateChanged(); });
     dock->setEnabled(false);
     addDockWidget(Qt::RightDockWidgetArea, dock);
     resizeDocks({dock}, {developPanel_->defaultDockWidth()}, Qt::Horizontal);
@@ -1052,6 +1090,7 @@ void MainWindow::setCropMode(bool cropping) {
         photoView_->cropOverlay().start(std::move(editing));
         seedCropOverlay();
         photoView_->setCropMode(true);
+        submitMeasured(); // A render of the mode kept from last time counts at once.
         cropFirstRequest_ = latestRequest_ + 1;
         lastCropRender_.reset();
         cropRequests_.clear();
@@ -1369,6 +1408,7 @@ void MainWindow::closeCropOverlay() {
     }
     lastCropRender_.reset();
     cropRequests_.clear();
+    submitMeasured(); // The developed picture again.
 }
 
 void MainWindow::leaveCropMode(bool accept) {
@@ -1425,6 +1465,7 @@ GeometrySettings MainWindow::reconciledGeometry(const GeometrySettings& geometry
         return geometry;
     }
     photoView_->cropOverlay().adopt(geometry);
+    submitMeasured();
     return photoView_->cropOverlay().editing().geometry();
 }
 
@@ -1564,6 +1605,8 @@ void MainWindow::buildImageView() {
             next.settings.geometry = geometry;
             open_->session.update(next);
             refreshPanel();
+            // The crop being drawn changes the count without a render.
+            submitMeasured();
         });
     });
     connect(&crop, &CropOverlay::finished, this, [this](bool accepted) {
@@ -2537,6 +2580,70 @@ void MainWindow::requestRender() {
                                               stroking ? Supersede::Queue : Supersede::Cancel);
 }
 
+bool MainWindow::histogramWanted() const {
+    return open_ && histogramSection_ != nullptr && histogramSection_->isOpen() &&
+           developDock_->isVisible();
+}
+
+QImage MainWindow::measuredPicture(std::vector<RowSpan>& spans) const {
+    spans.clear();
+    if (photoView_->isCropMode()) {
+        // The mode's render, uncropped and unstraightened: the crop being drawn is what counts.
+        // Until the first render lands the histogram keeps its last count.
+        const CropOverlay& crop = photoView_->cropOverlay();
+        if (!crop.isActive() || !crop.hasRender()) {
+            return {};
+        }
+        spans = cropSpans(crop.image().size(), crop.cropQuadInImage());
+        return crop.image();
+    }
+    return photoView_->wholeFrameImage();
+}
+
+void MainWindow::submitMeasured() {
+    if (!histogramWanted()) {
+        return;
+    }
+    std::vector<RowSpan> spans;
+    QImage picture = measuredPicture(spans);
+    if (picture.isNull()) {
+        return;
+    }
+    if (lastMeasured_ && lastMeasured_->first == picture.cacheKey() &&
+        lastMeasured_->second == spans) {
+        return;
+    }
+    lastMeasured_.emplace(picture.cacheKey(), spans);
+    ++histogramSubmitCount_;
+    // The display images are converted to sRGB on the render worker (DisplayImage.h).
+    histogramCounter_.submit(std::move(picture), std::move(spans), NamedEncoding::Srgb);
+}
+
+void MainWindow::resetHistogram() {
+    histogramCounter_.clear();
+    lastMeasured_.reset();
+    histogramPanel_->clear();
+}
+
+void MainWindow::showHistogram(const HistogramCount& count) {
+    if (count.generation != histogramCounter_.generation() ||
+        count.serial < histogramShownSerial_) {
+        return;
+    }
+    histogramShownSerial_ = count.serial;
+    histogramPanel_->showHistogram(count.histogram);
+}
+
+void MainWindow::histogramGateChanged() {
+    if (histogramWanted()) {
+        submitMeasured();
+        return;
+    }
+    // Nothing counts while the panel is out of sight; what it shows is recounted on return.
+    histogramCounter_.clear();
+    lastMeasured_.reset();
+}
+
 void MainWindow::showResult(const PreviewResult& result) {
     const detail::TimingSpan timing("window.result", result.request);
     // The newest request's render, delivered or failed, ends the busy period; a recount of
@@ -2569,6 +2676,7 @@ void MainWindow::showResult(const PreviewResult& result) {
             latestShownProvisional_ = false;
             // Turned and flipped to the geometry now, should a turn have happened since.
             photoView_->cropOverlay().setImage(*result.image, renderedFor->settings.geometry);
+            submitMeasured();
             if (result.request > open_->cropImageFloor) {
                 open_->lastCropImage.emplace(*renderedFor, *result.image);
             }
@@ -2590,6 +2698,7 @@ void MainWindow::showResult(const PreviewResult& result) {
     // older than what is shown.
     if (!result.image && result.background) {
         photoView_->setBackground(*result.background);
+        submitMeasured();
         return;
     }
     // The render of a request's own level follows its stand-in, and is shown after it.
@@ -2602,6 +2711,7 @@ void MainWindow::showResult(const PreviewResult& result) {
         latestShownProvisional_ = result.provisional;
         renderProgress_->setOpened(); // Ends the opening and any failure.
         photoView_->setImage(*result.image, result.region, result.background.value_or(QImage{}));
+        submitMeasured();
         showDevice(result);
         if (!result.provisional) {
             followWithThumbnail(result);
@@ -2671,6 +2781,7 @@ void MainWindow::showPhoto(Photo photo) {
     firstRequest_ = latestRequest_ + 1;
     // The previous photograph's histogram is no histogram of this one.
     developPanel_->clearCurveHistogram();
+    resetHistogram();
     cameraPreviewRequest_ = 0;
     showStandIn();
     // Cancels the decode of a photograph opened before this one (ADR 042).
@@ -2939,6 +3050,7 @@ void MainWindow::closePhoto() {
     developPanel_->clearCurveHistogram();
     photoView_->setFrameSize({});
     photoView_->resetView();
+    resetHistogram();
     updateEditingActions();
     updateHistoryActions();
     saveAction_->setEnabled(false);

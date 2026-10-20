@@ -9,10 +9,12 @@
 #include <QPixmap>
 #include <QPointF>
 #include <QRectF>
+#include <QRgb>
 #include <QSize>
 #include <QVariantAnimation>
 #include <QWidget>
 
+#include <array>
 #include <functional>
 #include <optional>
 #include <vector>
@@ -200,6 +202,15 @@ public:
     /// @brief Gives the crop frame in the widget, as currently shown.
     [[nodiscard]] QRectF cropRect() const;
 
+    /// @brief Gives the corners of the crop frame in the shown image's pixels, as the straightened
+    /// photograph lies under the frame.
+    ///
+    /// The frame is axis-aligned on screen and the image is rotated beneath it by the displayed
+    /// angle, so in the image the frame is a rotated quadrilateral. In the order top-left,
+    /// top-right, bottom-right, bottom-left of the screen. Meant for ::arraw::app::cropSpans.
+    /// @return The corners; all zero without a session or an image.
+    [[nodiscard]] std::array<QPointF, 4> cropQuadInImage() const;
+
     /// @brief Gives the bars drawn for a handle: two arms of a corner bracket, or an edge's bar.
     ///
     /// hitAt() grabs the handle anywhere on them, and some way around them.
@@ -217,6 +228,9 @@ public slots:
     void dismiss();
 
 signals:
+    /// Emitted when the pointer moves over the overlay or leaves it, with the colour of the shown
+    /// image under it; empty outside the crop frame or without an image.
+    void pointerColourChanged(std::optional<QRgb> colour);
     /// Emitted when the geometry changed, with the new geometry.
     void geometryEdited(const arraw::GeometrySettings& geometry);
     /// Emitted when the user ends the session; the overlay is stopped already.
@@ -239,6 +253,7 @@ protected:
     void keyReleaseEvent(QKeyEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
+    void leaveEvent(QEvent* event) override;
 
 private:
     /// @brief Placement of the upright frame: widget = origin + scale * upright.
@@ -249,6 +264,12 @@ private:
 
     /// @brief What a drag in progress does.
     enum class Drag { None, Resize, Move, Rotate, Line };
+
+    /// @brief Maps a point of the upright frame to the shown image's pixels.
+    [[nodiscard]] QPointF imagePointFromUpright(QPointF upright) const;
+
+    /// @brief Gives the colour of the image under a widget position, if it is in the crop frame.
+    [[nodiscard]] std::optional<QRgb> colourAt(QPointF position) const;
 
     /// @brief Gives the placement that fits the whole upright frame in the widget.
     [[nodiscard]] Mapping fitted() const;

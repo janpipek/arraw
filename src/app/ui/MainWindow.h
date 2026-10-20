@@ -4,6 +4,7 @@
 #include "CopySections.h"
 #include "CropEditing.h"
 #include "ExportQueue.h"
+#include "HistogramCounter.h"
 #include "LensSupport.h"
 #include "MaskEditing.h"
 #include "PhotoLoader.h"
@@ -58,11 +59,13 @@ class QObject;
 namespace arraw::app {
 
 class ChromeHider;
+class CollapsibleSection;
 class CullingActions;
 struct DebugLog;
 class DebugWindow;
 class DevelopPanel;
 class FilmStrip;
+class HistogramPanel;
 class HistoryModel;
 class PhotoView;
 class RenderProgressPie;
@@ -139,6 +142,13 @@ public:
     /// is shown after it.
     /// @param result Outcome delivered by the renderer.
     void showResult(const PreviewResult& result);
+
+    /// @brief Gives the number of pictures handed to the histogram counter so far.
+    ///
+    /// For tests: nothing is submitted while the histogram is not wanted (ADR 055, section 3).
+    [[nodiscard]] std::uint64_t histogramSubmitCount() const noexcept {
+        return histogramSubmitCount_;
+    }
 
     /// @brief Gives the indicator that decides when a render in progress shows.
     [[nodiscard]] RenderIndicator& renderIndicator() const noexcept {
@@ -620,6 +630,29 @@ private:
     /// turned photograph) is not shown.
     void showStandIn();
 
+    /// @brief Tells whether the histogram is worth counting: its section is open, the develop dock
+    /// is shown and a photograph is open.
+    [[nodiscard]] bool histogramWanted() const;
+
+    /// @brief Gives the picture the histogram counts, and the row spans of it that count.
+    /// @param spans Receives the spans, empty for whole rows.
+    /// @return The whole developed frame as shown, or in the crop mode the mode's render with the
+    /// crop frame's spans; null if there is none to count yet.
+    [[nodiscard]] QImage measuredPicture(std::vector<RowSpan>& spans) const;
+
+    /// @brief Hands the measured picture to the counter, if it is wanted and not already counted.
+    void submitMeasured();
+
+    /// @brief Drops what the counter has and the panel shows, for another photograph or none.
+    void resetHistogram();
+
+    /// @brief Shows a finished count on the panel, unless it is stale.
+    /// @param count Count delivered by the counter, on the GUI thread.
+    void showHistogram(const HistogramCount& count);
+
+    /// @brief Reacts to the histogram becoming wanted or not.
+    void histogramGateChanged();
+
     /// @brief Closes the open photograph, leaving the window empty.
     void closePhoto();
 
@@ -691,6 +724,16 @@ private:
     /// Tabs of the develop dock: Adjustments and Masks, the tab following the mask mode.
     QTabWidget* developTabs_ = nullptr;
     QDockWidget* developDock_ = nullptr;
+    /// Collapsible section at the top of the develop dock that holds the histogram panel.
+    CollapsibleSection* histogramSection_ = nullptr;
+    /// Histogram, clipping triangles and pixel readout.
+    HistogramPanel* histogramPanel_ = nullptr;
+    /// Picture and spans last handed to the counter; empty while nothing is counted.
+    std::optional<std::pair<qint64, std::vector<RowSpan>>> lastMeasured_;
+    /// Serial of the newest count shown.
+    std::uint64_t histogramShownSerial_ = 0;
+    /// Number of pictures handed to the counter.
+    std::uint64_t histogramSubmitCount_ = 0;
     /// Whether the window was maximised when it last entered full screen.
     bool maximizedBeforeFullScreen_ = false;
     /// Full Screen toggle (F11), checked while the window is full screen.
@@ -841,6 +884,11 @@ private:
     /// can run, so nothing a callback touches has been destroyed yet. The
     /// workers do not use one another, so their order among themselves is free.
     PreviewRenderer previewRenderer_;
+
+    /// Thread that counts the histogram of the picture shown (ADR 055).
+    ///
+    /// Declared after previewRenderer_ and before the other workers, with the same reasoning.
+    HistogramCounter histogramCounter_;
 
     /// Worker that develops and writes exports.
     ///

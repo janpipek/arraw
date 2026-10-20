@@ -5,8 +5,11 @@
 #include <QImage>
 #include <QPointF>
 #include <QRectF>
+#include <QRgb>
 #include <QSize>
 #include <QWidget>
+
+#include <optional>
 
 class QMouseEvent;
 class QPaintEvent;
@@ -147,6 +150,10 @@ signals:
     /// Emitted by a click while picking, with the point in fractions of the frame
     /// (inside [0, 1]).
     void picked(QPointF point);
+    /// Emitted when the pointer moves over the view or leaves it, with the colour of the picture
+    /// as shown under it (the render where it covers the point, else the whole-frame image
+    /// beneath); empty off the picture. Not emitted while the crop overlay covers the view.
+    void pointerColourChanged(std::optional<QRgb> colour);
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -155,8 +162,13 @@ protected:
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
+    void leaveEvent(QEvent* event) override;
 
 private:
+    /// @brief Gives the colour of the picture as shown at a position of the view.
+    /// @param position Logical pixels from the widget's top-left corner.
+    [[nodiscard]] std::optional<QRgb> colourAt(QPointF position) const;
+
     /// @brief Adopts a transform as the view, emitting what changed.
     /// @param next The new view.
     /// @param fit Whether it is the fitting one.

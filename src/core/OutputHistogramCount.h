@@ -11,17 +11,6 @@
 
 namespace arraw {
 
-/// @brief Half-open range of the columns of one row that a count covers.
-struct RowSpan {
-    /// @brief First column counted.
-    std::uint32_t begin = 0;
-
-    /// @brief Column after the last one counted; at most the width.
-    std::uint32_t end = 0;
-
-    friend bool operator==(const RowSpan&, const RowSpan&) = default;
-};
-
 /// @brief Rows of work between two looks at the abandon flag.
 inline constexpr std::uint32_t outputCountBandRows = 64;
 

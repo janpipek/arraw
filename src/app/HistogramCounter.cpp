@@ -1,5 +1,7 @@
 #include "HistogramCounter.h"
 
+#include "OutputHistogramCount.h"
+
 #include <cstddef>
 #include <optional>
 #include <utility>

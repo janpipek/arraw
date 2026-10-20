@@ -14,6 +14,17 @@ namespace arraw {
 /// @brief Number of bins of an ::arraw::OutputHistogram, one per 8-bit code.
 inline constexpr std::size_t outputHistogramBins = 256;
 
+/// @brief Half-open range of the columns of one row that a count covers.
+struct RowSpan {
+    /// @brief First column counted.
+    std::uint32_t begin = 0;
+
+    /// @brief Column after the last one counted; at most the width.
+    std::uint32_t end = 0;
+
+    friend bool operator==(const RowSpan&, const RowSpan&) = default;
+};
+
 /// @brief Distribution of the codes of a finished picture, in its output encoding.
 ///
 /// Counts the 8-bit picture a screen shows or an 8-bit export writes (ADR 055): bin `i` of a

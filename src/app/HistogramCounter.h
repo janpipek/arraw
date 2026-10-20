@@ -1,7 +1,5 @@
 #pragma once
 
-#include "OutputHistogramCount.h"
-
 #include <ColorEncoding.h>
 #include <OutputHistogram.h>
 

@@ -33,6 +33,7 @@ PhotoView::PhotoView(QWidget* parent) : QWidget(parent) {
     // reach the window's actions, which step between photographs.
     setFocusPolicy(Qt::ClickFocus);
     setAutoFillBackground(false);
+    setMouseTracking(true);
     crop_ = new CropOverlay(this);
     crop_->hide();
     mask_ = new MaskOverlay(this);
@@ -293,7 +294,37 @@ void PhotoView::mousePressEvent(QMouseEvent* event) {
     QWidget::mousePressEvent(event);
 }
 
+std::optional<QRgb> PhotoView::colourAt(QPointF position) const {
+    if (frame_.isEmpty()) {
+        return std::nullopt;
+    }
+    const QPointF point = transform().frameFromView(position * devicePixelRatioF());
+    if (point.x() < 0.0 || point.x() >= 1.0 || point.y() < 0.0 || point.y() >= 1.0) {
+        return std::nullopt;
+    }
+    const auto sample = [](const QImage& image, QPointF fraction) -> std::optional<QRgb> {
+        const int x = static_cast<int>(fraction.x() * image.width());
+        const int y = static_cast<int>(fraction.y() * image.height());
+        if (image.isNull() || x < 0 || y < 0 || x >= image.width() || y >= image.height()) {
+            return std::nullopt;
+        }
+        return image.pixel(x, y);
+    };
+    if (!image_.isNull() && imageRegion_.contains(point)) {
+        const QPointF inRender((point.x() - imageRegion_.left()) / imageRegion_.width(),
+                               (point.y() - imageRegion_.top()) / imageRegion_.height());
+        return sample(image_, inRender);
+    }
+    return sample(background_, point);
+}
+
+void PhotoView::leaveEvent(QEvent* event) {
+    QWidget::leaveEvent(event);
+    emit pointerColourChanged(std::nullopt);
+}
+
 void PhotoView::mouseMoveEvent(QMouseEvent* event) {
+    emit pointerColourChanged(colourAt(event->position()));
     if (!dragging_) {
         QWidget::mouseMoveEvent(event);
         return;
