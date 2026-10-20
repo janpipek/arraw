@@ -28,6 +28,14 @@ OutputHistogram arraw::outputHistogram(const ImageBuffer& developed, NamedEncodi
         throw std::invalid_argument("The working and perceptual encodings are internal, not "
                                     "output ones");
     }
+    // Only the working encoding is a developed render; the perceptual coordinate or an already
+    // encoded picture would be converted as if it were linear.
+    const auto* source = std::get_if<NamedEncoding>(&developed.encoding());
+    if (source != nullptr && *source != workingEncoding) {
+        throw std::invalid_argument(
+            "Only a developed render, in the working encoding, can be converted to an output "
+            "encoding; count a picture already in one with the other overload");
+    }
     const detail::TimingSpan timing("histogram.output");
     const QImage converted = encodedForOutput(developed, encoding, QImage::Format_RGBA8888);
     return countOutputCodes(reinterpret_cast<const std::byte*>(converted.constBits()),

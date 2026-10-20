@@ -6,6 +6,7 @@
 #include <cstring>
 #include <memory>
 #include <stdexcept>
+#include <vector>
 
 using namespace arraw;
 
@@ -22,7 +23,15 @@ struct LumaTable {
 
     /// Y row of the encoding's RGB-to-XYZ matrix, normalised to sum to one.
     std::array<float, 3> weights{};
+
+    /// Luma code of the start of each cell of `lumaCells` equal steps of linear luminance: where
+    /// the search over `boundaries` would land for that value. A value in the cell lands at this
+    /// code or above, so a short forward walk over the boundaries makes the lookup exact.
+    std::vector<std::uint8_t> cellStart;
 };
+
+/// Cells of the luma lookup over linear luminance 0..1.
+constexpr std::size_t lumaCells = 65536;
 
 /// @brief Decodes an sRGB (and Display P3) transfer function value to linear.
 double decodeSrgb(double encoded) {
@@ -64,7 +73,27 @@ LumaTable buildTable(NamedEncoding encoding) {
         table.boundaries[code] =
             static_cast<float>(decode((static_cast<double>(code) + 0.5) / 255.0));
     }
+    table.cellStart.resize(lumaCells);
+    for (std::size_t cell = 0; cell < lumaCells; ++cell) {
+        const float start = static_cast<float>(cell) / static_cast<float>(lumaCells);
+        table.cellStart[cell] = static_cast<std::uint8_t>(
+            std::ranges::upper_bound(table.boundaries, start) - table.boundaries.begin());
+    }
     return table;
+}
+
+/// @brief Gives the luma code of a linear luminance: the number of boundaries at or below it.
+/// @details Equal to a binary search over the boundaries, without its mispredicted branches.
+std::size_t lumaCode(const LumaTable& table, float linear) {
+    const auto cell = static_cast<std::size_t>(std::min(
+        std::max(linear, 0.0F) * static_cast<float>(lumaCells), static_cast<float>(lumaCells - 1)));
+    std::size_t code = table.cellStart[cell];
+    // Boundaries inside the cell (two lie within one cell at the dark end of Adobe RGB), and
+    // luminance that rounds a little above one.
+    while (code < table.boundaries.size() && linear >= table.boundaries[code]) {
+        ++code;
+    }
+    return code;
 }
 
 /// @brief Gives the tables of an output encoding, built once.
@@ -144,9 +173,7 @@ void countRows(const std::byte* rows, ImageSize size, std::size_t stride, std::s
             const float linear = table.weights[0] * table.decoded[red] +
                                  table.weights[1] * table.decoded[green] +
                                  table.weights[2] * table.decoded[blue];
-            const auto luma = static_cast<std::size_t>(
-                std::ranges::upper_bound(table.boundaries, linear) - table.boundaries.begin());
-            ++histogram.luma[luma];
+            ++histogram.luma[lumaCode(table, linear)];
             ++histogram.red[red];
             ++histogram.green[green];
             ++histogram.blue[blue];

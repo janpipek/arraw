@@ -2,19 +2,26 @@
 #include "support/TempDir.h"
 #include "support/TestImages.h"
 
+#include <Develop.h>
 #include <ImageExport.h>
+#include <LensCorrection.h>
 #include <OutputHistogram.h>
 
+#include <QColorSpace>
 #include <QImage>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <filesystem>
 #include <numeric>
 #include <stdexcept>
 #include <vector>
@@ -225,6 +232,33 @@ TEST_CASE("the converting overload equals counting an unsharpened 8-bit export",
                     std::invalid_argument);
 }
 
+TEST_CASE("a picture already in an output encoding is counted as it is, and says which",
+          "[OutputHistogram]") {
+    ImageBuffer buffer({2, 1}, PixelFormat::RgbU8, NamedEncoding::AdobeRgb);
+    auto samples = buffer.samples<std::uint8_t>();
+    const std::array<std::uint8_t, 6> codes{10, 20, 30, 255, 0, 7};
+    std::ranges::copy(codes, samples.begin());
+    const OutputHistogram histogram = outputHistogram(buffer);
+    CHECK(histogram.encoding == NamedEncoding::AdobeRgb);
+    CHECK(histogram.red[10] == 1);
+    CHECK(histogram.green[0] == 1);
+    CHECK(histogram.blue[7] == 1);
+    CHECK(histogram.highlightsClipped == 1);
+    CHECK(histogram.shadowsClipped == 1);
+}
+
+TEST_CASE("the converting overload refuses a source that is not a working-encoding render",
+          "[OutputHistogram]") {
+    CHECK_THROWS_AS(
+        outputHistogram(test::rainbow({4, 4}, PixelFormat::RgbaF32, NamedEncoding::Rec2020Gamma22),
+                        NamedEncoding::Srgb),
+        std::invalid_argument);
+    CHECK_THROWS_AS(
+        outputHistogram(test::rainbow({4, 4}, PixelFormat::RgbaF32, NamedEncoding::Srgb),
+                        NamedEncoding::DisplayP3),
+        std::invalid_argument);
+}
+
 TEST_CASE("an abandoned count stops within a band of rows", "[OutputHistogram]") {
     ImageBuffer buffer({8, 256}, PixelFormat::RgbU8, NamedEncoding::Srgb);
     const auto* rows = reinterpret_cast<const std::byte*>(buffer.bytes().data());
@@ -241,14 +275,155 @@ TEST_CASE("an abandoned count stops within a band of rows", "[OutputHistogram]")
               .pixels == buffer.size().pixelCount());
 }
 
+TEST_CASE("luma from the lookup equals a binary search over the half-code boundaries",
+          "[OutputHistogram]") {
+    const auto encoding =
+        GENERATE(NamedEncoding::Srgb, NamedEncoding::DisplayP3, NamedEncoding::AdobeRgb);
+    // The reference: the method the lookup replaced, spelled out here independently.
+    std::array<double, 3> y{0.2126729, 0.7151522, 0.0721750};
+    if (encoding == NamedEncoding::DisplayP3) {
+        y = {0.2289746, 0.6917385, 0.0792869};
+    } else if (encoding == NamedEncoding::AdobeRgb) {
+        y = {0.2973769, 0.6273491, 0.0752741};
+    }
+    const auto decode = [&](double v) {
+        if (encoding == NamedEncoding::AdobeRgb) {
+            return std::pow(v, 563.0 / 256.0);
+        }
+        return v <= 0.04045 ? v / 12.92 : std::pow((v + 0.055) / 1.055, 2.4);
+    };
+    const double sum = y[0] + y[1] + y[2];
+    const std::array<float, 3> weights{static_cast<float>(y[0] / sum),
+                                       static_cast<float>(y[1] / sum),
+                                       static_cast<float>(y[2] / sum)};
+    std::array<float, 256> decoded{};
+    std::array<float, 255> boundaries{};
+    for (std::size_t i = 0; i < 256; ++i) {
+        decoded[i] = static_cast<float>(decode(static_cast<double>(i) / 255.0));
+    }
+    for (std::size_t i = 0; i < 255; ++i) {
+        boundaries[i] = static_cast<float>(decode((static_cast<double>(i) + 0.5) / 255.0));
+    }
+
+    // Every (red, green) pair with a ladder of blues, 6 x 65 536 pixels; the dark corner, where
+    // Adobe RGB's boundaries lie within one lookup cell, is covered by the small codes.
+    const std::array<std::uint8_t, 9> blues{0, 1, 2, 3, 17, 128, 200, 254, 255};
+    for (const std::uint8_t blue : blues) {
+        ImageBuffer buffer({256, 256}, PixelFormat::RgbU8, encoding);
+        auto samples = buffer.samples<std::uint8_t>();
+        OutputHistogram::Bins expected{};
+        for (std::size_t g = 0; g < 256; ++g) {
+            for (std::size_t r = 0; r < 256; ++r) {
+                const std::size_t at = (g * 256 + r) * 3;
+                samples[at] = static_cast<std::uint8_t>(r);
+                samples[at + 1] = static_cast<std::uint8_t>(g);
+                samples[at + 2] = blue;
+                const float linear =
+                    weights[0] * decoded[r] + weights[1] * decoded[g] + weights[2] * decoded[blue];
+                ++expected[static_cast<std::size_t>(std::ranges::upper_bound(boundaries, linear) -
+                                                    boundaries.begin())];
+            }
+        }
+        CHECK(outputHistogram(buffer).luma == expected);
+    }
+}
+
+namespace {
+
+/// @brief Loads the real photograph the benches use, scaled to a size; null if it is missing.
+QImage samplePhoto(ImageSize size) {
+    const std::filesystem::path path =
+        std::filesystem::path(ARRAW_TEST_DATA_DIR) / ".." / ".." / "samples" / "IMG_2610.JPG";
+    QImage photo(QString::fromStdString(path.string()));
+    if (photo.isNull()) {
+        return {};
+    }
+    return photo
+        .scaled(static_cast<int>(size.width), static_cast<int>(size.height), Qt::IgnoreAspectRatio,
+                Qt::SmoothTransformation)
+        .convertedTo(QImage::Format_RGBA8888);
+}
+
+double milliseconds(std::chrono::steady_clock::duration elapsed) {
+    return std::chrono::duration<double, std::milli>(elapsed).count();
+}
+
+} // namespace
+
 TEST_CASE("count cost at 2560x1600 and 3840x2160", "[.bench][OutputHistogram]") {
+    // The best of five: a shared machine only ever adds time.
+    const auto best = [](const ImageBuffer& picture) {
+        double least = 1e9;
+        for (int run = 0; run < 5; ++run) {
+            const auto start = std::chrono::steady_clock::now();
+            const OutputHistogram histogram = outputHistogram(picture);
+            least = std::min(least, milliseconds(std::chrono::steady_clock::now() - start));
+            CHECK(histogram.pixels > 0);
+        }
+        return least;
+    };
     for (const ImageSize size : {ImageSize{2560, 1600}, ImageSize{3840, 2160}}) {
-        const ImageBuffer picture = test::rainbow(size, PixelFormat::RgbaU8, NamedEncoding::Srgb);
-        const auto start = std::chrono::steady_clock::now();
-        const OutputHistogram histogram = outputHistogram(picture);
-        const auto elapsed = std::chrono::steady_clock::now() - start;
-        const double milliseconds = std::chrono::duration<double, std::milli>(elapsed).count();
-        WARN(size.width << "x" << size.height << ": " << milliseconds << " ms");
-        CHECK(histogram.pixels == size.pixelCount());
+        const ImageBuffer rainbowPicture =
+            test::rainbow(size, PixelFormat::RgbaU8, NamedEncoding::Srgb);
+        WARN(size.width << "x" << size.height << " rainbow: " << best(rainbowPicture) << " ms");
+
+        // Uniform noise, the worst case for branch prediction.
+        ImageBuffer noise(size, PixelFormat::RgbaU8, NamedEncoding::Srgb);
+        std::uint32_t state = 12345;
+        for (std::uint8_t& sample : noise.samples<std::uint8_t>()) {
+            state = state * 1664525U + 1013904223U;
+            sample = static_cast<std::uint8_t>(state >> 24);
+        }
+        WARN(size.width << "x" << size.height << " noise: " << best(noise) << " ms");
+
+        const QImage photo = samplePhoto(size);
+        if (photo.isNull()) {
+            WARN("samples/IMG_2610.JPG is missing: no real-photograph figure");
+            continue;
+        }
+        ImageBuffer real(size, PixelFormat::RgbaU8, NamedEncoding::Srgb);
+        for (int y = 0; y < photo.height(); ++y) {
+            std::memcpy(real.samples<std::uint8_t>().data() +
+                            static_cast<std::size_t>(y) * size.width * 4,
+                        photo.constScanLine(y), size.width * 4);
+        }
+        WARN(size.width << "x" << size.height << " photograph: " << best(real) << " ms");
+    }
+}
+
+TEST_CASE("end-bin pixels that Lanczos adds over Bilinear", "[.bench][OutputHistogram]") {
+    const QImage photo = samplePhoto({3000, 2000});
+    if (photo.isNull()) {
+        WARN("samples/IMG_2610.JPG is missing");
+        return;
+    }
+    // The photograph as a working-encoding buffer, then resized by each filter.
+    QImage tagged = photo;
+    tagged.setColorSpace(QColorSpace::SRgb);
+    const QImage floats =
+        tagged.convertedTo(QImage::Format_RGBA32FPx4)
+            .convertedToColorSpace(
+                QColorSpace(QColorSpace::Primaries::Bt2020, QColorSpace::TransferFunction::Linear));
+    REQUIRE_FALSE(floats.isNull());
+    ImageBuffer source({3000, 2000}, PixelFormat::RgbaF32, workingEncoding);
+    for (int y = 0; y < floats.height(); ++y) {
+        std::memcpy(source.samples<float>().data() + static_cast<std::size_t>(y) * 3000 * 4,
+                    floats.constScanLine(y), 3000 * 4 * sizeof(float));
+    }
+    for (const std::uint32_t edge : {1024U, 1600U, 2560U}) {
+        RenderRequest request;
+        request.size = RenderRequest::FitInside{edge, edge};
+        std::array<OutputHistogram, 2> counts;
+        std::size_t at = 0;
+        for (const ResizeFilter filter : {ResizeFilter::Bilinear, ResizeFilter::Lanczos3}) {
+            request.filter = filter;
+            counts[at++] = outputHistogram(
+                develop(source, DevelopState{}, LensCorrection{}, request), NamedEncoding::Srgb);
+        }
+        WARN("fit " << edge << ": highlights " << counts[0].highlightsClipped << " (bilinear) "
+                    << counts[1].highlightsClipped << " (Lanczos); shadows "
+                    << counts[0].shadowsClipped << " / " << counts[1].shadowsClipped << " of "
+                    << counts[0].pixels);
+        CHECK(counts[0].pixels == counts[1].pixels);
     }
 }

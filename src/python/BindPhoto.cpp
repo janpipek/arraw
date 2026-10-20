@@ -835,9 +835,10 @@ void bindPhoto(nb::module_& m) {
         nb::sig("def output_histogram(image: ImageBuffer, encoding: NamedEncoding | None = None) "
                 "-> OutputHistogram"),
         "Count the 8-bit picture an output shows. A developed buffer in the working encoding is "
-        "converted to `encoding` (default NamedEncoding.SRGB) as save() would at 8 bits; a buffer "
-        "already in SRGB, DISPLAY_P3 or ADOBE_RGB is counted as it is, and `encoding` must then be "
-        "None or equal to it. Any other encoding raises ValueError.");
+        "converted to `encoding` (default NamedEncoding.SRGB) as save() would at 8 bits. Python "
+        "cannot yet make a buffer already in SRGB, DISPLAY_P3 or ADOBE_RGB (that case is counted "
+        "as it is, and `encoding` must then be None or equal to it). Any other encoding raises "
+        "ValueError.");
 
     m.def(
         "resolved_size",
