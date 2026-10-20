@@ -128,6 +128,27 @@ QString toQString(const std::filesystem::path& path) {
     return QString::fromStdU16String(path.u16string());
 }
 
+/// Key of the preset the export dialog last ended on.
+const QString exportPresetKey = QStringLiteral("export/preset");
+
+/// @brief Reads the name of the preset the export dialog last ended on.
+std::optional<std::string> rememberedExportPreset(const QSettings& store) {
+    const QString name = store.value(exportPresetKey).toString();
+    if (name.isEmpty()) {
+        return std::nullopt;
+    }
+    return name.toStdString();
+}
+
+/// @brief Stores the name of the preset the export dialog ended on, or forgets it.
+void rememberExportPreset(const std::optional<std::string>& name, QSettings& store) {
+    if (name) {
+        store.setValue(exportPresetKey, QString::fromStdString(*name));
+    } else {
+        store.remove(exportPresetKey);
+    }
+}
+
 /// @brief Reduces a state to what the crop mode shows (ADR 040, ADR 037).
 ///
 /// The photograph keeps its turns and flips but is neither straightened nor
@@ -202,6 +223,11 @@ MainWindow::MainWindow(DebugLog& debugLog, QWidget* parent, PhotoLoader::Decoder
                   Qt::QueuedConnection);
           },
           decoder ? std::move(decoder) : PhotoLoader::imageDecoder(&debugLog.diagnostics)) {
+    try {
+        exportPresets_.emplace(ExportPresetStore::standard());
+    } catch (const std::exception& error) {
+        qWarning().noquote() << "No export presets:" << error.what();
+    }
     filmStrip_ = new FilmStrip(this, ThumbnailCache(ThumbnailCache::defaultRoot()), lensSource_);
     {
         QSettings store;
@@ -1927,6 +1953,10 @@ QString nameFilterFor(ImageFileFormat format) {
 } // namespace
 
 void MainWindow::exportWithDialog() {
+    exportPhotoImpl(std::nullopt);
+}
+
+void MainWindow::exportPhotoImpl(const std::optional<ExportSettings>& given) {
     if (!open_) {
         return;
     }
@@ -1944,12 +1974,19 @@ void MainWindow::exportWithDialog() {
             croppedSize(open_->decoded->size(), open_->decoded->orientation(), photo.state());
 
         QSettings store;
-        ExportDialog dialog(restoreExportSettings(store), frame, this);
-        if (dialog.exec() != QDialog::Accepted) {
-            return;
+        ExportSettings settings;
+        if (given) {
+            settings = *given;
+        } else {
+            ExportDialog dialog(restoreExportSettings(store), frame, exportPresetStore(),
+                                rememberedExportPreset(store), this);
+            if (dialog.exec() != QDialog::Accepted) {
+                return;
+            }
+            settings = dialog.settings();
+            saveExportSettings(settings, store);
+            rememberExportPreset(dialog.chosenPreset(), store);
         }
-        const ExportSettings settings = dialog.settings();
-        saveExportSettings(settings, store);
 
         // Starts in the folder of the last export, of one photograph or of several.
         std::filesystem::path suggested = suggestedPath(photo.path(), settings.format);
@@ -2007,6 +2044,11 @@ void MainWindow::exportWithDialog() {
 }
 
 void MainWindow::exportShots(const QStringList& primaries) {
+    exportShotsImpl(primaries, std::nullopt);
+}
+
+void MainWindow::exportShotsImpl(const QStringList& primaries,
+                                 const std::optional<ExportSettings>& given) {
     if (primaries.isEmpty()) {
         return;
     }
@@ -2035,20 +2077,26 @@ void MainWindow::exportShots(const QStringList& primaries) {
         const ImageSize frame = initial.width > 0 && initial.height > 0
                                     ? ImageSize{initial.width, initial.height}
                                     : ImageSize{3840, 2160};
-        std::optional<ExportSettings> chosen;
-        if (exportPrompts_.settings) {
+        std::optional<ExportSettings> chosen = given;
+        if (given) {
+            // A preset's settings: asked for nothing, and the last used ones stay.
+        } else if (exportPrompts_.settings) {
             chosen = exportPrompts_.settings(initial, frame);
         } else {
-            ExportDialog dialog(initial, frame, this);
+            ExportDialog dialog(initial, frame, exportPresetStore(), rememberedExportPreset(store),
+                                this);
             if (dialog.exec() == QDialog::Accepted) {
                 chosen = dialog.settings();
+                rememberExportPreset(dialog.chosenPreset(), store);
             }
         }
         if (!chosen) {
             return;
         }
         const ExportSettings settings = *chosen;
-        saveExportSettings(settings, store);
+        if (!given) {
+            saveExportSettings(settings, store);
+        }
 
         const QString lastKey = QStringLiteral("export/lastFolder");
         std::filesystem::path start(store.value(lastKey).toString().toStdU16String());

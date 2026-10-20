@@ -12,6 +12,7 @@
 
 #include <DecodeOptions.h>
 #include <EditSession.h>
+#include <ExportPresets.h>
 #include <ExportSettings.h>
 #include <ImageBuffer.h>
 #include <NegativeSettings.h>
@@ -210,6 +211,11 @@ private:
     /// @brief Shows the view's zoom on the button and ticks the matching preset.
     void updateZoomControls();
 
+    /// @brief Gives the presets file for the export dialog, or nothing without one.
+    [[nodiscard]] ExportPresetStore* exportPresetStore() {
+        return exportPresets_ ? &*exportPresets_ : nullptr;
+    }
+
     /// @brief Asks how to export the photograph and where to, then queues the export.
     ///
     /// Snapshots the photograph's develop state at this moment; editing
@@ -225,6 +231,15 @@ private:
     /// batch: a summary when the last finishes, not a message per file.
     /// @param primaries Primary files of the shots.
     void exportShots(const QStringList& primaries);
+
+    /// @brief Asks the questions of an export and queues it; shared by the entry points above.
+    /// @param given Settings to export with; nothing asks in the dialog.
+    void exportPhotoImpl(const std::optional<ExportSettings>& given);
+
+    /// @brief Asks the questions of a batch and queues it; shared by the entry points above.
+    /// @param primaries Primary files of the shots.
+    /// @param given Settings to export with; nothing asks in the dialog.
+    void exportShotsImpl(const QStringList& primaries, const std::optional<ExportSettings>& given);
 
     /// @brief Reports a finished export, and closes the window if it was waiting for them.
     /// @param result Outcome delivered by the export queue.
@@ -775,6 +790,9 @@ private:
 
     /// Answers that replace the export questions; empty members ask.
     ExportPrompts exportPrompts_;
+
+    /// The export presets file; empty when there is no configuration directory.
+    std::optional<ExportPresetStore> exportPresets_;
 
     /// File names of the exports that have not reported yet, by the identifier the queue gave.
     std::map<std::uint64_t, QString> exportNames_;

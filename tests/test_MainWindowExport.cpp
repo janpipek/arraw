@@ -1,26 +1,39 @@
+#include "AppSettings.h"
 #include "DebugLog.h"
 #include "support/TempDir.h"
 #include "ui/DevelopPanel.h"
+#include "ui/ExportDialog.h"
 #include "ui/FilmStrip.h"
 #include "ui/MainWindow.h"
 #include "ui/PhotoView.h"
 #include "ui/SettingSlider.h"
 #include "ui/StatusLine.h"
 
+#include <ConfigDirectory.h>
+#include <ExportPresets.h>
 #include <ImageExport.h>
 #include <Photo.h>
 #include <Sidecar.h>
 
+#include <QApplication>
+#include <QComboBox>
+#include <QContextMenuEvent>
 #include <QDoubleSpinBox>
+#include <QFileDialog>
 #include <QImage>
+#include <QItemSelectionModel>
+#include <QListView>
+#include <QMenu>
 #include <QSettings>
 #include <QStringList>
 #include <QTest>
+#include <QTimer>
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <optional>
 
 using namespace arraw;
@@ -32,9 +45,35 @@ namespace {
 
 namespace fs = std::filesystem;
 
+/// Points the configuration directory at a directory for as long as it lives.
+class ConfigScope {
+public:
+    explicit ConfigScope(const fs::path& directory)
+        : previous_(qgetenv(configDirectoryVariable)),
+          wasSet_(qEnvironmentVariableIsSet(configDirectoryVariable)) {
+        qputenv(configDirectoryVariable, QString::fromStdU16String(directory.u16string()).toUtf8());
+    }
+    ~ConfigScope() {
+        if (wasSet_) {
+            qputenv(configDirectoryVariable, previous_);
+        } else {
+            qunsetenv(configDirectoryVariable);
+        }
+    }
+    ConfigScope(const ConfigScope&) = delete;
+    ConfigScope& operator=(const ConfigScope&) = delete;
+
+private:
+    QByteArray previous_;
+    bool wasSet_;
+};
+
 /// A window over three photographs, two of them in the folder shown and one in a subfolder,
 /// with the export's questions answered by the fields below.
 struct Window {
+    test::TempDir config; ///< Where the presets are, instead of the user's.
+    ConfigScope scope{config.path()};
+    ExportPresetStore presets{config.path()};
     test::TempDir folder;
     test::TempDir out;
     DebugLog debugLog;
@@ -221,4 +260,83 @@ TEST_CASE("A failing file is counted and the others are still written", "[app][w
     CHECK(w.message() == "Exported 1 of 2 files, 1 failed");
     CHECK(fs::exists(w.out.file("b.png")));
     CHECK_FALSE(fs::exists(w.out.file("broken.png")));
+}
+
+namespace {
+
+/// @brief Lets a function answer the next export dialog, which is modal.
+///
+/// Polls until an export dialog is the modal widget, then calls the function with it; the
+/// function accepts or rejects it.
+class DialogAnswer {
+public:
+    explicit DialogAnswer(std::function<void(ExportDialog&)> answer) : answer_(std::move(answer)) {
+        QObject::connect(&timer_, &QTimer::timeout, &timer_, [this] {
+            if (auto* dialog = qobject_cast<ExportDialog*>(QApplication::activeModalWidget())) {
+                timer_.stop();
+                ++answered;
+                answer_(*dialog);
+            }
+        });
+        timer_.start(10);
+    }
+
+    int answered = 0; ///< Times the function was called.
+
+private:
+    std::function<void(ExportDialog&)> answer_;
+    QTimer timer_;
+};
+
+} // namespace
+
+TEST_CASE("The chosen preset's name is remembered for the next export",
+          "[app][window][export][presets]") {
+    Window w;
+    w.presets.save(
+        {.name = "Tiny",
+         .settings = {.format = ImageFileFormat::Png, .resize = true, .width = 16, .height = 16}});
+    // The real dialog, answered by the test.
+    w.window.setExportPrompts(
+        {.settings = {},
+         .folder = [&](const fs::path&) { return w.out.path(); },
+         .existing = [](std::size_t) { return MainWindow::ExistingChoice::ReplaceAll; }});
+    {
+        DialogAnswer answer([](ExportDialog& dialog) {
+            auto* box = dialog.findChild<QComboBox*>("presetBox");
+            box->setCurrentIndex(box->findText("Tiny"));
+            dialog.accept();
+        });
+        w.window.findChild<FilmStrip*>()->exportRequested({w.path("b.dng")});
+        REQUIRE(QTest::qWaitFor([&] { return w.message().startsWith("Exported"); }, 20000));
+        CHECK(answer.answered == 1);
+    }
+    CHECK(QSettings().value("export/preset").toString() == "Tiny");
+
+    std::optional<std::string> shown;
+    std::optional<ExportSettings> shownSettings;
+    {
+        DialogAnswer answer([&](ExportDialog& dialog) {
+            shown = dialog.chosenPreset();
+            shownSettings = dialog.settings();
+            dialog.reject();
+        });
+        w.window.findChild<FilmStrip*>()->exportRequested({w.path("b.dng")});
+        REQUIRE(QTest::qWaitFor([&] { return answer.answered == 1; }, 10000));
+    }
+    CHECK(shown == "Tiny");
+    REQUIRE(shownSettings.has_value());
+    CHECK(shownSettings->format == ImageFileFormat::Png);
+
+    // Choosing No preset forgets it.
+    {
+        DialogAnswer answer([](ExportDialog& dialog) {
+            dialog.findChild<QComboBox*>("presetBox")->setCurrentIndex(0);
+            dialog.accept();
+        });
+        w.window.findChild<FilmStrip*>()->exportRequested({w.path("b.dng")});
+        REQUIRE(QTest::qWaitFor([&] { return answer.answered == 1; }, 10000));
+        QTest::qWait(300);
+    }
+    CHECK_FALSE(QSettings().contains("export/preset"));
 }
