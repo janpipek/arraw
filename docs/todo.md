@@ -132,6 +132,8 @@ Steps 1 to 6 of `docs/ideas/incremental-refresh-plan.md` (ADR 052, accepted), co
 - `QFileSystemWatcher` tested on Linux only; SMB, NFS, Windows and macOS unmeasured;
 - F5 during a walk is folded into it; a transient watch refusal is not retried until the next
   walk;
+- all measures against problems with the strip, by kind of problem, with their tests: ADR 053
+  (`docs/adr/053-the-film-strip-guards-against-problems-in-layers.md`);
 - the multi-shot film-strip export (GUI tasks below) is to be done after this work.
 
 ## Done: session history (branch `copy-settings`, 2026-10-08)

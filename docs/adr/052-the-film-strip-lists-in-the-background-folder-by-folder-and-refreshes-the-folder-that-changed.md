@@ -168,3 +168,4 @@ interval.
   in 5c0ae1f and c75ae8d. `..._failure-handling-and-toggle.md` found the dropped subfolders under
   an unmounted or renamed root, the silent toggle walk, the lost first shot, the recovery that
   did not walk below, the uncancelled work of a switch off and the quadratic end-of-walk sweep.
+- See also: ADR 053, the measures against problems with the strip, by kind of problem.
