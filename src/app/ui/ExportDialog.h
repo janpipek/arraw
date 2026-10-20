@@ -1,7 +1,6 @@
 #pragma once
 
-#include "ExportSettings.h"
-
+#include <ExportSettings.h>
 #include <ImageBuffer.h>
 
 #include <QDialog>

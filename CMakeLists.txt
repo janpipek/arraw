@@ -315,6 +315,8 @@ add_library(arraw STATIC
         include/Sidecar.h
         src/core/Sidecar.cpp
         src/core/ImageBuffer.cpp
+        include/ExportSettings.h
+        src/core/ExportSettings.cpp
         src/core/ImageExport.cpp
         include/ExifInfo.h
         src/core/ExifInfo.cpp
@@ -528,8 +530,8 @@ add_library(arraw-app-core STATIC
         src/app/DisplayImage.h
         src/app/ExportQueue.cpp
         src/app/ExportQueue.h
-        src/app/ExportSettings.cpp
-        src/app/ExportSettings.h
+        src/app/ExportPaths.cpp
+        src/app/ExportPaths.h
         src/app/PhotoLoader.cpp
         src/app/PhotoLoader.h
         src/app/PreviewRenderer.cpp

@@ -60,6 +60,7 @@ add_executable(arraw-tests
         test_ExifInfo.cpp
         test_ExportMetadata.cpp
         test_ExportQueue.cpp
+        test_ExportPaths.cpp
         test_ExportSettings.cpp
         test_FilmStripRules.cpp
         test_Geometry.cpp

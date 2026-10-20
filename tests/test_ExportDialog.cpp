@@ -1,4 +1,3 @@
-#include "ExportSettings.h"
 #include "ui/ExportDialog.h"
 
 #include <QCheckBox>

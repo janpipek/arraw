@@ -4,7 +4,6 @@
 #include "CopySections.h"
 #include "CropEditing.h"
 #include "ExportQueue.h"
-#include "ExportSettings.h"
 #include "LensSupport.h"
 #include "MaskEditing.h"
 #include "PhotoLoader.h"
@@ -13,6 +12,7 @@
 
 #include <DecodeOptions.h>
 #include <EditSession.h>
+#include <ExportSettings.h>
 #include <ImageBuffer.h>
 #include <NegativeSettings.h>
 #include <Photo.h>

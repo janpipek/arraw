@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 
+#include "AppSettings.h"
 #include "ChromeHider.h"
 #include "CopySettingsDialog.h"
 #include "CropOverlay.h"
@@ -10,7 +11,7 @@
 #include "DevelopPanel.h"
 #include "DisplayImage.h"
 #include "ExportDialog.h"
-#include "ExportSettings.h"
+#include "ExportPaths.h"
 #include "FilmStrip.h"
 #include "FolderResult.h"
 #include "HistoryModel.h"
@@ -1943,12 +1944,12 @@ void MainWindow::exportWithDialog() {
             croppedSize(open_->decoded->size(), open_->decoded->orientation(), photo.state());
 
         QSettings store;
-        ExportDialog dialog(restoreSettings(store), frame, this);
+        ExportDialog dialog(restoreExportSettings(store), frame, this);
         if (dialog.exec() != QDialog::Accepted) {
             return;
         }
         const ExportSettings settings = dialog.settings();
-        saveSettings(settings, store);
+        saveExportSettings(settings, store);
 
         // Starts in the folder of the last export, of one photograph or of several.
         std::filesystem::path suggested = suggestedPath(photo.path(), settings.format);
@@ -2029,7 +2030,7 @@ void MainWindow::exportShots(const QStringList& primaries) {
         }
 
         QSettings store;
-        const ExportSettings initial = restoreSettings(store);
+        const ExportSettings initial = restoreExportSettings(store);
         // The custom size starts at the stored box; there is no one frame to start it at.
         const ImageSize frame = initial.width > 0 && initial.height > 0
                                     ? ImageSize{initial.width, initial.height}
@@ -2047,7 +2048,7 @@ void MainWindow::exportShots(const QStringList& primaries) {
             return;
         }
         const ExportSettings settings = *chosen;
-        saveSettings(settings, store);
+        saveExportSettings(settings, store);
 
         const QString lastKey = QStringLiteral("export/lastFolder");
         std::filesystem::path start(store.value(lastKey).toString().toStdU16String());
