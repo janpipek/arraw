@@ -1218,13 +1218,19 @@ void FilmStrip::showContextMenu(const QPoint& position) {
     // The window runs the export; the strip only says which shots.
     QAction* exportAction = menu.addAction(tr("Export…"));
     exportAction->setObjectName(QStringLiteral("filmStripExportAction"));
-    connect(exportAction, &QAction::triggered, this, [this, shots] {
-        QStringList primaries;
-        for (const fs::path& shot : shots) {
-            primaries << toQString(shot);
-        }
-        emit exportRequested(primaries);
-    });
+    QStringList primaries;
+    for (const fs::path& shot : shots) {
+        primaries << toQString(shot);
+    }
+    connect(exportAction, &QAction::triggered, this,
+            [this, primaries] { emit exportRequested(primaries); });
+    if (exportPresetFiller_) {
+        // Read when the submenu is about to show, so that it lists the presets of the moment.
+        QMenu* presets = menu.addMenu(tr("Export with Preset"));
+        presets->setObjectName(QStringLiteral("filmStripExportWithPresetMenu"));
+        connect(presets, &QMenu::aboutToShow, this,
+                [this, presets, primaries] { exportPresetFiller_(*presets, primaries); });
+    }
     menu.addSeparator();
     addRefreshAction(menu);
     menu.exec(list_->viewport()->mapToGlobal(position));

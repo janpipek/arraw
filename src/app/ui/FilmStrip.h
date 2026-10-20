@@ -137,6 +137,16 @@ public:
         subfoldersLeaveGuard_ = std::move(guard);
     }
 
+    /// @brief Sets what fills the "Export with Preset" submenu of the context menu.
+    ///
+    /// Called each time the submenu is about to show, with the menu to fill and the shots the
+    /// context menu acts on; the filler decides what choosing an item does. Without one the
+    /// context menu has no such submenu.
+    /// @param filler Fills the (emptied) menu.
+    void setExportPresetMenuFiller(std::function<void(QMenu&, const QStringList&)> filler) {
+        exportPresetFiller_ = std::move(filler);
+    }
+
     /// @brief Tells whether the strip lists the subfolders.
     /// @return The flag; off by default.
     [[nodiscard]] bool includeSubfolders() const noexcept {
@@ -478,6 +488,7 @@ private:
     /// Taken when the model starts a reset that merges a refresh; empty otherwise.
     std::optional<ResetStash> stash_;
     std::function<bool()> subfoldersLeaveGuard_;
+    std::function<void(QMenu&, const QStringList&)> exportPresetFiller_;
     QComboBox* starChoice_ = nullptr;
     std::vector<std::pair<QToolButton*, ColorLabel>> swatches_;
     QToolButton* clearButton_ = nullptr;
