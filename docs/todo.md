@@ -97,6 +97,10 @@ Open:
 - Python stub nit (vignetting-amount review S2): `EditSession.lens_database` is typed
   non-optional but is `None` for a PNG, and `vignetting_amount` is `object | None` in the
   stub; give the bindings `nb::sig`s and regenerate (check whether it is still open);
+- **default (user, 2026-10-20): lens corrections should be on by default** (now off);
+  scope what that means for the sidecar (absent = on or off?), ADR 051 versioning, an
+  ambiguous or missing profile (applies nothing, as now), the CLI and Python defaults, and
+  existing sidecars that never chose;
 - matching hardening: the maker-note name picks the lens by a 6-point fuzzy margin
   (83 against 77 for the VC), so drop candidates carrying tokens the name lacks (VC,
   OS, Macro) or prefer an entry containing all the name's tokens; test first;
@@ -200,18 +204,54 @@ adjustments (user, 2026-10-08; `docs/ideas/local-adjustment-plan.md`):
 - **Spots and Info tabs** in the develop dock, as `old` had (Q switched to
   Spots there).
 
-- **Export presets** (user, 2026-10-19): the export dialog should allow named presets
-  (`ExportSettings`: format, encoding, bit depth, size box, quality, sharpening,
-  metadata). At the least, some default sizes to scale to (e.g. a choice of long
-  edge: 1080, 2048, 4096 px, or "Original") instead of typing width and height.
-  **Decided (user, 2026-10-19):** shared presets, and other model-wise config
-  that the CLI, scripts and app must all see, live in a JSON file in a standard
-  path (`QStandardPaths` config location), with format and read/write code in
-  the library. GUI-specific state (last folder, dock layout, subfolders flag)
-  stays in `QSettings`, which the CLI does not read. Develop presets are
-  separate: individual files, one per preset. The JSON file here is app config
-  (export presets and the like). To scope: the config file's layout and its
-  versioning as in ADR 051.
+Done (user, 2026-10-20): **export presets** (branch `export-presets`, ADR 054, plan
+`docs/ideas/export-presets-plan.md`, steps 1 to 9; not pushed):
+- `ExportSettings` in `include/`, Qt-free; `export-presets.json` in the config directory
+  (`ARRAW_CONFIG_DIR`, else `QStandardPaths::GenericConfigLocation/arraw`), versioned as ADR 051,
+  with a locked, atomic store; four read-only built-ins (Web 2048 px, Social 1080 px, Full size
+  JPEG, Print TIFF 16-bit);
+- CLI `export --export-preset`, `--config-dir`, `export-preset list|show|path`; Python
+  `ExportPresetStore` and friends; the dialog's picker (Save As, Update, Rename, Delete, Set
+  Aside) and Export with Preset in the File and film-strip menus;
+- review `docs/reviews/claude-opus-5-5_2026-10-20_export-presets.md` (untracked): mediums
+  fixed. Open: Python `arraw.export()` taking a preset (L6, a design choice: `arraw.export()`
+  or a `ValueError`); a cross-process lock test; `path.string()` on Windows unchecked; the
+  app does not report the new path after Set Aside; `--no-profile` and `--resize-filter` are
+  not in presets; develop presets are separate (step 4 above).
+
+- **Logging throughout the app, with a level set in the app** (user, 2026-10-20). The debug
+  window (`src/app/ui/DebugWindow.*`, `QtMessageCapture`) captures what Qt logs, but little
+  is logged: the code has three `qDebug/qInfo/qWarning` calls in all and one category
+  (`arraw.timing`, `src/trace/TimingTrace.cpp`, warning level), so the window shows a few
+  warnings only. Wanted:
+  - a **level** (debug / info / warning / critical) **chosen in the app**, remembered in
+    `QSettings`, applied at run time (`QLoggingCategory::setFilterRules`) and shown in the
+    window; the window also filters by level and category;
+  - **logging that permeates the app**: categories per area (`arraw.decode`, `.render`,
+    `.gpu`, `.export`, `.filmstrip`, `.sidecar`, `.lens`, `.presets`, ...) with `qCDebug`,
+    `qCInfo`, `qCWarning` at the decisions and failures, not only in the app: core is Qt
+    Core-linked already, but a library should not depend on Qt logging for the CLI and Python,
+    so decide a small sink (a callback or `Diagnostics.h`'s existing path?) that the app
+    routes into the same window. To scope: ADR (levels, categories, a sink in core,
+    cost when off, thread safety, no personal data such as full paths at info level), the
+    `ARRAW_LOG` / `QT_LOGGING_RULES` override, a log file option.
+
+- **Film strip context menu, more operations** (user, 2026-10-20). Now: Rate, Label, Show in
+  File Manager, Export…, Refresh Folder. Wanted: **Copy Settings… / Paste Settings** (one
+  shot or the selection; paste is one history step per shot, written to each sidecar through
+  the saved state, as the multi-shot export does), **Delete** (to the trash, never a hard
+  delete; confirm; raw and its sidecar together) and **Delete Sidecar** (reset a shot's edits;
+  confirm; only where a sidecar exists). Ideas, not decided:
+  - Reset Settings (as Delete Sidecar but keeps marks), Rotate left/right, Copy Path / Copy
+    File Name, Open With… / Open in Editor, Reveal Sidecar;
+  - Sync Settings from the open shot to the selection (copy + paste in one), Auto-Apply last
+    paste;
+  - Select by label/rating, Select Edited (has a sidecar), Invert Selection;
+  - Apply Preset ▸ (with the develop presets, step 4), Export with ▸ preset (export presets);
+  - Rename, Move/Copy To… (with the sidecar following); undo for these file operations is
+    the system trash only, so say so in the confirm.
+  Items act on the selection if the clicked shot is in it, else on that shot alone; a shot
+  with unsaved edits open needs a rule (the saved state, as export does).
 
 Done (user, 2026-10-20): **export from the film strip's context menu.** Export… is offered for
 one shot or the selection; `MainWindow::exportShots` asks the settings once, then one folder
@@ -259,6 +299,41 @@ on branch `brush-prototype`.
   2026-10-16): p95 2.3 s down to 0.53 s, median unchanged at about 0.5 s.
   Accepted (user, 2026-10-16): the 0.5 s left is rendering the 6 MP level itself;
   the cache has under 4 MiB to spare at ratio 2. The GPU run is not measured (no hardware GPU here).
+
+## Lightroom XMP import (user, 2026-10-20; later, when the develop set is mature)
+
+Not planned. An explicit import of a Lightroom (Camera Raw, `crs:`) XMP sidecar into the
+matching arraw settings, never automatic. To scope in an ADR before any code:
+- **Mapping table:** `crs:` keys (Exposure2012, Contrast2012, Highlights2012, Shadows2012,
+  Whites2012, Blacks2012, Clarity2012, Dehaze, Vibrance, Saturation, Temperature, Tint, tone
+  curve points, HSL, colour grading, crop, grain, vignette, lens profile, local adjustments)
+  to the descriptor table; different scale and different maths mean an approximation, never
+  an identical look. Report what mapped, what was approximated and what was dropped (notices).
+- **Where it enters:** a `Sidecar`-adjacent reader in core (so the CLI and Python can use it),
+  an app action (File or Edit menu, and the film strip's menu for a selection), and one
+  history step per shot with its own origin; the arraw sidecar's namespace is untouched, and
+  the foreign XMP is read, never written.
+- **Versions:** which Camera Raw process versions (2012, 2010, 2003) to accept; refuse the rest
+  with a clear message.
+- **Not part of it:** the negative's demosaic and lens corrections have no `crs:` twin; the
+  lens profile can only be matched through lensfun by name.
+
+## Snapshots, along the history (user, 2026-10-20; deferred, design leaves room)
+
+Named whole develop states of one image, for A/B comparison (`docs/desired-features.md`,
+`docs/ideas/architecture-roadmap.md` "Room for Snapshots", `looks-and-history-plan.md`).
+The history already keeps whole states and the sidecar is versioned (ADR 051), so what is left
+is a decision, then the work. To scope:
+- **Model:** a list of {name, DevelopState, negative, time} in the `EditSession`; taking one is
+  not an undoable step, restoring one is a single history step (origin "Snapshot: name").
+- **Persistence:** in the sidecar (a new optional key, so no version bump if absence means
+  none) or beside it; the size of a state with brush strokes is the cost to measure.
+- **UI:** a Snapshots list above History in the left dock, "Create Snapshot…" (a shortcut),
+  compare by clicking, rename, delete; maybe a split A/B view later.
+- **Surfaces:** CLI (`info`, `export --snapshot NAME`), Python, copy/paste (a snapshot is not a
+  copy section), the film strip (show "has snapshots"?).
+- **Relation to presets:** a snapshot is per image and keeps everything; a preset is shared and
+  carries chosen sections. "Save snapshot as preset" is the bridge.
 
 ## Merging frames: bracketing, panorama, focus stacking (user, 2026-10-18; speculation, needs scoping)
 
