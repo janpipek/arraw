@@ -3,7 +3,8 @@
 Status: implemented on branch `develop-state`, 2026-10-03, in five commits:
 EXIF (ADR 028), shots (ADR 029), saving (ADR 030), the strip, and thumbnails
 (ADR 031). The lasting decisions are in those ADRs; this plan records the
-questions and answers behind them.
+questions and answers behind them. Listing is no longer synchronous since 2026-10-20: see
+[ADR 052](../adr/052-the-film-strip-lists-in-the-background-folder-by-folder-and-refreshes-the-folder-that-changed.md).
 
 ## Goal
 

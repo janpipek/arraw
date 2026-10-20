@@ -1,6 +1,9 @@
 # Film strip: background listing and per-folder refresh — plan
 
-Status: proposed, 2026-10-20. Architecture only; nothing is built yet.
+Status: implemented, 2026-10-20 (commits 29be4c8 to 28a92a9, branch `lens-corrections`). The
+decisions and what was built are in
+[ADR 052](../adr/052-the-film-strip-lists-in-the-background-folder-by-folder-and-refreshes-the-folder-that-changed.md);
+where the two differ, the ADR and the code are right.
 
 ## Goal
 

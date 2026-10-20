@@ -110,6 +110,30 @@ Open:
   `docs/reviews/claude-opus-5-5_2026-10-18_lens-corrections.md` (untracked on
   purpose).
 
+## Done: film-strip background listing (branch lens-corrections, 2026-10-20)
+
+Steps 1 to 6 of `docs/ideas/incremental-refresh-plan.md` (ADR 052, accepted), committed
+(29be4c8 to 28a92a9), not pushed:
+- core `listFolder`, `folderPrecedes`, `FolderError`; `listShots` as a walk over them;
+- `FolderLister` on its own thread, batching to `ShotModel`, which keeps one span per folder and
+  merges in linear time (`FolderDiff.h`); no cap on shots or depth;
+- per-directory refresh, watching before reading; `WatchBudget` (1000 watches, shallowest
+  first), the "N folders not watched" button, View > Refresh Folder (F5, also in the strip's
+  context menu), hidden `filmStrip/maxWatchedFolders`;
+- an incremental subfolder toggle; a root that cannot be read keeps its rows ("Folder
+  unavailable"); unreadable subfolders; the 100k-shot note; a bounded wait (2 s) for a hung
+  lister at exit; native path separators in tooltips; the remembered folder is the strip's;
+- reviews `docs/reviews/claude-opus-5-5_2026-10-20_background-listing.md` and
+  `..._per-directory-refresh.md` (untracked); their findings are fixed in 5c0ae1f and c75ae8d.
+  Measured at 50k shots: first rows 7 ms, longest stall 15-27 ms, a new file 13 ms after the
+  debounce, F5 2.3 s in the background. Leftovers:
+- stalls with a real strip are up to ~0.1 s at tens of thousands of shots (20 000 tiny folders
+  49-143 ms; replacing a 50k-row folder 25-98 ms): accepted by the user, 2026-10-20;
+- `QFileSystemWatcher` tested on Linux only; SMB, NFS, Windows and macOS unmeasured;
+- F5 during a walk is folded into it; a transient watch refusal is not retried until the next
+  walk;
+- the multi-shot film-strip export (GUI tasks below) is to be done after this work.
+
 ## Done: session history (branch `copy-settings`, 2026-10-08)
 
 Step 3 of `docs/ideas/looks-and-history-plan.md`: `EditSession` keeps a list

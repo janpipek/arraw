@@ -20,6 +20,9 @@ you have your untouched negative back.
 **1. Open.** Point arraw at a single file or a whole folder. There is nothing to import
 and nothing to wait for — the folder *is* the session. Arrow keys walk the filmstrip;
 RAW+JPEG pairs are shown as one frame with the RAW as the primary.
+"Include subfolders" lists the whole tree, however large, in the background: the strip fills
+in while the window stays usable, and a change on disk updates only the folder that changed
+(`F5` re-reads the folder; a notice says when a huge tree has folders that are not watched).
 
 **2. Cull.** Rate `1`–`5`, `0` to clear, `X` to reject; assign one of five colour labels.
 Filter the filmstrip by rating or label to work only on the keepers. Marks are written to
