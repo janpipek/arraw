@@ -1,6 +1,6 @@
 # Export presets live in one versioned file that the library reads and writes
 
-Status: proposed, 2026-10-20. The plan is
+Status: accepted, 2026-10-20 (the library, with the file format, the store and the built-in presets, is implemented; the front ends follow). The plan is
 [export-presets-plan.md](../ideas/export-presets-plan.md). Answers `docs/todo.md`, "GUI tasks",
 "Export presets".
 
@@ -183,7 +183,8 @@ every new format (a version bump then locks older builds out of all writes, for 
   folding, never fuzzy. The spelling shown is the one stored. Saving `web` when `Web` exists
   replaces `Web`, and the name becomes `web`. In a hand-made file with two entries that fold
   alike, the first wins and the later ones are unusable ("duplicate name").
-- **Order:** sorted by the folded name and then by the name as stored, in code-point order. That is
+- **Order:** the built-in presets (section 9) first, in the order they are defined; then the
+  file's, sorted by the folded name and then by the name as stored, in code-point order. That is
   the same order on every platform and in every front end, and the file is written in it, so diffs
   stay stable. Hand-made order is not kept. *Alternative:* keep the file's order and append new
   presets, which allows a chosen order but needs reordering in the UI to be of use. *Alternative:*
@@ -249,7 +250,7 @@ not silent if it is reported, but the report would land in a status line nobody 
   two new notices, `ExportPresetUnusable` (name, reason) and `ExportPresetsUnreadable` (reason).
 - **Operations that fail throw `ExportPresetError`**, a `std::runtime_error` carrying an
   `ExportPresetProblem`: `InvalidName`, `NameTaken`, `NotFound`, `Unusable`, `NewerFile`,
-  `UnreadableFile`, `Busy`, `WriteFailed`. The enum lets the dialog and Python react to the cause
+  `UnreadableFile`, `Busy`, `WriteFailed`, `BuiltIn`. The enum lets the dialog and Python react to the cause
   (`LensProblem` is the precedent). `what()` is a sentence naming the file.
 - Settings that fail `validate` throw `std::invalid_argument`, as everywhere else.
 
@@ -258,8 +259,12 @@ not silent if it is reported, but the report would land in a status line nobody 
 **App.** The dialog gains a row at the top: **Preset:** a combo, a **Save As…** button and a menu
 button (**Update "Name"**, **Rename…**, **Delete…**, **Show File**).
 
-- The combo lists the usable presets in order and the unusable ones disabled, each with its reason
-  as a tooltip. With none, it shows the disabled item "No presets".
+- The combo lists the usable presets in order (the built-in ones first, in a section of their own)
+  and the unusable ones disabled, each with its reason as a tooltip. A built-in cannot be updated,
+  renamed or deleted, so those menu items are disabled for it; Save As works from it. A preset of
+  the file that shadows a built-in is listed disabled, with the reason "hidden by the built-in
+  preset of the same name", and can be renamed or deleted. With no presets at all (only possible
+  if built-ins are removed from the code) it shows the disabled item "No presets".
 - Choosing a preset sets every control. Changing any control afterwards marks it **modified**: the
   item reads "Web 2048 (modified)" and Update becomes available. Changing the controls back clears
   the mark, since the comparison is between canonical forms. Nothing switches to another preset by
@@ -295,8 +300,8 @@ rename and delete in v1); auto-selecting a preset whenever the controls happen t
   explicit `--bit-depth 16` with JPEG stays an error.
 - An unknown, unusable or unreadable preset is a usage error (exit 2) naming the file and
   suggesting `export-preset list`, because retrying will not fix it (ADR 006).
-- New command `export-preset`, with `list` (names on stdout, one per line; unusable ones and
-  warnings on stderr), `show NAME` (the preset as this arraw writes it, a JSON object on stdout)
+- New command `export-preset`, with `list` (names on stdout, one per line, with built-in ones marked `(built-in)`;
+  unusable ones and warnings on stderr), `show NAME` (the preset as this arraw writes it, a JSON object on stdout)
   and `path` (the file's path, whether it exists or not). `export` and `export-preset` take
   `--config-dir DIR`, and `ARRAW_CONFIG_DIR` covers the rest.
 - The CLI writes no presets in v1; scripts write through Python. *Alternative:*
@@ -309,21 +314,38 @@ rename and delete in v1); auto-selecting a preset whenever the controls happen t
 `file`. Failures raise `arraw.ExportPresetError` (a `RuntimeError` with `.problem`). `arraw.save`
 gains `settings=` (an `ExportSettings`) as an alternative to its separate keywords.
 
-### 9. Built-in presets: none in v1
+### 9. Built-in presets: a few, defined in code
 
-The size combo already offers the long edges (`presetLongEdges`), and the dialog remembers the last
-choice, so an empty list leaves nothing out. A built-in name is reserved for ever, as a command
-word is. Built-ins need rules for collisions with user names, for "cannot delete", and for what an
-update does to one the user changed.
+The library defines four presets (`builtInExportPresets()`), read-only, so that a first-time user
+has something to pick before saving anything. Their names are plain constants for now. Metadata is
+capture info and descriptive on, location off, as the defaults say. Output is sRGB unless noted:
 
-*Alternatives:*
+| Name | Settings |
+|---|---|
+| Web 2048 px | JPEG, quality 85, fits a 2048 px box, sharpening 30 |
+| Social 1080 px | JPEG, quality 85, fits a 1080 px box, sharpening 30 |
+| Full size JPEG | JPEG, quality 92, original size, no sharpening |
+| Print TIFF 16-bit | TIFF, Adobe RGB, 16 bits, original size, no sharpening |
 
-- (b) a few presets defined in code ("Web 2048 sRGB", "Print TIFF 16-bit Adobe RGB"), read-only and
-  listed in their own section. This is discoverable, at the cost of the rules above.
-- (c) seeding the file on the first write. The user owns the seeded presets after that, but a read
-  never writes, so they would appear only after the first save, which is odd. (b) is the better
-  of the two if built-ins are wanted later. It needs no version bump, since they never enter the
-  file.
+The boxes are among `presetLongEdges`, so the dialog's size combo shows them as presets.
+
+- **Never in the file.** They need no version bump, and a newer arraw may change them. An older
+  file written by hand cannot lose them.
+- **Listed first**, in the order above; the file's presets follow, sorted (section 4).
+- **Read-only.** `save`, `rename` (to a built-in's name) and `remove` of a name that folds like a
+  built-in's throw `ExportPresetError` (`BuiltIn`). Save As from a built-in under another name
+  works, so the way to change one is to copy it.
+- **A name in the file that a built-in also has** (a hand edit, or a file from before the built-in
+  existed) is kept in the file and listed, marked `shadowed`. The built-in wins for lookup by name
+  (`--export-preset`, Python `load`). The shadowing preset can still be renamed or removed, which
+  is the way out; it is the one case where a built-in's name reaches `rename` or `remove` without
+  an error.
+- **Reserved for ever**, as a command word is: a later arraw that changes a built-in's settings
+  changes what its name exports, so a script that needs fixed settings should save its own.
+
+*Alternatives:* none in v1 (nothing to reserve or explain, but an empty list on first use);
+seeding the file on the first write (the user then owns the presets, but a read never writes, so
+they would appear only after the first save).
 
 ## Consequences
 
@@ -334,6 +356,8 @@ update does to one the user changed.
 - `QSettings` keeps the last used settings, keyed as today, so nobody loses their last choice.
 - ADR 006 gains a note: `export-preset` is a command word, and `--export-preset` and
   `--config-dir` are options. The looks plan's preset directory is amended (section 2).
+- The built-in presets are code, not data: changing one is a release note, and renaming one is a
+  breaking change for scripts (section 9).
 - On a network home directory, opening the dialog reads a small file on the GUI thread. This is
   accepted, as `QSettings` already does the same.
 

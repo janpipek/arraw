@@ -63,6 +63,7 @@ add_executable(arraw-tests
         test_ConfigDirectory.cpp
         test_ExportPaths.cpp
         test_ExportPresetsJson.cpp
+        test_ExportPresetStore.cpp
         test_ExportSettings.cpp
         test_FilmStripRules.cpp
         test_Geometry.cpp

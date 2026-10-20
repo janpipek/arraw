@@ -1,6 +1,6 @@
 # Export presets: one shared, versioned file — plan
 
-Status: proposed, 2026-10-20. Decision record:
+Status: steps 1 to 4 implemented, 2026-10-20. Decision record:
 [ADR 054](../adr/054-export-presets-live-in-one-versioned-file-the-library-reads-and-writes.md).
 Answers `docs/todo.md`, "GUI tasks", "Export presets".
 
@@ -15,6 +15,7 @@ Answers `docs/todo.md`, "GUI tasks", "Export presets".
 | Directory | Resolved by the library (`GenericConfigLocation/arraw`); `ARRAW_CONFIG_DIR`, an explicit path, `--config-dir` |
 | Last used settings | Stay in `QSettings` |
 | CLI | `export --export-preset NAME`, where flags win; a way to list and show presets |
+| Built-in presets | Four, defined in code, read-only, listed first (ADR 054 section 9) |
 | Develop presets | Separate, one file each; not designed here |
 
 ## What the code does today (verified)
@@ -131,11 +132,16 @@ Test names are Catch2 `TEST_CASE` names; the tags follow the file's existing one
 
 ### 4. The store: locking, atomic writes, errors
 
-- `ExportPresets.h` gains `ExportPresetProblem`, `ExportPresetError` and `ExportPresetStore`:
+- `ExportPresets.h` gains `builtInExportPresets()`, `ExportPresetProblem` (with `BuiltIn`),
+  `ExportPresetError` and `ExportPresetStore`, and `ExportPreset` gains `builtIn` and `shadowed`:
   - `explicit ExportPresetStore(std::filesystem::path directory)`;
   - `static ExportPresetStore standard()`, which uses `configDirectory()`;
   - `file()`, `read(log)`, `load(name, log)`, `save(preset)`, `rename(from, to)`, `remove(name)`
     and `setAside() -> path`.
+- `read()` returns the built-ins first (in their defined order), then the file's presets sorted by
+  folded name; a file preset with a built-in's name stays and is marked `shadowed`. `load` finds
+  the built-in first. Built-ins are never written; `save`, `rename` (to) and `remove` of a
+  built-in's name throw `BuiltIn`, except that a shadowing file preset can be renamed or removed.
 - `src/core/ExportPresetStore.cpp` implements ADR 054 sections 5 and 6: `QLockFile` with `tryLock`
   for 2 s, a re-read, one change, `QSaveFile`, and directories created on write only.
 - **Tests** (`tests/test_ExportPresetStore.cpp`, `[presets][store]`; each uses its own `TempDir`):
@@ -154,7 +160,11 @@ Test names are Catch2 `TEST_CASE` names; the tags follow the file's existing one
   - "A held lock makes a write Busy; a stale lock is broken";
   - "A symbolic link to the file stays a link after a write" (skipped on Windows without the
     privilege);
-  - "An unwritable directory gives WriteFailed and leaves the old file".
+  - "An unwritable directory gives WriteFailed and leaves the old file";
+  - `[builtin]`: "The built-in presets are defined in code, and fit the dialog's choices";
+    "Built-in presets come first, in their order, then the file's by name"; "A built-in cannot be
+    saved over, renamed to or removed, whatever the case"; "Built-ins are never written to the
+    file"; "A preset of the file with a built-in's name is kept, shadowed, and the built-in wins".
 
 ### 5. CLI: `export --export-preset`, `--config-dir`, `export-preset`
 
@@ -166,7 +176,7 @@ Test names are Catch2 `TEST_CASE` names; the tags follow the file's existing one
   - a preset's 16 bits with `--format jpeg` becomes 8, while an explicit `--bit-depth 16` with JPEG
     still fails.
 - New `src/cli/ExportPresetCommand.{h,cpp}`, a row in `Command.cpp` placed after `export`, with
-  `list`, `show NAME` and `path`. It is Core only and starts no application beyond
+  `list` (built-in presets are marked `(built-in)`), `show NAME` and `path`. It is Core only and starts no application beyond
   `ApplicationKind::Core`.
 - **Tests** (`tests/test_Cli.cpp`, `[cli][presets]`, with `ARRAW_CONFIG_DIR` or `--config-dir`
   pointing at a `TempDir`):
@@ -176,7 +186,8 @@ Test names are Catch2 `TEST_CASE` names; the tags follow the file's existing one
   - "A preset's 16 bits become 8 under --format jpeg; --bit-depth 16 with jpeg is still an error";
   - "An unknown preset is a usage error that points at export-preset list";
   - "An unusable preset, or an unreadable file, is a usage error naming the file";
-  - "export-preset list prints names on stdout and problems on stderr";
+  - "export-preset list prints names on stdout, built-ins marked, and problems on stderr";
+  - "export-preset show prints a built-in preset, and --export-preset applies it";
   - "export-preset show prints the preset as JSON that reads back";
   - "export-preset path prints the file even when it does not exist";
   - "--config-dir wins over ARRAW_CONFIG_DIR";
@@ -187,7 +198,8 @@ Test names are Catch2 `TEST_CASE` names; the tags follow the file's existing one
 
 - `src/python/BindExport.cpp` (new) binds `ExportSettings` (frozen, with keyword construction and
   the fields in snake case), `ExportPreset`, `ExportPresetProblem`, `ExportPresetError` (a
-  `RuntimeError` subclass with `.problem`), `ExportPresetStore` (`presets()`, `unusable()`,
+  `RuntimeError` subclass with `.problem`), `ExportPresetStore` (`presets()`, which lists built-ins first and gives each `builtin` and
+  `shadowed` flags,  `unusable()`,
   `load`, `save`, `rename`, `delete`, `set_aside`, `file`) and `config_directory()`.
 - `arraw.save` gains `settings: ExportSettings | None`. Given together with `format`, `encoding`,
   `bit_depth`, `quality`, `sharpening` or `metadata`, it is a `TypeError`.
@@ -195,6 +207,7 @@ Test names are Catch2 `TEST_CASE` names; the tags follow the file's existing one
 - Regenerate `_arraw.pyi` and export the names from `__init__.py`.
 - **Tests** (`tests/python/test_export_presets.py`):
   - "save, then presets() lists it, and load returns it";
+  - "the built-in presets are listed first, and saving, renaming to or deleting one raises BUILT_IN";
   - "delete removes it, and delete of a missing one raises with NOT_FOUND";
   - "a newer file raises NEWER_FILE on save and leaves it";
   - "the store sees a preset the CLI's `export-preset show` prints" (parity, as
@@ -207,6 +220,8 @@ Test names are Catch2 `TEST_CASE` names; the tags follow the file's existing one
 - `ExportDialog(initial, frame, ExportPresetStore* store, std::optional<std::string>
   rememberedPreset, parent)`. With `nullptr` for the store, the picker is hidden, for callers and
   tests that do not care.
+- The picker lists the built-ins first, in their own section; Update, Rename… and Delete… are
+  disabled for a built-in, and a shadowed preset of the file is listed disabled with its reason.
 - Build the row as ADR 054 section 8 describes: combo, **Save As…**, and a menu with Update,
   Rename…, Delete…, Show File and, for an unreadable file, Set Aside…. The modified mark compares
   canonical forms. Add `chosenPreset()` beside `settings()`.
@@ -220,7 +235,8 @@ Test names are Catch2 `TEST_CASE` names; the tags follow the file's existing one
 - **Tests** (`tests/test_ExportDialog.cpp`, `[app][dialog][export][presets]`; the dialog takes a
   store over a `TempDir`, and the prompts for names and confirmations are injected as
   `ExportPrompts` are):
-  - "The picker lists presets in order, the unusable ones disabled";
+  - "The picker lists presets in order, built-ins first, the unusable ones disabled";
+  - "A built-in cannot be updated, renamed or deleted, but Save As copies it";
   - "Choosing a preset sets every control";
   - "Changing a control marks the preset modified; changing it back clears the mark";
   - "The dialog opens on the remembered preset, modified when the last settings differ";
@@ -295,10 +311,9 @@ Test names are Catch2 `TEST_CASE` names; the tags follow the file's existing one
 
 ## Open questions
 
-1. **Built-in presets:** none in v1 (proposed), or read-only presets defined in code (ADR 054
-   section 9, (b)).
-2. **Order:** sorted by folded name (proposed), or the file's own order with new presets appended.
-3. **Export with Preset ▸** (step 8): whether it should also update the last used settings.
-4. **CLI writes:** whether `export-preset save|delete` are wanted in v1, or Python is enough.
-5. **`--no-profile` and `--resize-filter` in presets:** they are left out of v1 because the dialog
+1. **Built-in presets:** decided (user): four, defined in code, read-only (ADR 054 section 9).
+2. **Order:** decided: sorted by folded name, after the built-ins.
+3. **Export with Preset ▸** (step 8): decided: it does not update the last used settings.
+4. **CLI writes:** decided: none in v1; Python writes.
+5. **`--no-profile` and `--resize-filter` in presets:** decided: they are left out of v1 because the dialog
    has neither control. Add them when the dialog gains the controls.

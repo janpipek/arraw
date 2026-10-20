@@ -320,6 +320,7 @@ add_library(arraw STATIC
         src/core/ConfigDirectoryRules.h
         include/ExportSettings.h
         include/ExportPresets.h
+        src/core/ExportPresetStore.cpp
         src/core/ExportPresetsJson.h
         src/core/ExportPresetsJson.cpp
         src/core/ExportSettings.cpp
