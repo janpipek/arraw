@@ -325,6 +325,11 @@ add_library(arraw STATIC
         src/core/ExportPresetsJson.cpp
         src/core/ExportSettings.cpp
         src/core/ImageExport.cpp
+        src/core/EncodedForOutput.h
+        include/OutputHistogram.h
+        src/core/OutputHistogram.cpp
+        src/core/OutputHistogramCount.h
+        src/core/OutputHistogramCount.cpp
         include/ExifInfo.h
         src/core/ExifInfo.cpp
         src/core/Exiv2Support.h

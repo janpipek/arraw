@@ -1,5 +1,6 @@
 #include "ImageExport.h"
 
+#include "EncodedForOutput.h"
 #include "MetadataEmbedding.h"
 #include "QtImage.h"
 #include "RowBands.h"
@@ -264,37 +265,20 @@ void sharpenInPlace(QImage& image, int amount) {
 /// @brief Converts colour and sample depth, and selects profile metadata for export.
 QImage prepareExportImage(const ImageBuffer& image, ImageFileFormat format,
                           const ExportOptions& options) {
-    // A camera-native buffer has no colour space Qt could name, and no output
-    // profile could describe one sensor's primaries to a viewer. Refusing here
-    // says which stage is missing rather than which enumerator is unknown.
-    const auto* sourceEncoding = std::get_if<NamedEncoding>(&image.encoding());
-    if (sourceEncoding == nullptr) {
-        throw std::invalid_argument(
-            "A camera-native buffer must pass white balance before it can be exported");
-    }
-    const auto sourceSpace = qtimage::toColorSpace(*sourceEncoding);
-    const auto targetSpace = qtimage::toColorSpace(options.encoding);
-    QImage source = qtimage::toImage(image);
-    if (source.isNull()) {
-        throw std::invalid_argument("Unsupported or invalid image buffer");
-    }
     if (format == ImageFileFormat::Jpeg && !isOpaque(image)) {
         throw std::invalid_argument("JPEG export requires opaque pixels");
     }
 
-    source.setColorSpace(sourceSpace);
-    const auto outputFormat = outputPixelFormat(format, options.bitDepth, source.hasAlphaChannel());
+    const auto outputFormat =
+        outputPixelFormat(format, options.bitDepth, channelCount(image.format()) == 4);
     QImage prepared;
     if (options.sharpening > 0) {
         // Sharpen the output-encoded values in float, before they are quantised.
-        QImage floats = source.convertedToColorSpace(targetSpace, QImage::Format_RGBA32FPx4);
-        if (floats.isNull()) {
-            throw std::runtime_error("Cannot prepare image for export");
-        }
+        QImage floats = encodedForOutput(image, options.encoding, QImage::Format_RGBA32FPx4);
         sharpenInPlace(floats, options.sharpening);
         prepared = floats.convertedTo(outputFormat);
     } else {
-        prepared = source.convertedToColorSpace(targetSpace, outputFormat);
+        prepared = encodedForOutput(image, options.encoding, outputFormat);
     }
     if (prepared.isNull()) {
         throw std::runtime_error("Cannot prepare image for export");
@@ -318,6 +302,28 @@ void encode(QIODevice& device, const QImage& image, ImageFileFormat format,
 }
 
 } // namespace
+
+QImage arraw::encodedForOutput(const ImageBuffer& image, NamedEncoding encoding,
+                               QImage::Format format) {
+    // A camera-native buffer has no colour space Qt could name, and no output
+    // profile could describe one sensor's primaries to a viewer. Refusing here
+    // says which stage is missing rather than which enumerator is unknown.
+    const auto* sourceEncoding = std::get_if<NamedEncoding>(&image.encoding());
+    if (sourceEncoding == nullptr) {
+        throw std::invalid_argument(
+            "A camera-native buffer must pass white balance before it can be exported");
+    }
+    QImage source = qtimage::toImage(image);
+    if (source.isNull()) {
+        throw std::invalid_argument("Unsupported or invalid image buffer");
+    }
+    source.setColorSpace(qtimage::toColorSpace(*sourceEncoding));
+    QImage converted = source.convertedToColorSpace(qtimage::toColorSpace(encoding), format);
+    if (converted.isNull()) {
+        throw std::runtime_error("Cannot prepare image for export");
+    }
+    return converted;
+}
 
 void arraw::exportImage(const ImageBuffer& image, const std::filesystem::path& path,
                         const ExportOptions& options, const std::optional<ExportMetadata>& metadata,
