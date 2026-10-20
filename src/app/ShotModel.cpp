@@ -331,6 +331,39 @@ void ShotModel::setFolder(const std::filesystem::path& folder, bool recursive) {
     emit walkRequested();
 }
 
+void ShotModel::setRecursive(bool recursive) {
+    if (recursive == recursive_) {
+        return;
+    }
+    recursive_ = recursive;
+    if (folder_.empty()) {
+        return;
+    }
+    // A number of its own: batches of the walk under way are stale, and so is what is queued. The
+    // loader's generation stays, so the marks and EXIF owed to the rows that stay still land.
+    ++walk_;
+    seen_.clear();
+    incoming_.clear();
+    nextFolder_ = 0;
+    nextShot_ = 0;
+    applyTimer_.stop();
+    const Walking was = walking_;
+    if (recursive) {
+        if (was == Walking::None) {
+            walking_ = Walking::Listing;
+            emit listingChanged(true);
+        }
+    } else {
+        // Every row after the root's own goes, with one signal; the walk only has to drop the
+        // subfolders' watches, and read the root again.
+        removeRange(spans_.upper_bound(withoutTrailingSeparator(folder_)), spans_.end());
+        if (was == Walking::None) {
+            walking_ = Walking::Toggle;
+        }
+    }
+    emit walkRequested();
+}
+
 std::filesystem::path ShotModel::shownName(const Shot& shot) const {
     if (!recursive_) {
         return {};
@@ -410,10 +443,11 @@ void ShotModel::applyQueued(std::optional<Deadline> deadline) {
         if (next.walk != walk_ || (next.end && walking_ == Walking::None)) {
             dropIncoming(); // Stale.
         } else if (next.end) {
+            const ListingSummary summary = std::move(*next.end);
             dropIncoming();
             // The reads of the last rows count before the end may report the loading finished.
             handOver();
-            endWalk();
+            endWalk(summary);
         } else if (nextFolder_ >= next.batch.size()) {
             dropIncoming();
         } else {
@@ -453,14 +487,18 @@ void ShotModel::applyStep(std::vector<fs::path>& added, std::vector<Job>& rechec
     mergeFolder(folder, fresh, recheck, added, rechecks);
 }
 
-void ShotModel::endWalk() {
-    // What the walk did not read is gone, or cannot be read: it has no shots now. From the last
+void ShotModel::endWalk(const ListingSummary& summary) {
+    // What the walk did not read is gone: it has no shots now. What it could not read (a folder
+    // that is unavailable for now, and everything below it) is kept as it was. From the last
     // folder back, so that each removal moves the fewest spans. A first listing made every span
     // from what it read, so it has none to look for.
     std::vector<fs::path> unseen;
     if (walking_ != Walking::Listing) {
         for (const auto& [folder, span] : spans_) {
-            if (!seen_.contains(folder)) {
+            if (!seen_.contains(folder) &&
+                std::ranges::none_of(summary.stale, [&](const fs::path& stale) {
+                    return isWithin(folder, stale);
+                })) {
                 unseen.push_back(folder);
             }
         }
@@ -682,6 +720,10 @@ void ShotModel::removeTree(const fs::path& folder) {
     while (last != spans_.end() && isWithin(last->first, folder)) {
         ++last;
     }
+    removeRange(first, last);
+}
+
+void ShotModel::removeRange(Spans::iterator first, Spans::iterator last) {
     if (first == last) {
         return;
     }

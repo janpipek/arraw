@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <string>
 #include <vector>
 
 namespace arraw::app {
@@ -63,8 +64,15 @@ struct ListingSummary {
     /// @brief Number of shots listed.
     int shots = 0;
 
-    /// @brief Number of directories that could not be read, the root among them if it failed.
+    /// @brief Number of directories that could not be read when the walk ended: subfolders that
+    /// were dropped for lack of permission, and subfolders kept as stale (see
+    /// ::arraw::app::ListingSummary::stale). The root is counted in neither.
     int unreadable = 0;
+
+    /// @brief Directories whose read failed in a way that may pass (the root, whatever the error,
+    /// or a subfolder with an I/O error): their rows, and those below them, are kept, not swept as
+    /// if they had gone (::arraw::app::ShotModel::finishListing).
+    std::vector<std::filesystem::path> stale;
 };
 
 /// @brief How much of the tree the lister watches, as it stands once everything is read.
@@ -75,8 +83,20 @@ struct WatchStatus {
     /// @brief Number of directories in the tree, watched or not.
     int directories = 0;
 
-    /// @brief Number of directories the last walk could not read.
+    /// @brief Number of subfolders that cannot be read now: dropped for lack of permission, or
+    /// kept as stale after an I/O error and tried again at the next refresh. The root is not
+    /// counted (see ::arraw::app::WatchStatus::rootUnavailable).
     int unreadable = 0;
+
+    /// @brief The first few of those subfolders, for the notice's tooltip.
+    std::vector<std::filesystem::path> unreadableFolders;
+
+    /// @brief Whether the root itself cannot be read (unmounted, a share asleep): the rows are
+    /// kept as they were, and come back to life when it can be read again.
+    bool rootUnavailable = false;
+
+    /// @brief The system's words for why the root cannot be read; empty while it can.
+    std::string rootError;
 
     /// @brief Most directories the lister may watch now: the limit set, or less where the
     /// system refused a watch.

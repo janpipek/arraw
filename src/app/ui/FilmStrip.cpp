@@ -561,6 +561,7 @@ void FilmStrip::listFolder(const fs::path& folder, std::optional<fs::path> activ
     ++listingNumber_;
     // The new walk reports its own.
     watchStatus_ = {};
+    largeNoted_ = false;
     updateNotice();
     delegate_->setActive({});
     updateFolderLabel();
@@ -605,23 +606,57 @@ void FilmStrip::onWatchStatus(const WatchStatus& status) {
 }
 
 void FilmStrip::updateNotice() {
-    const int unwatched = watchStatus_.unwatched();
-    if (unwatched <= 0) {
+    const QString refreshKeys =
+        QKeySequence::listToString(refreshFolderKeys(), QKeySequence::NativeText)
+            .replace(QStringLiteral("; "), tr(" or "));
+    QStringList texts;
+    QStringList tips;
+    if (watchStatus_.rootUnavailable) {
+        texts << tr("Folder unavailable");
+        tips << tr("%1 cannot be read (%2). The strip shows what was last listed. Click, or "
+                   "press %3, to try again.")
+                    .arg(toQString(model_.folder().lexically_normal()),
+                         QString::fromStdString(watchStatus_.rootError), refreshKeys);
+    }
+    if (const int unreadable = watchStatus_.unreadable; unreadable > 0) {
+        texts << (unreadable == 1 ? tr("1 folder could not be read")
+                                  : tr("%1 folders could not be read").arg(unreadable));
+        QStringList paths;
+        for (const fs::path& path : watchStatus_.unreadableFolders) {
+            paths << toQString(path.lexically_normal());
+        }
+        QString tip = tr("These folders cannot be read now, so their shots are not shown "
+                         "(or, after an I/O error, are shown as they were):\n%1")
+                          .arg(paths.join(QLatin1Char('\n')));
+        if (unreadable > paths.size()) {
+            tip += tr("\n… and %1 more").arg(unreadable - static_cast<int>(paths.size()));
+        }
+        tips << tip + tr("\nClick, or press %1, to try again.").arg(refreshKeys);
+    }
+    if (const int unwatched = watchStatus_.unwatched(); unwatched > 0) {
+        texts << (unwatched == 1 ? tr("1 folder not watched")
+                                 : tr("%1 folders not watched").arg(unwatched));
+        tips << tr("Arraw watches at most %1 folders, the shallowest first: the system limits "
+                   "the watches all programs share (inotify on Linux), and %2 of the %3 folders "
+                   "here have none.\nNew files in those folders appear after a refresh. Click, "
+                   "or press %4, to refresh now.")
+                    .arg(watchStatus_.limit)
+                    .arg(unwatched)
+                    .arg(watchStatus_.directories)
+                    .arg(refreshKeys);
+    }
+    if (largeNoted_ && model_.rowCount() >= largeFolderShots_) {
+        texts << tr("Large folder: %1 shots; the strip may be slow")
+                     .arg(QLocale().toString(model_.rowCount()));
+        tips << tr("Very large listings can make the strip slow. Nothing is limited: all the "
+                   "shots are listed.");
+    }
+    if (texts.isEmpty()) {
         noticeButton_->hide();
         return;
     }
-    noticeButton_->setText(unwatched == 1 ? tr("1 folder not watched")
-                                          : tr("%1 folders not watched").arg(unwatched));
-    noticeButton_->setToolTip(
-        tr("Arraw watches at most %1 folders, the shallowest first: the system limits the "
-           "watches all programs share (inotify on Linux), and %2 of the %3 folders here have "
-           "none.\nNew files in those folders appear after a refresh. Click, or press %4, to "
-           "refresh now.")
-            .arg(watchStatus_.limit)
-            .arg(unwatched)
-            .arg(watchStatus_.directories)
-            .arg(QKeySequence::listToString(refreshFolderKeys(), QKeySequence::NativeText)
-                     .replace(QStringLiteral("; "), tr(" or "))));
+    noticeButton_->setText(texts.join(QStringLiteral(" · ")));
+    noticeButton_->setToolTip(tips.join(QStringLiteral("\n\n")));
     noticeButton_->show();
 }
 
@@ -639,6 +674,11 @@ void FilmStrip::takeInsertedRows(int first, int last) {
         }
     }
     thumbnails_.addShots(added);
+    if (!largeNoted_ && model_.rowCount() >= largeFolderShots_) {
+        // Once per listing, and never in the way (plan, answer 5).
+        largeNoted_ = true;
+        updateNotice();
+    }
     if (found) {
         pendingActive_.reset();
         setActive(*found);
@@ -710,28 +750,42 @@ void FilmStrip::setIncludeSubfolders(bool include) {
     if (include == includeSubfolders_) {
         return;
     }
-    const fs::path folder = model_.folder();
-    std::optional<fs::path> active = pendingActive_;
-    if (!active_.empty()) {
-        active = active_;
-    }
-    if (!folder.empty()) {
-        // Checked first, so that a folder that cannot be opened leaves everything as it was.
-        const bool before = includeSubfolders_;
-        includeSubfolders_ = include;
-        try {
-            // The active shot is active again if the new listing brings it.
-            listFolder(folder, std::move(active));
-        } catch (const std::exception&) {
-            includeSubfolders_ = before;
-            subfoldersButton_->blockSignals(true);
-            subfoldersButton_->setChecked(before);
-            subfoldersButton_->blockSignals(false);
-            return;
+    includeSubfolders_ = include;
+    if (const fs::path folder = model_.folder().lexically_normal(); !folder.empty()) {
+        // Without a reset: the shots of the folder stay, selected and active as they were.
+        const auto inFolder = [&](const fs::path& file) {
+            return file.parent_path().lexically_normal() == folder;
+        };
+        const bool leaving = !include && !active_.empty() && !inFolder(active_);
+        if (leaving) {
+            clearActive();
+        } else if (!include && pendingActive_ && !inFolder(*pendingActive_)) {
+            pendingActive_.reset();
         }
-        emit activeChanged();
-    } else {
-        includeSubfolders_ = include;
+        // What the first listing announced is not announced again for the shots that come.
+        firstShotSent_ = true;
+        model_.setRecursive(include);
+        if (!include) {
+            // The strip may have lost the open photograph: the window opens the first shot that
+            // is left, or none, as it does at the end of a listing. Queued, after the toggle
+            // has been announced.
+            QMetaObject::invokeMethod(
+                this,
+                [this, number = listingNumber_] {
+                    if (number != listingNumber_) {
+                        return;
+                    }
+                    if (proxy_.rowCount() > 0) {
+                        emit firstShotListed(toQString(primaryAt(proxy_.index(0, 0))));
+                    } else {
+                        emit listingEnded();
+                    }
+                },
+                Qt::QueuedConnection);
+        }
+        updateFolderLabel();
+        updateEmptyHint();
+        updateNotice();
     }
     subfoldersButton_->blockSignals(true);
     subfoldersButton_->setChecked(include);

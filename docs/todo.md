@@ -174,6 +174,16 @@ adjustments (user, 2026-10-08; `docs/ideas/local-adjustment-plan.md`):
 - **Spots and Info tabs** in the develop dock, as `old` had (Q switched to
   Spots there).
 
+- **Export from the film strip's context menu** (user, 2026-10-20): with several shots
+  selected, a right-click must offer Export (as in `old`), running the export dialog
+  once for the whole selection through the export queue. The strip's context menu
+  exists since the Refresh Folder work (step 5 of the incremental-refresh plan).
+  **Decided (user, 2026-10-20):** one settings dialog, then one folder picker (starting at
+  the last export folder), files named `<stem>.<suffix>` there; if any exist, one question
+  "Replace all / Skip existing / Cancel"; same-stem shots from different folders in one run
+  get `_2`, `_3` so they never overwrite each other. Jobs go through the export queue with
+  each shot's saved state (sidecar), not the open session's. Implement after the film-strip
+  work.
 - **Export presets** (user, 2026-10-19): the export dialog should allow named presets
   (`ExportSettings`: format, encoding, bit depth, size box, quality, sharpening,
   metadata). At the least, some default sizes to scale to (e.g. a choice of long

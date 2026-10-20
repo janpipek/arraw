@@ -4,9 +4,11 @@
 
 #include <Sidecar.h>
 
+#include <QDeadlineTimer>
 #include <QMetaObject>
 
 #include <exception>
+#include <functional>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -24,50 +26,73 @@ std::filesystem::path normalised(const std::filesystem::path& path) {
 
 } // namespace
 
+void FolderWatcher::Link::post(std::function<void(FolderWatcher&)> call) {
+    const std::scoped_lock lock(mutex);
+    if (target == nullptr) {
+        return;
+    }
+    // Queued while the lock is held, so the watcher cannot be destroyed between the check and
+    // the posting; an event still queued when it is destroyed is dropped with it.
+    QMetaObject::invokeMethod(
+        target, [self = target, call = std::move(call)] { call(*self); }, Qt::QueuedConnection);
+}
+
 FolderWatcher::FolderWatcher(ShotModel& model, std::chrono::milliseconds debounce, QObject* parent)
-    : QObject(parent), model_(model),
-      lister_(std::make_unique<FolderLister>(
-          [this](std::uint64_t walk, std::vector<FolderResult> batch) {
-              // On the lister thread. Dropped if the watcher is gone by the time it would run.
-              // The model applies it a slice at a time (ShotModel::queueFolders).
-              QMetaObject::invokeMethod(
-                  this,
-                  [this, walk, batch = std::move(batch)]() mutable {
-                      model_.queueFolders(walk, std::move(batch));
-                  },
-                  Qt::QueuedConnection);
-          },
-          [this](std::uint64_t walk, ListingSummary summary) {
-              QMetaObject::invokeMethod(
-                  this,
-                  [this, walk, summary = std::move(summary)]() mutable {
-                      finishWalk(walk, std::move(summary));
-                  },
-                  Qt::QueuedConnection);
-          },
-          [this](std::uint64_t walk, WatchStatus status) {
-              QMetaObject::invokeMethod(
-                  this, [this, walk, status] { takeStatus(walk, status); }, Qt::QueuedConnection);
-          },
-          debounce)) {
-    thread_.setObjectName(QStringLiteral("FolderLister"));
-    lister_->moveToThread(&thread_);
+    : QObject(parent), model_(model), worker_(std::make_unique<Worker>()) {
+    link_->target = this;
+    // The lister keeps only the link, never the watcher or the model: after the thread is
+    // orphaned, nothing it does reaches either.
+    worker_->lister = std::make_unique<FolderLister>(
+        [link = link_](std::uint64_t walk, std::vector<FolderResult> batch) {
+            // On the lister thread. The model applies it a slice at a time
+            // (ShotModel::queueFolders).
+            link->post([walk, batch = std::move(batch)](FolderWatcher& self) mutable {
+                self.model_.queueFolders(walk, std::move(batch));
+            });
+        },
+        [link = link_](std::uint64_t walk, ListingSummary summary) {
+            link->post([walk, summary = std::move(summary)](FolderWatcher& self) mutable {
+                self.finishWalk(walk, std::move(summary));
+            });
+        },
+        [link = link_](std::uint64_t walk, WatchStatus status) {
+            link->post([walk, status = std::move(status)](FolderWatcher& self) {
+                self.takeStatus(walk, status);
+            });
+        },
+        debounce);
+    lister_ = worker_->lister.get();
+    worker_->setObjectName(QStringLiteral("FolderLister"));
+    lister_->moveToThread(worker_.get());
     // The system watcher and the debounce timer live on the lister's thread, and go there.
     connect(
-        &thread_, &QThread::finished, lister_.get(),
-        [lister = lister_.get()] { lister->shutDown(); }, Qt::DirectConnection);
-    thread_.start();
+        worker_.get(), &QThread::finished, lister_, [lister = lister_] { lister->shutDown(); },
+        Qt::DirectConnection);
+    worker_->start();
 
     connect(&model_, &ShotModel::walkRequested, this, &FolderWatcher::startWalk);
     connect(&model_, &ShotModel::sidecarRefreshed, this, &FolderWatcher::onSidecarRefreshed);
 }
 
 FolderWatcher::~FolderWatcher() {
+    {
+        // Nothing the lister delivers from now on reaches this watcher.
+        const std::scoped_lock lock(link_->mutex);
+        link_->target = nullptr;
+    }
     lister_->cancel();
-    thread_.quit();
-    // Waits for the directory being read; a share that hangs hangs here too (plan, section 6).
-    thread_.wait();
-    lister_.reset();
+    worker_->quit();
+    if (worker_->wait(QDeadlineTimer(exitWait_))) {
+        return; // Deleted with the worker, the thread having stopped.
+    }
+    // A directory that does not answer (a hard-mounted share that went away): the thread is let
+    // go. It ends when the call returns (the lister then finds its walk cancelled and does
+    // nothing), releases its watches, and deletes itself.
+    Worker* orphan = worker_.release();
+    connect(orphan, &QThread::finished, orphan, &QObject::deleteLater);
+    if (orphan->isFinished()) {
+        orphan->deleteLater(); // Finished between the wait and the connection.
+    }
 }
 
 void FolderWatcher::setReadHook(FolderLister::ReadHook hook) {

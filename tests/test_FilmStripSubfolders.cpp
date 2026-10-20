@@ -1,4 +1,5 @@
 #include "DebugLog.h"
+#include "support/ListingGate.h"
 #include "support/TempDir.h"
 #include "ui/DevelopPanel.h"
 #include "ui/FilmStrip.h"
@@ -29,6 +30,7 @@
 #include <fstream>
 #include <set>
 #include <string>
+#include <vector>
 
 using namespace arraw;
 using namespace arraw::app;
@@ -101,6 +103,51 @@ TEST_CASE("The film strip's subfolder toggle re-lists the folder and keeps the a
     REQUIRE(listed(strip));
     REQUIRE_FALSE(strip.shotContaining(other.file("deeper/c.jpg")));
     REQUIRE_FALSE(strip.activePrimary());
+}
+
+TEST_CASE("The film strip's subfolder toggle resets nothing, keeps the selection, and reads the "
+          "subfolders once",
+          "[app][filmstrip][subfolders]") {
+    const test::TempDir folder;
+    touch(folder.file("a.jpg"));
+    touch(folder.file("z.jpg"));
+    fs::create_directories(folder.file("sub/deep"));
+    touch(folder.file("sub/b.jpg"));
+    touch(folder.file("sub/deep/c.jpg"));
+    Strip holder;
+    FilmStrip& strip = holder.strip;
+    strip.setFolder(folder.path());
+    REQUIRE(listed(strip));
+    auto* button = subfoldersButton(strip);
+    REQUIRE(button);
+    auto* list = strip.findChild<QListView*>();
+    REQUIRE(list);
+    strip.setActive(folder.file("z.jpg"));
+    const test::ListingGate reads(folder.file("never"));
+    strip.setListingHook(reads.hook());
+    QSignalSpy resets(list->model(), &QAbstractItemModel::modelReset);
+    QSignalSpy folderChanged(&strip, &FilmStrip::folderChanged);
+
+    button->click();
+    REQUIRE(listed(strip));
+    REQUIRE(strip.shotContaining(folder.file("sub/deep/c.jpg")));
+    CHECK(strip.activePrimary() == folder.file("z.jpg"));
+    CHECK(list->selectionModel()->selectedIndexes().size() == 1);
+    CHECK(resets.count() == 0);
+    CHECK(folderChanged.count() == 0);
+    // The root once more (where the subfolders are found), then each subfolder once.
+    CHECK(reads.read() ==
+          std::vector<fs::path>{folder.path(), folder.file("sub"), folder.file("sub/deep")});
+
+    // Off while the active shot is in the folder itself: it stays, selected.
+    button->click();
+    CHECK_FALSE(strip.shotContaining(folder.file("sub/b.jpg")));
+    CHECK(strip.activePrimary() == folder.file("z.jpg"));
+    CHECK(list->selectionModel()->selectedIndexes().size() == 1);
+    CHECK(resets.count() == 0);
+    REQUIRE(QTest::qWaitFor([&] { return reads.read().size() == 4; }, 10000));
+    CHECK(reads.read().back() == folder.path());
+    CHECK(list->model()->rowCount() == 2);
 }
 
 TEST_CASE("The film strip's cells are taller than wide, by a caption line, and fit the strip",

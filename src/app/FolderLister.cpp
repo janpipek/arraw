@@ -10,6 +10,7 @@
 #include <exception>
 #include <iterator>
 #include <optional>
+#include <string>
 #include <system_error>
 #include <utility>
 
@@ -109,6 +110,9 @@ void FolderLister::begin(const fs::path& root, bool recursive, std::uint64_t wal
         // The watches and the changes of another folder say nothing of this one.
         unwatchAll();
         tree_.clear();
+        failed_.clear();
+        rootUnavailable_ = false;
+        rootError_.clear();
         budget_.reset(maxWatched_.load());
         dirty_.clear();
         debounceTimer_->stop();
@@ -175,12 +179,10 @@ void FolderLister::step() {
         // Nothing left to read: what is gathered goes, then the watch status.
         flush();
         const bool finishing = walking_;
-        if (finishing) {
-            unreadable_ = summary_.unreadable;
-        }
         publishStatus(finishing);
         if (finishing) {
             walking_ = false;
+            summary_.unreadable = static_cast<int>(failed_.size());
             onFinished_(walk_, std::exchange(summary_, {}));
         }
         return;
@@ -205,30 +207,37 @@ void FolderLister::step() {
         const std::scoped_lock lock(hookMutex_);
         hook = hook_;
     }
-    if (hook) {
-        hook(path);
-        if (!current()) {
-            abandon();
-            return;
-        }
-    }
 
     std::optional<FolderListing> listing;
+    FolderError error = FolderError::Other;
+    std::string message;
     try {
+        if (hook) {
+            hook(path);
+            if (!current()) {
+                abandon();
+                return;
+            }
+        }
         listing = listFolder(path);
-    } catch (const std::exception&) {
-        // Gone, no permission or an I/O error: dropped with its subtree (plan, section 6).
+    } catch (const fs::filesystem_error& failure) {
+        error = classifyFolderError(failure.code());
+        message = failure.code().message();
+    } catch (const std::exception& failure) {
+        message = failure.what();
     }
     if (!current()) {
         abandon();
         return;
     }
     if (!listing) {
-        if (walking_) {
-            ++summary_.unreadable;
-        }
-        dropSubtree(directory);
+        handleFailure(directory, error, std::move(message));
     } else {
+        if (path == root_) {
+            rootUnavailable_ = false;
+            rootError_.clear();
+        }
+        failed_.erase(path);
         if (retry && watch(directory)) {
             // It opens after all (replaced between the two, or a share's hiccup): watched now,
             // after the read, so read once more (plan, section 4, rule 2; review R4).
@@ -242,7 +251,10 @@ void FolderLister::step() {
                           .shots = std::move(listing->shots),
                           .gone = false,
                           .recheck = recheck});
-        followSubfolders(directory, recursive_ ? listing->folders : std::vector<fs::path>{}, enter);
+        const std::vector<fs::path> folders =
+            recursive_ ? std::move(listing->folders) : std::vector<fs::path>{};
+        forgetVanishedFailures(path, folders);
+        followSubfolders(directory, folders, enter);
     }
 
     // The first shots go at once, however deep the walk had to go to find them.
@@ -308,10 +320,74 @@ void FolderLister::dropSubtree(Tree::iterator directory) {
         removed.push_back(entry->first);
     }
     unwatch(released);
+    forgetFailures(folder);
     tree_.erase(directory, end);
     // The places the subtree leaves go to directories that waited.
     applyMoves({.promoted = budget_.remove(removed), .evicted = {}});
     batch_.push_back({.folder = std::move(folder), .shots = {}, .gone = true, .recheck = false});
+}
+
+void FolderLister::handleFailure(Tree::iterator directory, FolderError kind, std::string message) {
+    const fs::path path = directory->first;
+    if (path == root_) {
+        // Unmounted, renamed, a share asleep: the rows stay as they were, and the next report or
+        // refresh that can read it merges it normally (plan, answer 1). Its subfolders are not
+        // read, and not swept as gone either.
+        rootUnavailable_ = true;
+        rootError_ = std::move(message);
+        if (walking_) {
+            summary_.stale.push_back(path);
+        }
+        return;
+    }
+    switch (kind) {
+    case FolderError::Gone:
+        dropSubtree(directory);
+        break;
+    case FolderError::NoPermission:
+        // Treated as gone, as a fresh listing would show it (answer 2); counted until a read
+        // of its parent finds it readable again.
+        dropSubtree(directory);
+        failed_.insert_or_assign(path, std::move(message));
+        break;
+    case FolderError::Other:
+        // Perhaps transient: the rows stay, and its next report or refresh reads it again.
+        failed_.insert_or_assign(path, std::move(message));
+        if (walking_) {
+            summary_.stale.push_back(path);
+        }
+        break;
+    }
+}
+
+void FolderLister::forgetFailures(const fs::path& folder) {
+    if (failed_.empty()) {
+        return;
+    }
+    const auto first = failed_.lower_bound(folder);
+    auto last = first;
+    while (last != failed_.end() && isWithin(last->first, folder)) {
+        ++last;
+    }
+    failed_.erase(first, last);
+}
+
+void FolderLister::forgetVanishedFailures(const fs::path& directory,
+                                          const std::vector<fs::path>& folders) {
+    if (failed_.empty()) {
+        return;
+    }
+    std::vector<fs::path> vanished;
+    for (auto entry = failed_.lower_bound(directory);
+         entry != failed_.end() && isWithin(entry->first, directory); ++entry) {
+        if (entry->first.parent_path() == directory &&
+            std::ranges::find(folders, entry->first) == folders.end()) {
+            vanished.push_back(entry->first);
+        }
+    }
+    for (const fs::path& folder : vanished) {
+        forgetFailures(folder);
+    }
 }
 
 FolderLister::Tree::iterator FolderLister::track(const fs::path& path, int depth) {
@@ -412,10 +488,20 @@ void FolderLister::forgetDroppedWatches() {
 }
 
 void FolderLister::publishStatus(bool force) {
-    const WatchStatus status{.watched = budget_.watched(),
-                             .directories = static_cast<int>(tree_.size()),
-                             .unreadable = unreadable_,
-                             .limit = budget_.cap()};
+    constexpr std::size_t listedFailures = 5;
+    WatchStatus status{.watched = budget_.watched(),
+                       .directories = static_cast<int>(tree_.size()),
+                       .unreadable = static_cast<int>(failed_.size()),
+                       .unreadableFolders = {},
+                       .rootUnavailable = rootUnavailable_,
+                       .rootError = rootError_,
+                       .limit = budget_.cap()};
+    for (const auto& [folder, message] : failed_) {
+        if (status.unreadableFolders.size() == listedFailures) {
+            break;
+        }
+        status.unreadableFolders.push_back(folder);
+    }
     if (force || lastStatus_ != status) {
         lastStatus_ = status;
         onStatus_(walk_, status);

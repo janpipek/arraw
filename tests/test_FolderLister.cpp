@@ -21,8 +21,10 @@
 #include <functional>
 #include <iterator>
 #include <memory>
+#include <mutex>
 #include <set>
 #include <string>
+#include <system_error>
 #include <vector>
 
 using namespace arraw;
@@ -1014,8 +1016,8 @@ TEST_CASE("A directory whose watch failed because it did not open is watched onc
     REQUIRE(waitUntil([&] { return model.rowOf(folder.file("c/IMG_2.jpg")) >= 0; }));
 }
 
-TEST_CASE("A root that vanishes is dropped without a watch tried on every waiting directory",
-          "[watcher][listing][budget]") {
+TEST_CASE("A root that vanishes keeps its rows, without a watch tried on every waiting directory",
+          "[watcher][listing][budget][failure]") {
     // Review R5: ten subfolders, two watches. The root goes at once (an unmount, a share asleep).
     const test::TempDir folder;
     const fs::path root = folder.file("photos");
@@ -1036,12 +1038,322 @@ TEST_CASE("A root that vanishes is dropped without a watch tried on every waitin
     REQUIRE(waitUntil([&] { return !model.isListing() && status.last.directories == 11; }));
     REQUIRE(status.last.unwatched() == 9);
     REQUIRE(model.rowCount() == 11);
+    REQUIRE_FALSE(status.last.rootUnavailable);
 
     asked->store(0);
     fs::rename(root, folder.file("gone"));
     // Qt drops the root's watch and reports it; not left to the system's timing.
     watcher.simulateDirectoryChanged(root, true);
-    REQUIRE(waitUntil([&] { return model.rowCount() == 0 && status.last.directories == 0; }));
-    // The root's own watch is tried again before its read, and nothing more.
+    REQUIRE(waitUntil([&] { return status.last.rootUnavailable; }));
+    // The rows stay, the tree too, and the root's own watch is tried again before its read and
+    // nothing more.
+    REQUIRE(status.last.rootError != "");
+    REQUIRE(status.last.directories == 11);
+    REQUIRE(model.rowCount() == 11);
     REQUIRE(asked->load() <= 2);
+
+    // It comes back: a refresh merges it normally, and the notice's cause goes.
+    fs::rename(folder.file("gone"), root);
+    addJpeg(root / "d3" / "IMG_2.jpg");
+    watcher.refreshAll();
+    REQUIRE(waitUntil([&] { return model.rowOf(root / "d3" / "IMG_2.jpg") >= 0; }));
+    REQUIRE(waitUntil([&] { return !model.isRefreshing() && !status.last.rootUnavailable; }));
+    REQUIRE(model.rowCount() == 12);
+}
+
+namespace {
+
+/// A read hook that fails as a share does that does not answer, for the folders in a set.
+struct FailingReads {
+    std::mutex mutex;
+    std::set<fs::path> failing;
+
+    [[nodiscard]] FolderLister::ReadHook hook() {
+        return [this](const fs::path& directory) {
+            const std::scoped_lock lock(mutex);
+            if (failing.contains(directory)) {
+                throw fs::filesystem_error("simulated", directory,
+                                           std::make_error_code(std::errc::io_error));
+            }
+        };
+    }
+
+    void set(const fs::path& directory, bool fails) {
+        const std::scoped_lock lock(mutex);
+        if (fails) {
+            failing.insert(directory);
+        } else {
+            failing.erase(directory);
+        }
+    }
+};
+
+/// Takes a folder's rights away, and gives them back.
+struct NoAccess {
+    fs::path folder;
+
+    explicit NoAccess(fs::path path) : folder(std::move(path)) {
+        fs::permissions(folder, fs::perms::none);
+    }
+    void restore() const {
+        fs::permissions(folder, fs::perms::owner_all);
+    }
+    ~NoAccess() {
+        restore();
+    }
+};
+
+} // namespace
+
+TEST_CASE("A root that cannot be read is unavailable, keeps its rows, and recovers",
+          "[watcher][listing][failure]") {
+    const test::TempDir folder;
+    const fs::path root = folder.path();
+    addJpeg(root / "IMG_1.jpg");
+    addJpeg(root / "a" / "IMG_1.jpg");
+    addJpeg(root / "a" / "deep" / "IMG_1.jpg");
+    ShotModel model;
+    FolderWatcher watcher(model, std::chrono::milliseconds(0));
+    StatusLog status(watcher);
+    FailingReads reads;
+    watcher.setReadHook(reads.hook());
+    model.setFolder(root, true);
+    REQUIRE(waitUntil([&] { return !model.isListing() && status.last.directories == 3; }));
+    REQUIRE(model.rowCount() == 3);
+
+    // The share is asleep: a refresh finds the root unreadable. Nothing is swept.
+    reads.set(root, true);
+    watcher.refreshAll();
+    REQUIRE(waitUntil([&] { return !model.isRefreshing() && status.last.rootUnavailable; }));
+    REQUIRE(model.rowCount() == 3);
+    REQUIRE(status.last.rootError != "");
+    REQUIRE(status.last.unreadable == 0);
+
+    // It wakes: the next report merges the root normally.
+    reads.set(root, false);
+    addJpeg(root / "IMG_2.jpg");
+    watcher.simulateDirectoryChanged(root);
+    REQUIRE(waitUntil([&] { return model.rowOf(root / "IMG_2.jpg") >= 0; }));
+    REQUIRE(waitUntil([&] { return !status.last.rootUnavailable; }));
+    REQUIRE(model.rowCount() == 4);
+}
+
+TEST_CASE("A subfolder that loses its permission is removed, and returns with it",
+          "[watcher][listing][failure]") {
+    const test::TempDir folder;
+    const fs::path root = folder.path();
+    addJpeg(root / "IMG_1.jpg");
+    addJpeg(root / "a" / "IMG_1.jpg");
+    addJpeg(root / "b" / "IMG_1.jpg");
+    addJpeg(root / "b" / "deep" / "IMG_1.jpg");
+    ShotModel model;
+    FolderWatcher watcher(model, std::chrono::milliseconds(0));
+    StatusLog status(watcher);
+    model.setFolder(root, true);
+    REQUIRE(waitUntil([&] { return !model.isListing() && status.last.directories == 4; }));
+    REQUIRE(model.rowCount() == 4);
+    REQUIRE(status.last.watched == 4);
+
+    NoAccess locked(root / "b");
+    {
+        std::error_code error;
+        if (fs::directory_iterator(root / "b", error); !error) {
+            SKIP("the rights are not enforced here (running as root)");
+        }
+    }
+    watcher.simulateDirectoryChanged(root / "b");
+    // Its rows and its subtree's go, as do their watches; it is counted as unreadable.
+    REQUIRE(waitUntil([&] { return model.rowCount() == 2 && status.last.unreadable == 1; }));
+    REQUIRE(status.last.unreadableFolders == std::vector<fs::path>{root / "b"});
+    REQUIRE_FALSE(status.last.rootUnavailable);
+    REQUIRE(status.last.directories == 2);
+    REQUIRE(model.rowOf(root / "b" / "deep" / "IMG_1.jpg") < 0);
+    REQUIRE(sortedPaths(watcher.watchedDirectories()).size() == 2);
+
+    // A refresh tries it again, and it is still refused: counted once.
+    watcher.refreshAll();
+    REQUIRE(waitUntil([&] { return !model.isRefreshing(); }));
+    REQUIRE(model.rowCount() == 2);
+    REQUIRE(status.last.unreadable == 1);
+
+    // Readable again: the parent's next read finds it, and its subtree comes back.
+    locked.restore();
+    watcher.simulateDirectoryChanged(root);
+    REQUIRE(waitUntil([&] { return model.rowCount() == 4 && status.last.unreadable == 0; }));
+    REQUIRE(status.last.directories == 4);
+}
+
+TEST_CASE("A subfolder with an I/O error keeps its rows as stale and is read again",
+          "[watcher][listing][failure]") {
+    const test::TempDir folder;
+    const fs::path root = folder.path();
+    addJpeg(root / "IMG_1.jpg");
+    addJpeg(root / "a" / "IMG_1.jpg");
+    addJpeg(root / "b" / "IMG_1.jpg");
+    addJpeg(root / "b" / "deep" / "IMG_1.jpg");
+    ShotModel model;
+    FolderWatcher watcher(model, std::chrono::milliseconds(0));
+    StatusLog status(watcher);
+    FailingReads reads;
+    watcher.setReadHook(reads.hook());
+    model.setFolder(root, true);
+    REQUIRE(waitUntil([&] { return !model.isListing() && status.last.directories == 4; }));
+    REQUIRE(model.rowCount() == 4);
+
+    SECTION("On a report of its own") {
+        reads.set(root / "b", true);
+        fs::remove(root / "b" / "IMG_1.jpg");
+        watcher.simulateDirectoryChanged(root / "b");
+        REQUIRE(waitUntil([&] { return status.last.unreadable == 1; }));
+        // Not read, so not changed: the rows stay as they were, the subtree's too.
+        REQUIRE(model.rowCount() == 4);
+        REQUIRE(status.last.directories == 4);
+        reads.set(root / "b", false);
+        watcher.simulateDirectoryChanged(root / "b");
+        REQUIRE(waitUntil([&] { return status.last.unreadable == 0; }));
+        REQUIRE(model.rowCount() == 3);
+    }
+    SECTION("In a refresh, which sweeps nothing below it") {
+        reads.set(root / "b", true);
+        fs::remove(root / "a" / "IMG_1.jpg");
+        watcher.refreshAll();
+        REQUIRE(waitUntil([&] { return !model.isRefreshing() && status.last.unreadable == 1; }));
+        // a was read and has no shots now; b and below it were not, and are kept.
+        REQUIRE(model.rowOf(root / "a" / "IMG_1.jpg") < 0);
+        REQUIRE(model.rowOf(root / "b" / "IMG_1.jpg") >= 0);
+        REQUIRE(model.rowOf(root / "b" / "deep" / "IMG_1.jpg") >= 0);
+        REQUIRE(model.rowCount() == 3);
+
+        // The next refresh reads it again.
+        reads.set(root / "b", false);
+        fs::remove(root / "b" / "IMG_1.jpg");
+        watcher.refreshAll();
+        REQUIRE(waitUntil([&] { return !model.isRefreshing() && status.last.unreadable == 0; }));
+        REQUIRE(model.rowCount() == 2);
+    }
+    SECTION("A folder that is gone loses its rows, and is not counted") {
+        fs::remove_all(root / "b");
+        watcher.refreshAll();
+        REQUIRE(waitUntil([&] { return !model.isRefreshing() && status.last.directories == 2; }));
+        REQUIRE(model.rowCount() == 2);
+        REQUIRE(status.last.unreadable == 0);
+    }
+}
+
+TEST_CASE("Switching the subfolders on and off changes no reset and reads no tree twice",
+          "[watcher][listing][toggle]") {
+    const test::TempDir folder;
+    const fs::path root = folder.path();
+    addJpeg(root / "IMG_1.jpg");
+    for (const char* sub : {"a", "a/deep", "b", "c"}) {
+        addJpeg(root / sub / "IMG_1.jpg");
+    }
+    ShotModel model;
+    FolderWatcher watcher(model, std::chrono::milliseconds(0));
+    StatusLog status(watcher);
+    int resets = 0;
+    QObject::connect(&model, &QAbstractItemModel::modelReset, &model, [&] { ++resets; });
+    RowLog log(model);
+    const test::ListingGate reads(root / "never");
+
+    model.setFolder(root, false);
+    REQUIRE(waitUntil([&] { return !model.isListing() && status.last.directories == 1; }));
+    REQUIRE(model.rowCount() == 1);
+    resets = 0;
+    log.events.clear();
+    watcher.setReadHook(reads.hook());
+
+    // On: the root is read once more, for its list of subfolders, and the subtree once.
+    model.setRecursive(true);
+    REQUIRE(model.recursive());
+    REQUIRE(model.isListing());
+    REQUIRE(model.rowCount() == 1);
+    REQUIRE(waitUntil([&] { return !model.isListing() && status.last.directories == 5; }));
+    REQUIRE(primaries(model) == primaries(listShots(root, true)));
+    REQUIRE(resets == 0);
+    REQUIRE(log.events.front() == "+1..4");
+    REQUIRE(reads.read() ==
+            std::vector<fs::path>{root, root / "a", root / "a" / "deep", root / "b", root / "c"});
+    REQUIRE(watcher.watchedDirectories().size() == 5);
+
+    // Off: the rows of the subfolders go at once with one signal; only the root is read, and
+    // the subfolders' watches go.
+    log.events.clear();
+    model.setRecursive(false);
+    REQUIRE(model.rowCount() == 1);
+    REQUIRE(log.events == std::vector<std::string>{"-1..4"});
+    REQUIRE_FALSE(model.isListing());
+    REQUIRE(waitUntil([&] { return status.last.directories == 1; }));
+    REQUIRE(waitUntil([&] { return watcher.watchedDirectories().size() == 1; }));
+    REQUIRE(reads.read().size() == 6);
+    REQUIRE(reads.read().back() == root);
+    REQUIRE(resets == 0);
+    REQUIRE(primaries(model) == std::vector<fs::path>{root / "IMG_1.jpg"});
+}
+
+TEST_CASE("A toggle during a walk abandons it, and its late batches are dropped",
+          "[watcher][listing][toggle]") {
+    const test::TempDir folder;
+    const fs::path root = folder.path();
+    addJpeg(root / "IMG_1.jpg");
+    for (const char* sub : {"b", "c"}) {
+        addJpeg(root / sub / "IMG_1.jpg");
+    }
+    // Enough shots in a for its batch to go before the walk is held at b.
+    for (int n = 0; n < 600; ++n) {
+        addJpeg(root / "a" / ("IMG_" + std::to_string(n) + ".jpg"));
+    }
+    ShotModel model;
+    FolderWatcher watcher(model, std::chrono::milliseconds(0));
+    StatusLog status(watcher);
+    const test::ListingGate gate(root / "b");
+    watcher.setReadHook(gate.hook());
+
+    model.setFolder(root, true);
+    REQUIRE(waitUntil([&] { return gate.reached(); }));
+    REQUIRE(waitUntil([&] { return model.rowCount() == 601; }));
+    // Off while the listing is held before b: the rows of a go, the walk of the listing is
+    // stale, and the one that replaces it reads the root alone.
+    model.setRecursive(false);
+    REQUIRE(model.isListing());
+    REQUIRE(model.rowCount() == 1);
+    gate.release();
+    REQUIRE(waitUntil([&] { return !model.isListing() && status.last.directories == 1; }));
+    REQUIRE(primaries(model) == std::vector<fs::path>{root / "IMG_1.jpg"});
+    REQUIRE(waitUntil([&] { return watcher.watchedDirectories().size() == 1; }));
+    QCoreApplication::processEvents();
+    REQUIRE(model.rowCount() == 1);
+}
+
+TEST_CASE("A watcher whose lister hangs in a read is let go at exit, within the wait",
+          "[watcher][listing][exit]") {
+    const test::TempDir folder;
+    addJpeg(folder.file("IMG_1.jpg"));
+    addJpeg(folder.file("a/IMG_1.jpg"));
+    ShotModel model;
+    // Never released until the end: a read on a share that does not answer.
+    const test::ListingGate gate(folder.file("a"));
+    auto returned = std::make_shared<std::atomic<bool>>(false);
+    auto watcher = std::make_unique<FolderWatcher>(model, std::chrono::milliseconds(0));
+    watcher->setExitWait(std::chrono::milliseconds(100));
+    watcher->setReadHook([hook = gate.hook(), returned](const fs::path& directory) {
+        hook(directory);
+        *returned = *returned || directory.filename() == "a";
+    });
+    model.setFolder(folder.path(), true);
+    REQUIRE(waitUntil([&] { return gate.reached(); }));
+
+    const auto start = std::chrono::steady_clock::now();
+    watcher.reset();
+    const auto took = std::chrono::steady_clock::now() - start;
+    REQUIRE(took < std::chrono::milliseconds(1500));
+    REQUIRE_FALSE(returned->load());
+
+    // The call returns later: the orphan finds its walk cancelled, delivers nothing to the gone
+    // watcher or the model, and ends.
+    const int rows = model.rowCount();
+    gate.release();
+    REQUIRE(waitUntil([&] { return returned->load(); }));
+    QCoreApplication::processEvents();
+    REQUIRE(model.rowCount() == rows);
 }

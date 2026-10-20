@@ -112,11 +112,26 @@ public:
     /// Anything the loader was doing for the previous folder is dropped, and so is the walk of
     /// it that may still be under way.
     /// @param folder Folder to list.
-    /// @param recursive Whether to list its subfolders too (see ::arraw::listShots). Changing it
-    /// for the same folder resets the model like a new folder does.
+    /// @param recursive Whether to list its subfolders too (see ::arraw::listShots). Setting the
+    /// folder again resets the model like a new folder does; to change only this flag without
+    /// a reset, see ::arraw::app::ShotModel::setRecursive.
     /// @throws std::runtime_error (a std::filesystem::filesystem_error) if the folder cannot be
     /// opened; the model is left as it was.
     void setFolder(const std::filesystem::path& folder, bool recursive = false);
+
+    /// @brief Includes the subfolders of the folder, or drops them, without a reset.
+    ///
+    /// Under a number of its own (the walk under way is abandoned, and what is queued from it
+    /// dropped), asked for with ::arraw::app::ShotModel::walkRequested. The rows of the folder
+    /// itself stay, with their marks, EXIF and thumbnails, and so do the loader's reads owed to
+    /// them. Switching on, the walk reads the root once more (its listing is where the
+    /// subfolders are found), merges it, and brings the subfolders in after it;
+    /// ::arraw::app::ShotModel::isListing is true meanwhile. Switching off removes all the rows
+    /// of the subfolders with one signal at once, and the walk (one read of the root) only has
+    /// the watches of the subfolders released; no listing is shown for it. Nothing changes if the
+    /// flag is the one set, or no folder is.
+    /// @param recursive Whether to list the subfolders.
+    void setRecursive(bool recursive);
 
     /// @brief Numbers the walk that results are wanted from.
     /// @return The number of the last walk asked for, 0 before any.
@@ -200,7 +215,8 @@ public:
     /// was put off starts, and
     /// ::arraw::app::ShotModel::loadingFinished follows once the loader is done too.
     /// @param walk Number of the walk; any but the last one asked for is ignored.
-    /// @param summary What it saw; not used yet (steps 5 and 6 of the plan will).
+    /// @param summary What it saw. The rows of the folders it lists as stale, and of everything
+    /// below them, are kept.
     void finishListing(std::uint64_t walk, const ListingSummary& summary);
 
     /// @brief Tells whether the subfolders are listed.
@@ -224,9 +240,16 @@ public:
     /// reads everything anyway, or another refresh) the call does nothing: it is folded into
     /// that walk, not queued as another.
     ///
+    /// A call made while another walk runs is folded into that walk and does not start one. That
+    /// walk then does not check the sidecars of the rows it already passed, and a folder it has
+    /// read and does not watch (beyond the cap, see ::arraw::app::FolderWatcher) is not read
+    /// again: what changed there after its read waits for the next refresh.
+    ///
     /// The sidecar of every loaded row is checked on the loader thread, and re-read when the
     /// modification time is not the one last seen; ::arraw::app::ShotModel::sidecarRefreshed
-    /// reports each of those. A folder that can no longer be read counts as empty.
+    /// reports each of those. A folder that is gone, or refused for lack of permission, loses its
+    /// rows at the walk's end; one that cannot be read for another reason (the root, or a share
+    /// that does not answer) keeps them (see ::arraw::app::ListingSummary::stale).
     void refresh();
 
     /// @brief Counts the shots.
@@ -370,6 +393,7 @@ private:
         None,    ///< No walk is under way.
         Listing, ///< The first listing of the folder.
         Refresh, ///< A refresh, merged into the rows there are.
+        Toggle,  ///< The walk of a switch of the subfolders off, silent.
     };
 
     struct Job;
@@ -411,8 +435,10 @@ private:
     /// @param added Receives the primaries inserted.
     void insertRun(std::vector<std::filesystem::path>& added);
 
-    /// @brief Ends the walk under way: the rows of the folders it did not read go.
-    void endWalk();
+    /// @brief Ends the walk under way: the rows of the folders it did not read go, but for those
+    /// it could not read.
+    /// @param summary What the walk saw.
+    void endWalk(const ListingSummary& summary);
 
     /// @brief Checks, in a debug build, that the spans tile the rows in order.
     void checkSpans() const;
@@ -457,6 +483,11 @@ private:
     /// @brief Removes the rows of a folder and of its subtree, with one remove.
     /// @param folder Folder, without a trailing separator.
     void removeTree(const std::filesystem::path& folder);
+
+    /// @brief Removes the rows of a run of spans, with one remove.
+    /// @param first First span to remove.
+    /// @param last Span after the last; erased with the run.
+    void removeRange(Spans::iterator first, Spans::iterator last);
 
     /// @brief Announces the end of the loading, if nothing is owed and no walk is under way.
     void reportIfLoaded();

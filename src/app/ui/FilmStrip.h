@@ -116,11 +116,13 @@ public:
 
     /// @brief Sets whether the strip lists the subfolders of its folder.
     ///
-    /// Updates the "Include subfolders" button. For a folder that is shown this lists it again,
-    /// keeping the active shot if the listing brings it again (it is active again once it
-    /// arrives), and announces
-    /// ::arraw::app::FilmStrip::includeSubfoldersToggled. A folder that cannot be read leaves the
-    /// strip as it was. The flag applies to every folder set afterwards.
+    /// Updates the "Include subfolders" button and announces
+    /// ::arraw::app::FilmStrip::includeSubfoldersToggled. For a folder that is shown this does
+    /// not list it again (see ::arraw::app::ShotModel::setRecursive): switching on reads the
+    /// subfolders in the background and adds their shots, switching off removes them at once, and
+    /// the shots of the folder itself stay with their selection, marks and thumbnails. The active
+    /// shot stays unless it lay in a subfolder that goes, which leaves the strip without one. The
+    /// flag applies to every folder set afterwards.
     /// @param include Whether to include the subfolders.
     void setIncludeSubfolders(bool include);
 
@@ -254,8 +256,20 @@ public:
     /// refresh is under way (that walk takes the request in).
     void refreshFolder();
 
-    /// @brief Tells whether some folders are not watched, so that the notice shows.
-    /// @return True while the title bar's notice is visible.
+    /// @brief Sets the number of shots at which the notice says the folder is large.
+    ///
+    /// A seam for tests, which cannot list a hundred thousand shots.
+    /// @param shots Shots at which the soft note shows, once per listing.
+    void setLargeFolderShots(int shots) {
+        largeFolderShots_ = shots;
+    }
+
+    /// @brief Shots at which the notice says the folder is large, unless set otherwise.
+    static constexpr int defaultLargeFolderShots = 100000;
+
+    /// @brief Tells whether the title bar's notice shows: some folders are not watched or cannot
+    /// be read, the folder is unavailable, or the listing is large.
+    /// @return True while the notice is visible.
     [[nodiscard]] bool hasWatchNotice() const;
 
     /// @brief Suggests a size for the dock.
@@ -334,7 +348,8 @@ private:
     /// @param status What is watched and what is not.
     void onWatchStatus(const WatchStatus& status);
 
-    /// @brief Shows the notice for the unwatched folders, or hides it.
+    /// @brief Shows the notice for what applies (an unavailable folder, unreadable subfolders,
+    /// unwatched folders, a large listing), or hides it.
     void updateNotice();
 
     /// @brief Follows the start and the end of a listing.
@@ -438,10 +453,15 @@ private:
     QWidget* titleBar_ = nullptr;
     QLabel* folderLabel_ = nullptr;
     QToolButton* subfoldersButton_ = nullptr;
-    /// Title bar's notice of folders that are not watched; hidden when all are.
+    /// Title bar's notice (unavailable, unreadable and unwatched folders, a large listing);
+    /// hidden when none applies.
     QToolButton* noticeButton_ = nullptr;
     /// Watch status of the folder, all zeros before its walk ends.
     WatchStatus watchStatus_;
+    /// Shots at which the large-folder note shows.
+    int largeFolderShots_ = defaultLargeFolderShots;
+    /// Whether the listing under way passed that many shots.
+    bool largeNoted_ = false;
     bool includeSubfolders_ = false;
     /// Whether the model is being given a new folder, which a reset must not carry a selection
     /// into.

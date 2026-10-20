@@ -14,8 +14,11 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <filesystem>
 #include <fstream>
+#include <memory>
+#include <system_error>
 
 using namespace arraw;
 using namespace arraw::app;
@@ -209,4 +212,110 @@ TEST_CASE("Refresh Folder says that it runs, and a press during a walk is taken 
     CHECK_FALSE(label.text().contains("refreshing"));
     const std::vector<fs::path> read = refresh.read();
     CHECK(std::ranges::count(read, tree.folder.path()) == 1);
+}
+
+TEST_CASE("The notice says that the folder is unavailable while its rows stay, and clears",
+          "[app][filmstrip][notice][failure]") {
+    Tree tree;
+    Strip holder;
+    FilmStrip& strip = holder.strip;
+    strip.setIncludeSubfolders(true);
+    strip.setFolder(tree.folder.path());
+    REQUIRE(listed(strip));
+    REQUIRE_FALSE(strip.hasWatchNotice());
+    const auto root = tree.folder.path();
+
+    // A share that is asleep: the hook has the root's read fail as an I/O error does.
+    auto asleep = std::make_shared<std::atomic<bool>>(true);
+    strip.setListingHook([asleep, root](const fs::path& directory) {
+        if (*asleep && directory == root) {
+            throw fs::filesystem_error("simulated", directory,
+                                       std::make_error_code(std::errc::io_error));
+        }
+    });
+    strip.refreshFolder();
+    auto* button = notice(strip);
+    REQUIRE(QTest::qWaitFor([&] { return strip.hasWatchNotice(); }, 10000));
+    CHECK(button->text() == "Folder unavailable");
+    CHECK(button->toolTip().contains("cannot be read"));
+    REQUIRE(QTest::qWaitFor([&] { return !strip.isRefreshing(); }, 10000));
+    // Nothing is lost.
+    CHECK(hasShot(strip, tree.folder.file("a.jpg")));
+    CHECK(hasShot(strip, tree.folder.file("sub3/d.jpg")));
+
+    // Back: the next refresh merges it, and the notice goes.
+    *asleep = false;
+    touch(tree.folder.file("b2.jpg"));
+    strip.refreshFolder();
+    REQUIRE(QTest::qWaitFor([&] { return hasShot(strip, tree.folder.file("b2.jpg")); }, 10000));
+    REQUIRE(QTest::qWaitFor([&] { return !strip.hasWatchNotice(); }, 10000));
+}
+
+TEST_CASE("The notice counts the folders that could not be read, with the unwatched ones",
+          "[app][filmstrip][notice][failure]") {
+    Tree tree;
+    Strip holder;
+    FilmStrip& strip = holder.strip;
+    strip.setMaxWatchedFolders(2);
+    strip.setIncludeSubfolders(true);
+    strip.setFolder(tree.folder.path());
+    REQUIRE(listed(strip));
+    auto* button = notice(strip);
+    REQUIRE(QTest::qWaitFor([&] { return button->text() == "2 folders not watched"; }, 10000));
+
+    // Two subfolders with an I/O error: kept, counted, and said together with the other note.
+    auto failing = std::make_shared<std::atomic<bool>>(true);
+    const auto sub1 = tree.folder.file("sub1");
+    const auto sub2 = tree.folder.file("sub2");
+    strip.setListingHook([failing, sub1, sub2](const fs::path& directory) {
+        if (*failing && (directory == sub1 || directory == sub2)) {
+            throw fs::filesystem_error("simulated", directory,
+                                       std::make_error_code(std::errc::io_error));
+        }
+    });
+    strip.refreshFolder();
+    REQUIRE(QTest::qWaitFor(
+        [&] { return button->text() == "2 folders could not be read · 2 folders not watched"; },
+        10000));
+    CHECK(button->toolTip().contains(QString::fromStdString(sub1.string())));
+    REQUIRE(QTest::qWaitFor([&] { return !strip.isRefreshing(); }, 10000));
+    CHECK(hasShot(strip, tree.folder.file("sub1/b.jpg")));
+    CHECK(hasShot(strip, tree.folder.file("sub2/c.jpg")));
+
+    *failing = false;
+    strip.refreshFolder();
+    REQUIRE(QTest::qWaitFor([&] { return button->text() == "2 folders not watched"; }, 10000));
+}
+
+TEST_CASE("A listing past the large-folder size says so once, softly", "[app][filmstrip][notice]") {
+    // A real listing of a hundred thousand shots is too slow for a test: the size is lowered.
+    CHECK(FilmStrip::defaultLargeFolderShots == 100000);
+    Tree tree;
+    const Tree other;
+    Strip holder;
+    FilmStrip& strip = holder.strip;
+    strip.setIncludeSubfolders(true);
+    strip.setLargeFolderShots(4);
+    strip.setFolder(tree.folder.path());
+    REQUIRE(listed(strip));
+    auto* button = notice(strip);
+    REQUIRE(QTest::qWaitFor([&] { return strip.hasWatchNotice(); }, 10000));
+    CHECK(button->text() == "Large folder: 4 shots; the strip may be slow");
+
+    // It never blocks: the strip goes on, and the note follows the count while it is past.
+    touch(tree.folder.file("e.jpg"));
+    REQUIRE(QTest::qWaitFor([&] { return hasShot(strip, tree.folder.file("e.jpg")); }, 10000));
+    strip.setIncludeSubfolders(false);
+    CHECK_FALSE(strip.hasWatchNotice());
+
+    // A new folder starts afresh.
+    strip.setIncludeSubfolders(true);
+    strip.setFolder(other.folder.path());
+    CHECK_FALSE(strip.hasWatchNotice());
+    REQUIRE(listed(strip));
+    REQUIRE(QTest::qWaitFor([&] { return strip.hasWatchNotice(); }, 10000));
+    strip.setLargeFolderShots(5);
+    strip.setFolder(other.folder.path());
+    REQUIRE(listed(strip));
+    CHECK_FALSE(strip.hasWatchNotice());
 }

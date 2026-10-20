@@ -3,6 +3,8 @@
 #include "FolderResult.h"
 #include "WatchBudget.h"
 
+#include <Shot.h>
+
 #include <QObject>
 #include <QSet>
 #include <QString>
@@ -20,6 +22,7 @@
 #include <mutex>
 #include <optional>
 #include <set>
+#include <string>
 #include <vector>
 
 class QFileSystemWatcher;
@@ -57,8 +60,17 @@ namespace arraw::app {
 /// quiet for the debounce time (but no later than ::arraw::app::FolderLister::maxLatency after the
 /// first): its result is merged into its rows and asks for its sidecars to be checked. A
 /// subfolder that is new is walked with its subtree; one that went is handed over as gone, with
-/// its subtree, and its watches are released. A directory that can no longer be read counts as
-/// gone. A report for a directory still waiting to be read is folded into that read.
+/// its subtree, and its watches are released. A report for a directory still waiting to be read
+/// is folded into that read.
+///
+/// **Failures** (plan, section 6). A read that fails is classified (::arraw::FolderError). The
+/// root that cannot be read, whatever the reason, keeps every row: it is reported unavailable, its
+/// subfolders are not read, and the walk's end lists it as stale so that nothing is swept; its
+/// next report or refresh merges it normally again. A subfolder that is gone is dropped with its
+/// subtree; one that is refused for lack of permission is dropped too, and counted as unreadable
+/// until a read of its parent finds it readable; one with any other error (an I/O error on a
+/// share) keeps its rows, is counted and listed as stale, and is read again at the next report of
+/// its own or refresh.
 ///
 /// Results are stamped with the number of the walk of the tree they belong to, the last one
 /// started. Starting one abandons the walk under way, and what was to be read for the walk before:
@@ -77,7 +89,8 @@ public:
     using StatusReceiver = std::function<void(std::uint64_t, WatchStatus)>;
 
     /// @brief Function called on the lister thread before each directory is read, once it is
-    /// watched; a seam for tests, which may block in it.
+    /// watched; a seam for tests, which may block in it, or throw a
+    /// std::filesystem::filesystem_error to have the read fail with its code.
     using ReadHook = std::function<void(const std::filesystem::path&)>;
 
     /// @brief Function called on the lister thread before the system is asked for a watch; a seam
@@ -207,6 +220,22 @@ private:
     /// @param directory Directory, in the tree.
     void dropSubtree(Tree::iterator directory);
 
+    /// @brief Settles a directory whose read failed, by the kind of failure.
+    /// @param directory Directory, in the tree.
+    /// @param kind Why it failed.
+    /// @param message The system's words for it.
+    void handleFailure(Tree::iterator directory, FolderError kind, std::string message);
+
+    /// @brief Forgets the failures recorded for a folder and everything below it.
+    /// @param folder Folder.
+    void forgetFailures(const std::filesystem::path& folder);
+
+    /// @brief Forgets the failures of the subfolders of a directory that it no longer lists.
+    /// @param directory Directory just read.
+    /// @param folders Its listed subfolders, in folder order; none when not recursive.
+    void forgetVanishedFailures(const std::filesystem::path& directory,
+                                const std::vector<std::filesystem::path>& folders);
+
     /// @brief Adds a directory to the tree, and to the budget if it is new.
     /// @param path Directory.
     /// @param depth Depth below the root.
@@ -303,8 +332,13 @@ private:
     std::chrono::steady_clock::time_point firstDirty_;
     /// Which directories are to be watched.
     WatchBudget budget_{maxWatchedFolders};
-    /// Directories the last walk could not read.
-    int unreadable_ = 0;
+    /// Subfolders that cannot be read now, with the system's words: dropped for lack of
+    /// permission, or kept as stale after another error.
+    std::map<std::filesystem::path, std::string, FolderOrder> failed_;
+    /// Whether the root could not be read the last time it was.
+    bool rootUnavailable_ = false;
+    /// Why not.
+    std::string rootError_;
     /// Status handed over last.
     std::optional<WatchStatus> lastStatus_;
     /// Number of the tree's walk, stamped on what is delivered; 0 when idle.

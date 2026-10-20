@@ -12,8 +12,10 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 
 namespace arraw::app {
 
@@ -56,7 +58,13 @@ public:
                            std::chrono::milliseconds debounce = std::chrono::milliseconds(300),
                            QObject* parent = nullptr);
 
-    /// @brief Stops the lister, after the directory it is reading, and releases the watches.
+    /// @brief Stops the lister and releases the watches.
+    ///
+    /// Asks the lister to stop and waits for the directory it is reading, but no longer than
+    /// ::arraw::app::FolderWatcher::setExitWait allows: a share that hangs in `readdir` must not
+    /// hang the application's exit (plan, answer 6). The thread is then orphaned: it owns the
+    /// lister and everything the lister touches, nothing it delivers reaches this watcher or the
+    /// model any more, and it ends and deletes itself once the hung call returns.
     ~FolderWatcher() override;
 
     FolderWatcher(const FolderWatcher&) = delete;
@@ -66,6 +74,16 @@ public:
 
     /// @brief Most directories watched at once, unless set otherwise.
     static constexpr int maxWatchedFolders = FolderLister::maxWatchedFolders;
+
+    /// @brief Longest wait for the lister's thread when the watcher is destroyed, unless set
+    /// otherwise.
+    static constexpr std::chrono::milliseconds defaultExitWait{2000};
+
+    /// @brief Sets the longest wait for the lister's thread when the watcher is destroyed.
+    /// @param wait Time; after it a thread still reading is orphaned.
+    void setExitWait(std::chrono::milliseconds wait) {
+        exitWait_ = wait;
+    }
 
     /// @brief Sets the most directories to watch, from the next walk on.
     /// @param limit Cap; below 1 counts as 1.
@@ -92,7 +110,9 @@ public:
     /// For what no watch reports: a directory beyond
     /// ::arraw::app::FolderWatcher::maxWatchedFolders, or a sidecar rewritten in place. It runs in
     /// the background, keeps the selection and the active shot, and checks every loaded row's
-    /// sidecar (see ::arraw::app::ShotModel::refresh).
+    /// sidecar (see ::arraw::app::ShotModel::refresh). A call during a walk is folded into that
+    /// walk: files that appear after it has read a folder that is not watched may be missed until
+    /// the next call.
     void refreshAll();
 
     /// @brief Sets a function the lister calls on its thread before it asks the system for a
@@ -149,14 +169,38 @@ private:
     /// @param stamp Modification stamp of the sidecar now.
     void onSidecarRefreshed(const QString& primary, qint64 stamp);
 
+    /// @brief Thread of the lister, which owns the lister so that both can outlive the watcher.
+    class Worker : public QThread {
+    public:
+        /// Lister; lives on this thread, deleted with it once the thread has stopped.
+        std::unique_ptr<FolderLister> lister;
+    };
+
+    /// @brief What the lister's thread delivers through, cut by the watcher as it goes, so that a
+    /// thread orphaned at exit never reaches it.
+    struct Link {
+        /// Guard of the target.
+        std::mutex mutex;
+        /// Watcher to deliver to; null once it is destroyed.
+        FolderWatcher* target = nullptr;
+
+        /// @brief Queues a call on the watcher's thread, unless it is gone. Safe from any thread.
+        /// @param call Function taking the watcher.
+        void post(std::function<void(FolderWatcher&)> call);
+    };
+
     /// Model kept up to date.
     ShotModel& model_;
     /// Stamp of each sidecar the application wrote, by normalised path.
     std::map<std::filesystem::path, std::int64_t> ownStamps_;
-    /// Thread the lister runs on.
-    QThread thread_;
-    /// Lister; lives on thread_, deleted once that has stopped.
-    std::unique_ptr<FolderLister> lister_;
+    /// Delivery of the lister, shared with it.
+    std::shared_ptr<Link> link_ = std::make_shared<Link>();
+    /// Longest wait for the lister's thread at exit.
+    std::chrono::milliseconds exitWait_ = defaultExitWait;
+    /// Thread and lister; given away if the thread has to be orphaned.
+    std::unique_ptr<Worker> worker_;
+    /// The lister of worker_.
+    FolderLister* lister_ = nullptr;
 };
 
 } // namespace arraw::app
