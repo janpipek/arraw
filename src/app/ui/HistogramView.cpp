@@ -106,10 +106,17 @@ void HistogramView::paintEvent(QPaintEvent* /*event*/) {
     const QRectF plot = plotRect();
     {
         QPainter painter(&canvas);
-        const QColor lumaColour = palette().color(QPalette::Text);
+        // A fixed light tone: the plot's ground is dark whatever the theme.
+        const QColor lumaColour = theme::text;
         painter.setPen(QPen(palette().color(QPalette::Mid), 1.0));
         painter.setBrush(Qt::NoBrush);
         painter.drawRect(plot.adjusted(0.5, 0.5, -0.5, -0.5));
+
+        if (!histogram_ && !isEnabled()) {
+            // No photograph: the dock is disabled (ADR 048).
+            painter.setPen(theme::placeholderText);
+            painter.drawText(plot, Qt::AlignCenter, tr("No photograph"));
+        }
 
         if (histogram_ && plot.width() > 0 && plot.height() > 0) {
             int count = 0;

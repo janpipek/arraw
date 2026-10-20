@@ -68,8 +68,8 @@ protected:
             painter.drawRoundedRect(QRectF(0.75, 0.75, triangleSize - 1.5, triangleSize - 1.5), 2,
                                     2);
         }
-        const QColor outline = isEnabled() ? colours.color(QPalette::Text)
-                                           : colours.color(QPalette::Disabled, QPalette::Text);
+        // Fixed tones: the triangles sit on the plot's dark ground whatever the theme.
+        const QColor outline = isEnabled() ? theme::text : theme::disabledText;
         painter.setPen(
             QPen(lit_ ? *lit_ : outline, 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
         painter.setBrush(lit_ ? QBrush(*lit_) : QBrush(Qt::NoBrush));

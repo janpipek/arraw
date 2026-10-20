@@ -4,6 +4,7 @@
 #include "CropOverlay.h"
 #include "MaskOverlay.h"
 
+#include <QCursor>
 #include <QMouseEvent>
 #include <QPaintEvent>
 #include <QPainter>
@@ -78,6 +79,10 @@ void PhotoView::setCropMode(bool cropping) {
         setFocus();
     }
     crop_->hide();
+    // The overlay owned the pointer; read what is under it now, if it is over the view.
+    const QPoint at = mapFromGlobal(QCursor::pos());
+    pointer_ = rect().contains(at) ? std::optional<QPointF>(at) : std::nullopt;
+    refreshPointerColour();
 }
 
 void PhotoView::setMaskMode(bool masking) {
@@ -143,6 +148,7 @@ void PhotoView::adopt(const ViewTransform& next, bool fit, bool user) {
     if (moved) {
         update();
         emit transformChanged();
+        refreshPointerColour();
     }
     if (zoomMoved) {
         emit zoomChanged();
@@ -174,11 +180,13 @@ void PhotoView::setImage(const QImage& image, const QRectF& region, const QImage
     imageRegion_ = region;
     updateCursor();
     update();
+    refreshPointerColour();
 }
 
 void PhotoView::setBackground(const QImage& background) {
     background_ = background;
     update();
+    refreshPointerColour();
 }
 
 void PhotoView::setClippingShown(bool shadows, bool highlights) {
@@ -187,6 +195,9 @@ void PhotoView::setClippingShown(bool shadows, bool highlights) {
     }
     clipShadows_ = shadows;
     clipHighlights_ = highlights;
+    if (!shadows && !highlights) {
+        imageMask_ = {};
+    }
     update();
 }
 
@@ -267,13 +278,11 @@ void PhotoView::paintEvent(QPaintEvent* /*event*/) {
     }
     painter.drawImage(target, image_);
     if ((clipShadows_ || clipHighlights_) && !isCropMode()) {
-        // The masks are of the images shown, so they line up at any zoom; never smoothed.
+        // Only the render's mask, over the render and through the same rectangle, so every mark
+        // belongs to the pixel beneath it. The fallback is never masked: it is a reduced and
+        // possibly older picture, and its marks would not belong to the render over it, nor, at
+        // its own edges, to the picture it shows then (ADR 055, section 5). Never smoothed.
         painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
-        if (!background_.isNull()) {
-            painter.drawImage(
-                QRectF(t.viewFromFrame({0.0, 0.0}) / ratio, t.viewFromFrame({1.0, 1.0}) / ratio),
-                maskOf(background_, backgroundMask_));
-        }
         painter.drawImage(target, maskOf(image_, imageMask_));
     }
 }
@@ -323,6 +332,12 @@ void PhotoView::mousePressEvent(QMouseEvent* event) {
     QWidget::mousePressEvent(event);
 }
 
+void PhotoView::refreshPointerColour() {
+    if (pointer_ && !isCropMode()) {
+        emit pointerColourChanged(colourAt(*pointer_));
+    }
+}
+
 std::optional<QRgb> PhotoView::colourAt(QPointF position) const {
     if (frame_.isEmpty()) {
         return std::nullopt;
@@ -349,10 +364,12 @@ std::optional<QRgb> PhotoView::colourAt(QPointF position) const {
 
 void PhotoView::leaveEvent(QEvent* event) {
     QWidget::leaveEvent(event);
+    pointer_.reset();
     emit pointerColourChanged(std::nullopt);
 }
 
 void PhotoView::mouseMoveEvent(QMouseEvent* event) {
+    pointer_ = event->position();
     emit pointerColourChanged(colourAt(event->position()));
     if (!dragging_) {
         QWidget::mouseMoveEvent(event);

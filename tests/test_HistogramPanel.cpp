@@ -263,6 +263,35 @@ TEST_CASE("painting a histogram draws end markers outside the plot area",
     CHECK(picture.pixelColor(static_cast<int>(right.left()) + 1, y) == theme::histogramGround);
 }
 
+TEST_CASE("with no photograph the plot says so in the placeholder colour",
+          "[app][histogram][panel]") {
+    const CleanSettings clean;
+    HistogramPanel panel;
+    settle(panel);
+    const auto placeholderPixels = [&] {
+        const QImage picture = panel.view()->grab().toImage();
+        // The middle, clear of the triangles in the corners.
+        const QPoint middle = panel.view()->plotRect().center().toPoint();
+        const QRect plot(middle.x() - 25, middle.y() - 6, 50, 12);
+        int count = 0;
+        for (int y = plot.top(); y < plot.bottom(); ++y) {
+            for (int x = plot.left(); x < plot.right(); ++x) {
+                const QColor c = picture.pixelColor(x, y);
+                // Antialiased text in the placeholder grey: brighter than the ground.
+                count += c.red() > 0x30 ? 1 : 0;
+            }
+        }
+        return count;
+    };
+    panel.setEnabled(false);
+    settle(panel);
+    CHECK(placeholderPixels() > 10);
+    // Enabled, an empty plot shows nothing; a photograph's histogram replaces the text.
+    panel.setEnabled(true);
+    settle(panel);
+    CHECK(placeholderPixels() == 0);
+}
+
 TEST_CASE("RGB channels add where they overlap", "[app][histogram][panel]") {
     const CleanSettings clean;
     HistogramPanel panel;

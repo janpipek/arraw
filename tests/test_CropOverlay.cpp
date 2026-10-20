@@ -9,7 +9,9 @@
 #include <QCoreApplication>
 #include <QImage>
 #include <QKeyEvent>
+#include <QLineF>
 #include <QMouseEvent>
+#include <QSignalSpy>
 #include <QTransform>
 
 #include <catch2/catch_approx.hpp>
@@ -17,7 +19,9 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
+#include <optional>
 #include <vector>
 
 using namespace arraw;
@@ -426,5 +430,45 @@ TEST_CASE("The crop frame's corners map into the shown image", "[app][crop]") {
             CHECK(upright.x() == Approx(frame[corner].x()).margin(1e-6));
             CHECK(upright.y() == Approx(frame[corner].y()).margin(1e-6));
         }
+    }
+}
+
+TEST_CASE("The readout inside the crop frame reads the pixel at its mapped corner, flipped and "
+          "straightened",
+          "[app][crop][readout]") {
+    GeometrySettings geometry = centredCrop();
+    geometry.flipHorizontal = true;
+    geometry.straighten = -12.0;
+    Fixture fixture(geometry);
+    // Every pixel tells its own place: red is x, green is y.
+    QImage image(150, 100, QImage::Format_RGB32);
+    for (int y = 0; y < image.height(); ++y) {
+        for (int x = 0; x < image.width(); ++x) {
+            image.setPixel(x, y, qRgb(x, y, 0));
+        }
+    }
+    fixture.overlay.setImage(image);
+    const auto quad = fixture.overlay.cropQuadInImage();
+    const CropBox& crop = fixture.overlay.editing().crop();
+    const std::array<QPointF, 4> corners{
+        QPointF(crop.left, crop.top), QPointF(crop.right(), crop.top),
+        QPointF(crop.right(), crop.bottom()), QPointF(crop.left, crop.bottom())};
+    const QPointF middle = fixture.at(crop.left + crop.width / 2, crop.top + crop.height / 2);
+
+    QSignalSpy spy(&fixture.overlay, &CropOverlay::pointerColourChanged);
+    for (std::size_t corner = 0; corner < 4; ++corner) {
+        // A few widget pixels in from the corner, towards the middle.
+        const QPointF edge = fixture.at(corners[corner].x(), corners[corner].y());
+        const QPointF inside = edge + (middle - edge) * (3.0 / QLineF(edge, middle).length());
+        QMouseEvent move(QEvent::MouseMove, inside, fixture.overlay.mapToGlobal(inside),
+                         Qt::NoButton, Qt::NoButton, {});
+        QCoreApplication::sendEvent(&fixture.overlay, &move);
+        REQUIRE(spy.count() > 0);
+        const auto colour = spy.last().at(0).value<std::optional<QRgb>>();
+        CAPTURE(corner);
+        REQUIRE(colour.has_value());
+        // Within a few image pixels of the quad's corner (the scale is 1.3 widget px per pixel).
+        CHECK(std::abs(qRed(*colour) - quad[corner].x()) < 6.0);
+        CHECK(std::abs(qGreen(*colour) - quad[corner].y()) < 6.0);
     }
 }

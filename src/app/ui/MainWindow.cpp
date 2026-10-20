@@ -2663,9 +2663,10 @@ void MainWindow::histogramGateChanged() {
         submitMeasured();
         return;
     }
-    // Nothing counts while the panel is out of sight; what it shows is recounted on return.
+    // Nothing counts while the panel is out of sight; it is emptied, and recounted on return.
     histogramCounter_.clear();
     lastMeasured_.reset();
+    histogramPanel_->clear();
 }
 
 void MainWindow::showResult(const PreviewResult& result) {

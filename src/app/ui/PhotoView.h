@@ -86,6 +86,12 @@ public:
     /// shows all of it, else the reduced one beneath; null before the first render.
     [[nodiscard]] QImage wholeFrameImage() const;
 
+    /// @brief Gives the part of the frame the render shows, in fractions of the frame; empty
+    /// before the first render.
+    [[nodiscard]] QRectF renderRegion() const noexcept {
+        return image_.isNull() ? QRectF() : imageRegion_;
+    }
+
     /// @brief Sets which kinds of clipping are painted over the picture (ADR 055, section 5).
     ///
     /// The mask is made from the images shown, so it needs no render and follows each new one.
@@ -177,6 +183,10 @@ private:
     /// @param position Logical pixels from the widget's top-left corner.
     [[nodiscard]] std::optional<QRgb> colourAt(QPointF position) const;
 
+    /// @brief Emits pointerColourChanged for the last pointer position, if it is over the view,
+    /// after the picture or the transform changed under a still pointer.
+    void refreshPointerColour();
+
     /// @brief Adopts a transform as the view, emitting what changed.
     /// @param next The new view.
     /// @param fit Whether it is the fitting one.
@@ -203,6 +213,8 @@ private:
     bool picking_ = false;
     bool dragging_ = false;
     QPointF lastPosition_;
+    /// Last pointer position over the view, in logical pixels; empty after it left.
+    std::optional<QPointF> pointer_;
 
     /// A picture and the mask made of it, kept while the picture is the same.
     struct CachedMask {
@@ -219,10 +231,8 @@ private:
 
     bool clipShadows_ = false;
     bool clipHighlights_ = false;
-    /// Mask of the render.
+    /// Mask of the render; built once per render, and only the render is masked.
     mutable CachedMask imageMask_;
-    /// Mask of the whole-frame image beneath.
-    mutable CachedMask backgroundMask_;
 
     /// The newest render.
     QImage image_;

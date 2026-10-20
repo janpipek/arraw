@@ -5,7 +5,11 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
+#include <chrono>
+#include <cstdint>
 #include <initializer_list>
+#include <utility>
 
 using namespace arraw::app;
 
@@ -89,4 +93,34 @@ TEST_CASE("a picture in another format is read as its colours", "[app][clipping]
     const QImage mask = clippingMask(picture, true, true);
     CHECK(mask.pixel(0, 0) == highlightPaint);
     CHECK(qAlpha(mask.pixel(1, 0)) == 0);
+}
+
+TEST_CASE("clipping mask cost at 3840x2160", "[.bench][app][clipping]") {
+    // Noise clips about 1 % of its samples at each end; a flat picture clips none or all.
+    QImage noise(3840, 2160, QImage::Format_RGBA8888);
+    std::uint32_t state = 12345;
+    for (int y = 0; y < noise.height(); ++y) {
+        auto* line = noise.scanLine(y);
+        for (int x = 0; x < noise.width() * 4; ++x) {
+            state = state * 1664525U + 1013904223U;
+            line[x] = static_cast<uchar>(state >> 24);
+        }
+    }
+    QImage flat(3840, 2160, QImage::Format_RGBA8888);
+    flat.fill(QColor(100, 100, 100));
+    for (const auto& [name, picture] : {std::pair<const char*, const QImage&>{"noise", noise},
+                                        std::pair<const char*, const QImage&>{"flat", flat}}) {
+        // The best of five: a shared machine only ever adds time.
+        double best = 1e9;
+        QImage mask;
+        for (int run = 0; run < 5; ++run) {
+            const auto start = std::chrono::steady_clock::now();
+            mask = clippingMask(picture, true, true);
+            best = std::min(best, std::chrono::duration<double, std::milli>(
+                                      std::chrono::steady_clock::now() - start)
+                                      .count());
+        }
+        WARN(name << " 3840x2160: " << best << " ms");
+        CHECK(mask.size() == picture.size());
+    }
 }

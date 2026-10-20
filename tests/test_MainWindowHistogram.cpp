@@ -2,6 +2,7 @@
 #include "DebugLog.h"
 #include "HistogramCounter.h"
 #include "HistogramPresentation.h"
+#include "ViewTransform.h"
 #include "support/TempDir.h"
 #include "ui/CollapsibleSection.h"
 #include "ui/CropOverlay.h"
@@ -20,6 +21,7 @@
 #include <QDockWidget>
 #include <QDoubleSpinBox>
 #include <QSettings>
+#include <QSignalSpy>
 #include <QTest>
 #include <QToolButton>
 
@@ -59,6 +61,11 @@ struct CleanSettings {
 OutputHistogram counted(const QImage& image, const std::vector<RowSpan>& spans = {}) {
     const std::atomic<bool> never{false};
     return countImageCodes(image, spans, NamedEncoding::Srgb, never);
+}
+
+/// Tells whether a render region leaves out part of the frame.
+bool isRegion(const QRectF& region) {
+    return !region.isEmpty() && (region.width() < 0.99 || region.height() < 0.99);
 }
 
 /// A window with a folder of two photographs open, the first one shown and rendered.
@@ -183,19 +190,23 @@ TEST_CASE("Opening a photograph shows the histogram of the shown picture",
     CHECK(w.panel().hasHistogram());
 }
 
-TEST_CASE("Zooming to 1:1 and panning leave the histogram unchanged", "[app][window][histogram]") {
+TEST_CASE("Zooming in and panning leave the histogram unchanged", "[app][window][histogram]") {
     Window w;
     const OutputHistogram before = *w.shown();
-    const std::uint64_t submits = w.window.histogramSubmitCount();
 
-    w.view().zoomTo(4.0);
+    // The fixture is 32 x 24: at the largest zoom its height overflows the view, so the render
+    // is a region and the whole-frame picture is the fallback beneath it.
+    w.view().zoomTo(maxZoom);
+    REQUIRE(w.view().devicePixels().height() < 24 * maxZoom);
+    REQUIRE(QTest::qWaitFor([&] { return isRegion(w.view().renderRegion()); }, 20000));
     w.view().panBy({20.0, 10.0});
     w.view().panBy({-5.0, 3.0});
     QTest::qWait(600);
+    REQUIRE(isRegion(w.view().renderRegion()));
     // Whatever refreshed beneath, the count is of the whole frame, and the same pixels.
     REQUIRE(w.showsWholeFrame());
     CHECK(w.shown()->pixels == before.pixels);
-    CHECK(w.window.histogramSubmitCount() >= submits);
+    CHECK(*w.shown() == counted(w.view().wholeFrameImage()));
 }
 
 TEST_CASE("An exposure edit changes the histogram without waiting for a pause",
@@ -212,13 +223,16 @@ TEST_CASE("An exposure edit changes the histogram without waiting for a pause",
 TEST_CASE("While zoomed in, the histogram follows the refreshed fallback",
           "[app][window][histogram]") {
     Window w;
-    w.view().zoomTo(4.0);
+    w.view().zoomTo(maxZoom);
+    REQUIRE(QTest::qWaitFor([&] { return isRegion(w.view().renderRegion()); }, 20000));
     QTest::qWait(300);
+    REQUIRE(isRegion(w.view().renderRegion()));
     const OutputHistogram before = *w.shown();
     w.exposureBox().setValue(-2.0);
     w.develop().finishPendingEdit();
     REQUIRE(QTest::qWaitFor([&] { return w.shown() && *w.shown() != before; }, 10000));
     w.settle();
+    REQUIRE(isRegion(w.view().renderRegion()));
     CHECK(*w.shown() == counted(w.view().wholeFrameImage()));
 }
 
@@ -271,6 +285,8 @@ TEST_CASE("Nothing is counted while the section is closed or the dock hidden",
         w.develop().finishPendingEdit();
         QTest::qWait(700);
         CHECK(w.window.histogramSubmitCount() == submits);
+        // What it showed is gone, not left to go stale.
+        CHECK_FALSE(w.panel().hasHistogram());
 
         w.section().setOpen(true);
         CHECK(w.window.histogramSubmitCount() > submits);
@@ -283,6 +299,7 @@ TEST_CASE("Nothing is counted while the section is closed or the dock hidden",
         w.view().zoomToFit();
         QTest::qWait(700);
         CHECK(w.window.histogramSubmitCount() == submits);
+        CHECK_FALSE(w.panel().hasHistogram());
 
         w.dock().show();
         CHECK(w.window.histogramSubmitCount() > submits);
@@ -470,4 +487,133 @@ TEST_CASE("The clipping overlay is remembered in QSettings", "[app][window][hist
     auto* panel = window.findChild<HistogramPanel*>();
     CHECK_FALSE(panel->clippingShown(ClipKind::Shadows));
     CHECK(panel->clippingShown(ClipKind::Highlights));
+}
+
+namespace {
+
+/// A bare view of a 400 x 300 frame zoomed in to 1:1 on a 100 x 100 view, so that it shows
+/// frame pixels 150..250 by 100..200, as a region render over a reduced fallback.
+struct ZoomedView {
+    PhotoView view;
+    /// The fallback: a reduced whole frame, every pixel clipping highlights.
+    QImage fallback{40, 30, QImage::Format_RGBA8888};
+    /// The visible part of the frame, in fractions.
+    QRectF visible{150.0 / 400.0, 100.0 / 300.0, 100.0 / 400.0, 100.0 / 300.0};
+
+    ZoomedView() {
+        fallback.fill(QColor(255, 128, 128));
+        view.resize(100, 100);
+        view.setFrameSize(QSize(400, 300));
+        view.show();
+        REQUIRE(QTest::qWaitForWindowExposed(&view));
+        view.zoomTo(1.0);
+        REQUIRE(view.zoom() == 1.0);
+    }
+
+    /// A render of the visible part, flat in one colour.
+    [[nodiscard]] static QImage flat(QSize size, QColor colour) {
+        QImage image(size, QImage::Format_RGBA8888);
+        image.fill(colour);
+        return image;
+    }
+
+    /// Counts the pixels of the view that look painted by an overlay (strongly red or blue).
+    [[nodiscard]] int marked() {
+        const QImage grab = view.grab().toImage();
+        int count = 0;
+        for (int y = 0; y < grab.height(); ++y) {
+            for (int x = 0; x < grab.width(); ++x) {
+                const QColor c(grab.pixel(x, y));
+                if ((c.red() > 200 && c.green() < 60) || (c.blue() > 200 && c.red() < 60)) {
+                    ++count;
+                }
+            }
+        }
+        return count;
+    }
+};
+
+} // namespace
+
+TEST_CASE("Zoomed in, the fallback's clipping never shows through the render",
+          "[app][view][clipping]") {
+    ZoomedView v;
+    v.view.setImage(ZoomedView::flat({100, 100}, QColor(100, 100, 100)), v.visible, v.fallback);
+    REQUIRE(v.view.wholeFrameImage().cacheKey() == v.fallback.cacheKey());
+    v.view.setClippingShown(true, true);
+    CHECK(v.marked() == 0);
+    CHECK(QColor(v.view.grab().toImage().pixel(50, 50)) == QColor(100, 100, 100));
+}
+
+TEST_CASE("Zoomed in, the render's own clipping lines up with its pixels",
+          "[app][view][clipping]") {
+    ZoomedView v;
+    QImage render = ZoomedView::flat({100, 100}, QColor(100, 100, 100));
+    for (int y = 0; y < 100; ++y) {
+        for (int x = 0; x < 50; ++x) {
+            render.setPixelColor(x, y, QColor(255, 128, 128));
+        }
+    }
+    v.view.setImage(render, v.visible, v.fallback);
+    v.view.setClippingShown(false, true);
+    const QImage grab = v.view.grab().toImage();
+    CHECK(QColor(grab.pixel(25, 50)).red() > 200);
+    CHECK(QColor(grab.pixel(25, 50)).green() < 60);
+    CHECK(QColor(grab.pixel(75, 50)) == QColor(100, 100, 100));
+}
+
+TEST_CASE("Zoomed in, a render that no longer clips drops the marks of the one before",
+          "[app][view][clipping]") {
+    // A drag at 1:1: the fallback is refreshed only at the pause, so for a while it is of an
+    // older state than the render.
+    ZoomedView v;
+    v.view.setClippingShown(true, true);
+    v.view.setImage(ZoomedView::flat({100, 100}, QColor(255, 128, 128)), v.visible, v.fallback);
+    CHECK(v.marked() > 9000);
+    v.view.setImage(ZoomedView::flat({100, 100}, QColor(100, 100, 100)), v.visible, v.fallback);
+    CHECK(v.marked() == 0);
+    // The fallback catching up changes nothing of the render's marks.
+    v.view.setBackground(ZoomedView::flat({40, 30}, QColor(255, 128, 128)));
+    CHECK(v.marked() == 0);
+}
+
+TEST_CASE("A render smaller than the view is masked over its own rectangle only",
+          "[app][view][clipping]") {
+    ZoomedView v;
+    // The render covers the middle 40 x 40 of what is visible; the fallback shows around it.
+    const QRectF middle(190.0 / 400.0, 130.0 / 300.0, 40.0 / 400.0, 40.0 / 300.0);
+    v.view.setImage(ZoomedView::flat({40, 40}, QColor(255, 128, 128)), middle, v.fallback);
+    v.view.setClippingShown(false, true);
+    const int marked = v.marked();
+    CHECK(marked > 1400);
+    CHECK(marked <= 40 * 40);
+}
+
+TEST_CASE("Zoomed in, the readout reads the render under the pointer, and follows changes under a "
+          "still pointer",
+          "[app][view][readout]") {
+    ZoomedView v;
+    QImage render = ZoomedView::flat({100, 100}, QColor(100, 100, 100));
+    for (int y = 0; y < 100; ++y) {
+        for (int x = 0; x < 50; ++x) {
+            render.setPixelColor(x, y, QColor(10, 20, 30));
+        }
+    }
+    v.view.setImage(render, v.visible, v.fallback);
+    QSignalSpy spy(&v.view, &PhotoView::pointerColourChanged);
+    const auto last = [&] { return spy.last().at(0).value<std::optional<QRgb>>(); };
+
+    QTest::mouseMove(&v.view, QPoint(25, 50));
+    REQUIRE(spy.count() >= 1);
+    CHECK(last() == std::optional<QRgb>(QColor(10, 20, 30).rgb()));
+    QTest::mouseMove(&v.view, QPoint(75, 50));
+    CHECK(last() == std::optional<QRgb>(QColor(100, 100, 100).rgb()));
+
+    // The pointer stays still while a new render lands, then while the picture is panned.
+    v.view.setImage(ZoomedView::flat({100, 100}, QColor(1, 2, 3)), v.visible, v.fallback);
+    CHECK(last() == std::optional<QRgb>(QColor(1, 2, 3).rgb()));
+    // Panned by half the view, the render covers only part of it: the fallback is beneath.
+    v.view.panBy({-60.0, 0.0});
+    REQUIRE(last().has_value());
+    CHECK(last() != std::optional<QRgb>(QColor(1, 2, 3).rgb()));
 }
