@@ -1,0 +1,156 @@
+<lensdatabase version="1">
+    <!-- A small lensfun database for the tests (ADR 050). Every calibration number is invented,
+         so no upstream data is involved and nothing needs attribution; the tests check arraw's
+         matching, mapping and kernel against it, not lensfun's models. Written in the format of
+         the `old` branch's tests/fixtures/lensfun-mini/mini.xml, which it extends.
+         timestamp.txt beside it is the database stamp. -->
+
+    <mount>
+        <name>Canon EF</name>
+    </mount>
+    <mount>
+        <name>Canon EF-S</name>
+        <compat>Canon EF</compat>
+    </mount>
+    <mount>
+        <name>Nikon F</name>
+    </mount>
+    <mount>
+        <name>arrawtest</name>
+    </mount>
+
+    <camera>
+        <maker>Canon</maker>
+        <model>Canon EOS 80D</model>
+        <model lang="en">EOS 80D</model>
+        <mount>Canon EF-S</mount>
+        <cropfactor>1.6</cropfactor>
+    </camera>
+    <camera>
+        <maker>Canon</maker>
+        <model>Canon EOS 5D Mark IV</model>
+        <model lang="en">EOS 5D Mark IV</model>
+        <mount>Canon EF</mount>
+        <cropfactor>1.0</cropfactor>
+    </camera>
+    <camera>
+        <maker>Nikon Corporation</maker>
+        <model>Nikon D90</model>
+        <model lang="en">D90</model>
+        <mount>Nikon F</mount>
+        <cropfactor>1.5</cropfactor>
+    </camera>
+    <camera>
+        <maker>ArrawTest</maker>
+        <model>TestCam</model>
+        <mount>arrawtest</mount>
+        <cropfactor>1.5</cropfactor>
+    </camera>
+
+    <!-- A zoom with all three corrections at both ends and a calibrated centre off the
+         geometric one. -->
+    <lens>
+        <maker>Canon</maker>
+        <model>Canon EF-S 18-135mm f/3.5-5.6 IS USM</model>
+        <model lang="en">Canon EF-S 18-135mm f/3.5-5.6 IS USM</model>
+        <mount>Canon EF-S</mount>
+        <cropfactor>1.6</cropfactor>
+        <center x="0.012" y="-0.008"/>
+        <calibration>
+            <distortion model="ptlens" focal="18" a="0.020" b="-0.060" c="0.010"/>
+            <distortion model="ptlens" focal="135" a="-0.004" b="0.020" c="-0.006"/>
+            <tca model="poly3" focal="18" vr="1.0008" vb="0.9994"/>
+            <tca model="poly3" focal="135" vr="0.9996" vb="1.0002"/>
+            <vignetting model="pa" focal="18" aperture="3.5" distance="1000" k1="-0.70" k2="0.30" k3="-0.10"/>
+            <vignetting model="pa" focal="18" aperture="5.6" distance="1000" k1="-0.40" k2="0.15" k3="-0.05"/>
+            <vignetting model="pa" focal="135" aperture="5.6" distance="1000" k1="-0.30" k2="0.10" k3="-0.03"/>
+        </calibration>
+    </lens>
+
+    <!-- An EF prime, found on an EF-S body through the mount's compatibility list. -->
+    <lens>
+        <maker>Canon</maker>
+        <model>Canon EF 50mm f/1.8 STM</model>
+        <model lang="en">Canon EF 50mm f/1.8 STM</model>
+        <mount>Canon EF</mount>
+        <cropfactor>1.0</cropfactor>
+        <calibration>
+            <distortion model="ptlens" focal="50" a="0.0" b="0.004" c="0.0"/>
+            <tca model="poly3" focal="50" vr="1.0001" vb="0.9999"/>
+            <vignetting model="pa" focal="50" aperture="1.8" distance="1000" k1="-0.50" k2="0.10" k3="0.0"/>
+        </calibration>
+    </lens>
+
+    <!-- A third-party zoom, on two mounts. -->
+    <lens>
+        <maker>Sigma</maker>
+        <model>Sigma 18-35mm f/1.8 DC HSM [A]</model>
+        <mount>Canon EF</mount>
+        <mount>Nikon F</mount>
+        <cropfactor>1.6</cropfactor>
+        <calibration>
+            <distortion model="ptlens" focal="18" a="0.0" b="-0.03" c="0.0"/>
+            <distortion model="ptlens" focal="35" a="0.0" b="0.01" c="0.0"/>
+        </calibration>
+    </lens>
+
+    <!-- Two third-party zooms that a bare "17-50mm f/2.8" names equally well. -->
+    <lens>
+        <maker>Sigma</maker>
+        <model>Sigma 17-50mm f/2.8 EX DC OS HSM</model>
+        <mount>Canon EF</mount>
+        <cropfactor>1.6</cropfactor>
+        <calibration>
+            <distortion model="ptlens" focal="17" a="0.0" b="-0.02" c="0.0"/>
+            <distortion model="ptlens" focal="50" a="0.0" b="0.01" c="0.0"/>
+        </calibration>
+    </lens>
+    <lens>
+        <maker>Sigma</maker>
+        <model>Sigma 17-50mm f/2.8 EX DC HSM</model>
+        <mount>Canon EF</mount>
+        <cropfactor>1.6</cropfactor>
+        <calibration>
+            <distortion model="ptlens" focal="17" a="0.0" b="-0.025" c="0.0"/>
+            <distortion model="ptlens" focal="50" a="0.0" b="0.012" c="0.0"/>
+        </calibration>
+    </lens>
+
+    <!-- A Nikon F lens: on the Canon body it must be refused by its mount, whatever its name. -->
+    <lens>
+        <maker>Tamron</maker>
+        <model>Tamron SP 24-70mm f/2.8 Di VC USD</model>
+        <mount>Nikon F</mount>
+        <cropfactor>1.0</cropfactor>
+        <calibration>
+            <distortion model="ptlens" focal="24" a="0.0" b="-0.03" c="0.0"/>
+            <distortion model="ptlens" focal="70" a="0.0" b="0.005" c="0.0"/>
+        </calibration>
+    </lens>
+
+    <!-- The kernel's lens: strong barrel, a measurable colour split and a strong falloff, with its
+         calibrated centre off the geometric one. -->
+    <lens>
+        <maker>ArrawTest</maker>
+        <model>TestLens 50mm F2.8</model>
+        <mount>arrawtest</mount>
+        <cropfactor>1.5</cropfactor>
+        <center x="0.02" y="-0.015"/>
+        <calibration>
+            <distortion model="ptlens" focal="50" a="0.0" b="-0.06" c="0.0"/>
+            <tca model="poly3" focal="50" vr="1.0010" vb="0.9990"/>
+            <vignetting model="pa" focal="50" aperture="2.8" distance="1000" k1="-0.8" k2="0.2" k3="-0.1"/>
+        </calibration>
+    </lens>
+
+    <!-- Pincushion, for the fill scale. -->
+    <lens>
+        <maker>ArrawTest</maker>
+        <model>TestLens 35mm F4 Pincushion</model>
+        <mount>arrawtest</mount>
+        <cropfactor>1.5</cropfactor>
+        <calibration>
+            <distortion model="ptlens" focal="35" a="0.0" b="0.05" c="0.0"/>
+        </calibration>
+    </lens>
+</lensdatabase>

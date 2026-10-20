@@ -50,7 +50,8 @@ RenderRequest previewRequest(QSize viewport) {
 
 QImage renderForViewport(const ImageBuffer& decoded, const DevelopState& state, QSize viewport,
                          qreal devicePixelRatio) {
-    QImage image = toDisplayImage(develop(decoded, state, previewRequest(viewport)));
+    QImage image =
+        toDisplayImage(develop(decoded, state, LensCorrection{}, previewRequest(viewport)));
     image.setDevicePixelRatio(devicePixelRatio);
     return image;
 }

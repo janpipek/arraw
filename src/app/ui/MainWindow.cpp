@@ -12,7 +12,9 @@
 #include "ExportDialog.h"
 #include "ExportSettings.h"
 #include "FilmStrip.h"
+#include "FolderResult.h"
 #include "HistoryModel.h"
+#include "LensPickerDialog.h"
 #include "MaskOverlay.h"
 #include "MasksPanel.h"
 #include "PhotoView.h"
@@ -32,8 +34,10 @@
 #include <Edits.h>
 #include <ImageBuffer.h>
 #include <ImageImport.h>
+#include <LensResolution.h>
 #include <LocalAdjustmentEdits.h>
 #include <Photo.h>
+#include <Shot.h>
 #include <Sidecar.h>
 #include <WhiteBalance.h>
 
@@ -136,11 +140,13 @@ DevelopState uncroppedState(DevelopState state) {
 
 } // namespace
 
-MainWindow::MainWindow(DebugLog& debugLog, QWidget* parent, PhotoLoader::Decoder decoder)
+MainWindow::MainWindow(DebugLog& debugLog, QWidget* parent, PhotoLoader::Decoder decoder,
+                       LensDatabaseSource lensDatabase)
     : QMainWindow(parent), debugLog_(debugLog), runningSettings_([] {
           QSettings store;
           return restoreAppSettings(store);
       }()),
+      lensSource_(lensDatabase ? std::move(lensDatabase) : systemLensDatabase()),
       previewRenderer_(
           [this](PreviewResult result) {
               // On the worker thread. Dropped if the window is gone by the time the
@@ -169,7 +175,7 @@ MainWindow::MainWindow(DebugLog& debugLog, QWidget* parent, PhotoLoader::Decoder
                   Qt::QueuedConnection);
           },
           cpuChosen(runningSettings_) ? ExportQueue::Device::Cpu : ExportQueue::Device::Auto,
-          runningSettings_),
+          runningSettings_, lensSource_),
       photoLoader_(
           ThumbnailCache(ThumbnailCache::defaultRoot()),
           [this](DecodedPhoto result) {
@@ -195,7 +201,16 @@ MainWindow::MainWindow(DebugLog& debugLog, QWidget* parent, PhotoLoader::Decoder
                   Qt::QueuedConnection);
           },
           decoder ? std::move(decoder) : PhotoLoader::imageDecoder(&debugLog.diagnostics)) {
-    filmStrip_ = new FilmStrip(this);
+    filmStrip_ = new FilmStrip(this, ThumbnailCache(ThumbnailCache::defaultRoot()), lensSource_);
+    {
+        QSettings store;
+        filmStrip_->setIncludeSubfolders(restoreIncludeSubfolders(store));
+        filmStrip_->setMaxWatchedFolders(restoreMaxWatchedFolders(store));
+    }
+    connect(filmStrip_, &FilmStrip::includeSubfoldersToggled, this, [](bool include) {
+        QSettings store;
+        saveIncludeSubfolders(include, store);
+    });
     buildMenu();
     buildStatusBar();
     buildImageView();
@@ -204,7 +219,20 @@ MainWindow::MainWindow(DebugLog& debugLog, QWidget* parent, PhotoLoader::Decoder
     buildFilmStripDock();
     buildPanelActions();
 
-    // Last in the View menu, after the docks' toggles.
+    // After the docks' toggles: the strip's folder walked again, for what no watch reports.
+    viewMenu_->addSeparator();
+    refreshFolderAction_ = viewMenu_->addAction(tr("&Refresh Folder"));
+    refreshFolderAction_->setObjectName("refreshFolderAction");
+    // F5 everywhere, and the platform's Refresh keys besides (review R1).
+    refreshFolderAction_->setShortcuts(refreshFolderKeys());
+    refreshFolderAction_->setEnabled(false);
+    connect(refreshFolderAction_, &QAction::triggered, filmStrip_, &FilmStrip::refreshFolder);
+    connect(filmStrip_, &FilmStrip::folderChanged, this,
+            [this] { refreshFolderAction_->setEnabled(!filmStrip_->folder().empty()); });
+    // Also on the window, so the key outlives a hidden menu bar.
+    addAction(refreshFolderAction_);
+
+    // Last in the View menu.
     viewMenu_->addSeparator();
     QAction* debugAction = viewMenu_->addAction(tr("&Debug Log"));
     debugAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_D));
@@ -282,6 +310,20 @@ MainWindow::MainWindow(DebugLog& debugLog, QWidget* parent, PhotoLoader::Decoder
     if (const QScreen* screenOfWindow = screen()) {
         resize(screenOfWindow->availableGeometry().size() * 2 / 3);
     }
+
+    // The database loads off this thread (ADR 043, ADR 050); the lens switches wait for it.
+    lensLoader_ = std::jthread([this] {
+        const LensDatabase* database = nullptr;
+        try {
+            database = &lensSource_();
+        } catch (const std::exception&) {
+            // A source that cannot give one is a database that is not there.
+            static const LensDatabase none = LensDatabase::fromDirectory({});
+            database = &none;
+        }
+        QMetaObject::invokeMethod(
+            this, [this, database] { lensDatabaseLoaded(database); }, Qt::QueuedConnection);
+    });
 }
 
 bool MainWindow::event(QEvent* event) {
@@ -600,6 +642,9 @@ void MainWindow::buildDevelopDock() {
     connect(developPanel_, &DevelopPanel::stateEdited, this, &MainWindow::updateEdit);
     connect(developPanel_, &DevelopPanel::pickToggled, this, &MainWindow::setPicking);
     connect(developPanel_, &DevelopPanel::negativeChosen, this, &MainWindow::chooseNegative);
+    connect(developPanel_, &DevelopPanel::negativeEdited, this, &MainWindow::updateNegativeEdit);
+    connect(developPanel_, &DevelopPanel::chooseLensRequested, this, &MainWindow::chooseLens);
+    connect(developPanel_, &DevelopPanel::resetLensRequested, this, &MainWindow::resetLens);
 
     // The Masks group and the overlay speak the same protocol, and share the slots above.
     connect(developPanel_, &DevelopPanel::maskSelected, this,
@@ -764,6 +809,18 @@ void MainWindow::updateEdit(const DevelopState& state) {
     });
 }
 
+void MainWindow::updateNegativeEdit(const NegativeSettings& negative) {
+    guarded([this, &negative] {
+        // No edit is open after a failure cancelled it: the rest of that drag is dropped.
+        if (!open_->session.editing()) {
+            return;
+        }
+        // The session records no match on a move; lensView() scales the profile it holds.
+        open_->session.updateNegative(negative);
+        refreshPanel();
+    });
+}
+
 void MainWindow::finishEdit(EditOrigin origin) {
     guarded([this, origin] {
         if (photoView_->isCropMode()) {
@@ -914,6 +971,7 @@ void MainWindow::syncMasks() {
     }
     MaskOverlay& overlay = photoView_->maskOverlay();
     overlay.setScene(state, source);
+    overlay.setLens(lensView().correction);
     overlay.setSelection(maskSelection_);
     developPanel_->setSelectedMask(maskSelection_);
     if (overlay.tool() != MaskTool::None && !canAddLocalAdjustment(state) && !overlay.stroking()) {
@@ -1237,7 +1295,18 @@ void MainWindow::pasteSettings() {
         // A stroke under way is committed by the session, then the paste is its own step.
         photoView_->maskOverlay().abandonDrag();
         const Photo& photo = open_->session.photo();
-        const AppliedLook applied = withLook(photo, clipboard_->look, clipboard_->sections);
+        AppliedLook applied = withLook(photo, clipboard_->look, clipboard_->sections);
+        if (lensDatabase_ == nullptr && applied.negative.lens.any() &&
+            !applied.negative.lens.lens && applied.negative != photo.negative()) {
+            // The lens this photograph is matched to is recorded with the paste (ADR 050, section
+            // 6), and the database that finds it is still loading.
+            statusLine_->showMessage(tr("The lens database is still loading; paste again once "
+                                        "it has."),
+                                     6000);
+            return;
+        }
+        // The session records the target's own lens when the paste turns a correction on (ADR 050,
+        // section 6); the one copied from is never carried.
         const bool changed = applied.state != photo.state() || applied.negative != photo.negative();
         // Both parts in one step; refreshPanel() re-decodes when the negative changed.
         open_->session.setState(applied.negative, applied.state, EditOrigin::Paste);
@@ -1375,15 +1444,15 @@ void MainWindow::guarded(const std::function<void()>& action) {
     }
 }
 
-void MainWindow::refreshPanel(std::chrono::milliseconds renderDelay) {
-    if (!open_) {
-        return;
-    }
-    const detail::TimingSpan timing("window.panel");
+void MainWindow::showPanel() {
     const Photo& photo = open_->session.photo();
     const bool raw = !std::holds_alternative<NamedEncoding>(photo.metadata().encoding);
-    PanelContext context{raw, std::nullopt, defaultStateFor(photo.metadata().encoding).settings,
-                         photo.metadata(), photo.negative()};
+    PanelContext context{raw,
+                         std::nullopt,
+                         defaultStateFor(photo.metadata().encoding).settings,
+                         photo.metadata(),
+                         photo.negative(),
+                         lensView().status};
     if (const auto* camera = std::get_if<CameraNative>(&photo.metadata().encoding)) {
         try {
             // The light the pixels went through, which is also what development
@@ -1397,6 +1466,14 @@ void MainWindow::refreshPanel(std::chrono::milliseconds renderDelay) {
         }
     }
     developPanel_->showState(photo.state(), context);
+}
+
+void MainWindow::refreshPanel(std::chrono::milliseconds renderDelay) {
+    if (!open_) {
+        return;
+    }
+    const detail::TimingSpan timing("window.panel");
+    showPanel();
     syncMasks();
     updateHistoryActions();
     saveAction_->setEnabled(open_->session.hasUnsavedChanges());
@@ -1498,6 +1575,39 @@ void MainWindow::showDevice(const PreviewResult& result) {
 
 namespace {
 
+/// @brief Tells whether a listing of a folder brings a file.
+///
+/// The file lies in the folder itself or, when subfolders are listed, below it in folders that
+/// the listing enters (::arraw::isListedFolder), however deep.
+/// @param root Folder listed.
+/// @param recursive Whether its subfolders are listed.
+/// @param file File to look for.
+bool listingReaches(const std::filesystem::path& root, bool recursive,
+                    const std::filesystem::path& file) {
+    const std::filesystem::path folder = withoutTrailingSeparator(root).lexically_normal();
+    const std::filesystem::path parent = file.parent_path().lexically_normal();
+    if (parent == folder) {
+        return true;
+    }
+    if (!recursive) {
+        return false;
+    }
+    const std::filesystem::path relative = parent.lexically_relative(folder);
+    if (relative.empty() || *relative.begin() == "..") {
+        return false;
+    }
+    std::filesystem::path at = folder;
+    for (const std::filesystem::path& part : relative) {
+        at /= part;
+        std::error_code error;
+        const std::filesystem::directory_entry entry(at, error);
+        if (error || !isListedFolder(entry)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 /// @brief Builds the open dialog's name filters from the extensions arraw opens.
 ///
 /// All images first, then one group each for RAW, JPEG, PNG and TIFF, so the
@@ -1547,6 +1657,19 @@ void MainWindow::openInitialPath(const std::optional<std::filesystem::path>& pat
     if (std::filesystem::is_directory(absolute, error)) {
         openFolder(absolute);
     } else {
+        // A photograph restored from below the strip's remembered folder: list that folder
+        // first, so that the strip is what it was.
+        if (!path && filmStrip_->includeSubfolders()) {
+            const std::filesystem::path root(store.value("lastFolder").toString().toStdU16String());
+            if (!root.empty() &&
+                root.lexically_normal() != absolute.parent_path().lexically_normal()) {
+                try {
+                    filmStrip_->setFolder(root);
+                } catch (const std::exception&) {
+                    // openFile lists the photograph's own folder instead.
+                }
+            }
+        }
         openFile(absolute);
     }
 }
@@ -1569,10 +1692,19 @@ void MainWindow::openFile(const std::filesystem::path& path) {
             return;
         }
         const std::filesystem::path folder = path.parent_path();
-        if (filmStrip_->folder().lexically_normal() != folder.lexically_normal()) {
+        // Asked of the strip's own listing: a path under a folder it skips (a symbolic link,
+        // a hidden folder) or has not refreshed yet is not listed, however it is spelled. One
+        // that the listing under way is still to bring stays where it is, and waits for it.
+        const bool listed = filmStrip_->shotContaining(path).has_value();
+        const bool coming =
+            !listed && filmStrip_->isListing() &&
+            listingReaches(filmStrip_->folder(), filmStrip_->includeSubfolders(), path);
+        // A file chosen now wins over the first shot of a folder opened before.
+        activateFirstListed_ = false;
+        if (!listed && !coming) {
             try {
                 const detail::TimingSpan folderTiming("window.folder.scan");
-                filmStrip_->setFolder(folder);
+                filmStrip_->setFolder(folder, path);
             } catch (const std::exception& error) {
                 // The photograph itself opened; only the strip cannot show its folder.
                 statusLine_->showMessage(
@@ -1582,11 +1714,13 @@ void MainWindow::openFile(const std::filesystem::path& path) {
             }
         }
         showPhoto(std::move(photo));
-        rememberFolder(folder);
         // The shot that holds the file, as its primary or as a companion; the file the user
-        // chose stays the one developed.
+        // chose stays the one developed. While the strip is listed, it becomes active when it
+        // arrives.
         if (const auto shot = filmStrip_->shotContaining(path)) {
             filmStrip_->setActive(*shot);
+        } else if (filmStrip_->isListing()) {
+            filmStrip_->setActive(path);
         } else {
             filmStrip_->clearActive();
         }
@@ -1617,11 +1751,27 @@ void MainWindow::openFolder(const std::filesystem::path& folder) {
             tr("%1\n\n%2").arg(toQString(folder), QString::fromUtf8(error.what())));
         return;
     }
-    rememberFolder(folder);
+    rememberFolder(filmStrip_->folder());
     QSettings().remove("lastFile");
-    if (const auto first = filmStrip_->firstVisible()) {
-        activateShot(toQString(*first));
+    // The first shot the strip shows opens once the listing brings it (firstShotListed).
+    armFirstListed();
+}
+
+void MainWindow::armFirstListed() {
+    activateFirstListed_ = true;
+    cleanWhenArmed_ = !open_ || !open_->session.hasUnsavedChanges();
+}
+
+bool MainWindow::editedSinceAsked() {
+    if (!cleanWhenArmed_ || !open_) {
+        return false;
     }
+    try {
+        developPanel_->finishPendingEdit();
+    } catch (const std::exception&) {
+        // The edit stays open, and counts as unsaved below.
+    }
+    return open_->session.hasUnsavedChanges();
 }
 
 void MainWindow::activateShot(const QString& primary) {
@@ -1674,8 +1824,30 @@ void MainWindow::buildFilmStripDock() {
     filmStrip_->setMarksWriter([this](const std::filesystem::path& primary,
                                       const PhotoMarks& marks) { writeMarks(primary, marks); });
     connect(filmStrip_, &FilmStrip::activationRequested, this, &MainWindow::activateShot);
+    // Dropping the subfolders may take the open photograph out of the strip: ask about its
+    // unsaved edits first, and move on to the first shot that is left.
+    filmStrip_->setSubfoldersLeaveGuard([this] { return confirmLeavingPhoto(); });
+    connect(filmStrip_, &FilmStrip::includeSubfoldersToggled, this, [this](bool include) {
+        // The open photograph is active again if the new listing brings it, before the first
+        // shot is announced; if it does not, the first shot opens. An empty listing leaves the
+        // photograph open, without an active shot.
+        if (!include && open_) {
+            armFirstListed();
+        }
+    });
+    connect(filmStrip_, &FilmStrip::firstShotListed, this, [this](const QString& primary) {
+        // Not when the user, or a file opened since, has made a shot active already. Nor when
+        // the open photograph was edited while the listing was on its way: leaving it was asked
+        // about before (openFolder, or the subfolders' guard), and is not asked twice.
+        if (std::exchange(activateFirstListed_, false) && !filmStrip_->activePrimary() &&
+            !editedSinceAsked()) {
+            activateShot(primary);
+        }
+    });
+    // A listing that brought no shot opens nothing, now or at a later listing.
+    connect(filmStrip_, &FilmStrip::listingEnded, this, [this] { activateFirstListed_ = false; });
     connect(filmStrip_, &FilmStrip::folderRequested, this, &MainWindow::openFolderWithDialog);
-    connect(filmStrip_, &FilmStrip::exportRequested, this, &MainWindow::exportWithDialog);
+    connect(filmStrip_, &FilmStrip::exportRequested, this, &MainWindow::exportShots);
     connect(filmStrip_, &FilmStrip::sidecarChangedExternally, this,
             &MainWindow::sidecarChangedOnDisk);
 }
@@ -1724,8 +1896,9 @@ void MainWindow::sidecarChangedOnDisk(const QString& primary) {
         const DecodeOptions decodedOptions = open_->decodedOptions;
         auto cameraPreview = std::move(open_->cameraPreview);
         auto lastCropImage = std::move(open_->lastCropImage);
-        open_.emplace(OpenPhoto{EditSession(std::move(photo)), std::move(decoded), decodedOptions,
-                                std::move(cameraPreview), std::move(lastCropImage)});
+        open_.emplace(OpenPhoto{EditSession(std::move(photo), lensDatabase_), std::move(decoded),
+                                decodedOptions, std::move(cameraPreview),
+                                std::move(lastCropImage)});
         refreshPanel(); // Re-decodes if the sidecar's negative is not the shown pixels'.
         statusLine_->showMessage(tr("Reloaded %1: its sidecar changed on disk.").arg(name), 5000);
     } catch (const std::exception& error) {
@@ -1777,7 +1950,14 @@ void MainWindow::exportWithDialog() {
         const ExportSettings settings = dialog.settings();
         saveSettings(settings, store);
 
-        const std::filesystem::path suggested = suggestedPath(photo.path(), settings.format);
+        // Starts in the folder of the last export, of one photograph or of several.
+        std::filesystem::path suggested = suggestedPath(photo.path(), settings.format);
+        const std::filesystem::path lastFolder(
+            store.value(QStringLiteral("export/lastFolder")).toString().toStdU16String());
+        std::error_code lastError;
+        if (!lastFolder.empty() && std::filesystem::is_directory(lastFolder, lastError)) {
+            suggested = lastFolder / suggested.filename();
+        }
         const QString chosen = QFileDialog::getSaveFileName(
             this, tr("Export Image"), toQString(suggested), nameFilterFor(settings.format));
         if (chosen.isEmpty()) {
@@ -1785,6 +1965,7 @@ void MainWindow::exportWithDialog() {
         }
         const std::filesystem::path typed(chosen.toStdU16String());
         const std::filesystem::path path = withSuffix(typed, settings.format);
+        store.setValue(QStringLiteral("export/lastFolder"), toQString(path.parent_path()));
         if (isSameFile(path, photo.path())) {
             QMessageBox::warning(this, tr("Cannot Export Photograph"),
                                  tr("%1\n\nThis is the photograph itself; the export would "
@@ -1804,6 +1985,9 @@ void MainWindow::exportWithDialog() {
         const std::uint64_t id = exportQueue_.enqueue(
             {.state = photo.state(),
              .decode = decodeOptions,
+             // Resolved on the export thread, against the database, by the same code as
+             // everything else: the export applies the corrections the photograph asks for.
+             .document = photo,
              .input = photo.path(),
              // Only pixels made with the job's options; else the export thread decodes
              // for itself.
@@ -1821,6 +2005,147 @@ void MainWindow::exportWithDialog() {
     }
 }
 
+void MainWindow::exportShots(const QStringList& primaries) {
+    if (primaries.isEmpty()) {
+        return;
+    }
+    try {
+        std::vector<std::filesystem::path> sources;
+        for (const QString& primary : primaries) {
+            sources.emplace_back(primary.toStdU16String());
+        }
+        // The jobs use the saved state of every shot, the open one included; say so if that
+        // leaves something out.
+        QString note;
+        if (open_) {
+            developPanel_->finishPendingEdit();
+            const auto& photo = open_->session.photo();
+            if (open_->session.hasUnsavedChanges() &&
+                std::ranges::any_of(
+                    sources, [&](const auto& each) { return isSameFile(each, photo.path()); })) {
+                note = tr("exported the saved settings of %1; its unsaved edits are not included")
+                           .arg(toQString(photo.path().filename()));
+            }
+        }
+
+        QSettings store;
+        const ExportSettings initial = restoreSettings(store);
+        // The custom size starts at the stored box; there is no one frame to start it at.
+        const ImageSize frame = initial.width > 0 && initial.height > 0
+                                    ? ImageSize{initial.width, initial.height}
+                                    : ImageSize{3840, 2160};
+        std::optional<ExportSettings> chosen;
+        if (exportPrompts_.settings) {
+            chosen = exportPrompts_.settings(initial, frame);
+        } else {
+            ExportDialog dialog(initial, frame, this);
+            if (dialog.exec() == QDialog::Accepted) {
+                chosen = dialog.settings();
+            }
+        }
+        if (!chosen) {
+            return;
+        }
+        const ExportSettings settings = *chosen;
+        saveSettings(settings, store);
+
+        const QString lastKey = QStringLiteral("export/lastFolder");
+        std::filesystem::path start(store.value(lastKey).toString().toStdU16String());
+        std::error_code ignored;
+        if (start.empty() || !std::filesystem::is_directory(start, ignored)) {
+            start = sources.front().parent_path();
+        }
+        std::filesystem::path folder;
+        if (exportPrompts_.folder) {
+            folder = exportPrompts_.folder(start);
+        } else {
+            folder = std::filesystem::path(
+                QFileDialog::getExistingDirectory(this, tr("Export To"), toQString(start))
+                    .toStdU16String());
+        }
+        if (folder.empty()) {
+            return;
+        }
+        store.setValue(lastKey, toQString(folder));
+
+        const std::vector<std::filesystem::path> targets =
+            targetPaths(sources, folder, settings.format);
+        auto batch = std::make_shared<ExportBatch>();
+        std::vector<std::size_t> wanted;
+        std::size_t existing = 0;
+        for (std::size_t i = 0; i < targets.size(); ++i) {
+            // The names avoid the listed sources; this also catches links and letter case.
+            if (std::ranges::any_of(
+                    sources, [&](const auto& source) { return isSameFile(targets[i], source); })) {
+                ++batch->skipped;
+                batch->details << tr("%1 skipped: the export would overwrite a photograph")
+                                      .arg(toQString(targets[i]));
+                continue;
+            }
+            if (std::filesystem::exists(targets[i], ignored)) {
+                ++existing;
+            }
+            wanted.push_back(i);
+        }
+        bool skipExisting = false;
+        if (existing > 0) {
+            ExistingChoice choice = ExistingChoice::Cancel;
+            if (exportPrompts_.existing) {
+                choice = exportPrompts_.existing(existing);
+            } else {
+                QMessageBox box(
+                    QMessageBox::Question, tr("Export Images"),
+                    tr("%n file(s) already exist.", nullptr, static_cast<int>(existing)),
+                    QMessageBox::NoButton, this);
+                QPushButton* replace = box.addButton(tr("Replace all"), QMessageBox::AcceptRole);
+                QPushButton* skip = box.addButton(tr("Skip existing"), QMessageBox::AcceptRole);
+                box.addButton(QMessageBox::Cancel);
+                box.setDefaultButton(skip);
+                box.exec();
+                if (box.clickedButton() == replace) {
+                    choice = ExistingChoice::ReplaceAll;
+                } else if (box.clickedButton() == skip) {
+                    choice = ExistingChoice::SkipExisting;
+                }
+            }
+            if (choice == ExistingChoice::Cancel) {
+                return;
+            }
+            skipExisting = choice == ExistingChoice::SkipExisting;
+        }
+
+        batch->note = note;
+        for (const std::size_t i : wanted) {
+            if (skipExisting && std::filesystem::exists(targets[i], ignored)) {
+                ++batch->skipped;
+                continue;
+            }
+            ExportJob job;
+            job.fromSaved = true;
+            job.input = sources[i];
+            job.request = requestOf(settings);
+            job.options = optionsOf(settings);
+            job.path = targets[i];
+            job.metadata = ExportMetadata{
+                .source = sources[i], .marks = {}, .selection = selectionOf(settings)};
+            const std::uint64_t id = exportQueue_.enqueue(std::move(job));
+            ++batch->total;
+            exportBatches_.emplace(id, batch);
+            exportNames_.emplace(id, toQString(targets[i].filename()));
+        }
+        if (batch->total == 0) {
+            statusLine_->showMessage(tr("Nothing to export: %n file(s) skipped.", nullptr,
+                                        static_cast<int>(batch->skipped)),
+                                     8000, batch->details.join(QLatin1Char('\n')));
+            return;
+        }
+        showExportProgress();
+    } catch (const std::exception& error) {
+        QMessageBox::warning(this, tr("Cannot Export Photographs"),
+                             QString::fromUtf8(error.what()));
+    }
+}
+
 void MainWindow::showExportProgress() {
     if (exportNames_.empty()) {
         return;
@@ -1833,12 +2158,65 @@ void MainWindow::showExportProgress() {
 }
 
 void MainWindow::showExportResult(const ExportResult& result) {
+    // A job of exportShots reports into its batch: one summary at the end, no box per file.
+    if (const auto batchIt = exportBatches_.find(result.id); batchIt != exportBatches_.end()) {
+        const std::shared_ptr<ExportBatch> batch = batchIt->second;
+        exportBatches_.erase(batchIt);
+        exportNames_.erase(result.id);
+        constexpr qsizetype maxDetails = 8;
+        if (result.error.empty()) {
+            ++batch->written;
+            for (const auto& notice : result.lensNotices) {
+                batch->details << QString::fromStdString(notice);
+            }
+            for (const auto& warning : result.warnings) {
+                batch->details << QString::fromStdString(warning);
+            }
+        } else {
+            ++batch->failed;
+            batch->details.prepend(tr("%1: %2").arg(toQString(result.path.filename()),
+                                                    QString::fromStdString(result.error)));
+        }
+        if (batch->written + batch->failed < batch->total) {
+            showExportProgress();
+        } else {
+            QString text = tr("Exported %1 of %2 files").arg(batch->written).arg(batch->total);
+            if (batch->failed > 0) {
+                text += tr(", %1 failed").arg(batch->failed);
+            }
+            if (batch->skipped > 0) {
+                text += tr(", %1 skipped").arg(batch->skipped);
+            }
+            if (!batch->note.isEmpty()) {
+                text += tr("; %1").arg(batch->note);
+            }
+            QStringList shown = batch->details.mid(0, maxDetails);
+            if (batch->details.size() > maxDetails) {
+                shown << tr("…and %1 more").arg(batch->details.size() - maxDetails);
+            }
+            statusLine_->showMessage(text, batch->failed > 0 ? 20000 : 8000,
+                                     shown.join(QLatin1Char('\n')));
+        }
+        if (exportNames_.empty() && closeWhenIdle_) {
+            close();
+        }
+        return;
+    }
     // A result names its job; one whose job was cancelled has no name left.
     if (const auto found = exportNames_.find(result.id); found != exportNames_.end()) {
         const QString name = found->second;
         exportNames_.erase(found);
         if (result.error.empty()) {
-            if (result.warnings.empty()) {
+            if (!result.lensNotices.empty()) {
+                // The export went ahead without the corrections that could not be applied.
+                QStringList details;
+                for (const auto& notice : result.lensNotices) {
+                    details << QString::fromStdString(notice);
+                }
+                statusLine_->showMessage(
+                    tr("Exported %1 without lens corrections: %2").arg(name, details.first()),
+                    10000, details.join(QLatin1Char('\n')));
+            } else if (result.warnings.empty()) {
                 statusLine_->showMessage(tr("Exported %1").arg(name), 5000);
             } else {
                 QStringList details;
@@ -1957,6 +2335,7 @@ void MainWindow::closeEvent(QCloseEvent* event) {
         const std::size_t dropped = exportQueue_.cancelQueued();
         // Identifiers increase, so the dropped jobs are the newest names.
         for (std::size_t i = 0; i < dropped && !exportNames_.empty(); ++i) {
+            exportBatches_.erase(std::prev(exportNames_.end())->first);
             exportNames_.erase(std::prev(exportNames_.end()));
         }
         QMainWindow::closeEvent(event);
@@ -1975,6 +2354,12 @@ void MainWindow::requestRender() {
     resizeTimer_.stop();
     interactionTimer_.stop();
     noiseReductionTimer_.stop();
+    const LensView& lens = lensView();
+    if (lens.status.loading && open_->session.photo().negative().lens.any()) {
+        // The photograph asks for corrections the database has to resolve; a picture without them
+        // would be a wrong one. lensDatabaseLoaded asks again.
+        return;
+    }
     const DevelopState& state = open_->session.photo().state();
     const qreal ratio = photoView_->devicePixelRatioF();
     if (photoView_->isCropMode()) {
@@ -1991,7 +2376,8 @@ void MainWindow::requestRender() {
         }
         lastCropRender_.emplace(uncropped, size);
         renderIndicator_->begin();
-        latestRequest_ = previewRenderer_.request(uncropped, PreviewView::wholeFrame(size, ratio));
+        latestRequest_ = previewRenderer_.request(uncropped, lens.correction,
+                                                  PreviewView::wholeFrame(size, ratio));
         cropRequests_.emplace_back(latestRequest_, std::move(uncropped));
         return;
     }
@@ -2026,7 +2412,7 @@ void MainWindow::requestRender() {
     // commit brings the full one (ADR 044).
     view.reduced = stroking && !committingStroke_;
     renderIndicator_->begin();
-    latestRequest_ = previewRenderer_.request(state, std::move(view),
+    latestRequest_ = previewRenderer_.request(state, lens.correction, std::move(view),
                                               stroking ? Supersede::Queue : Supersede::Cancel);
 }
 
@@ -2152,8 +2538,8 @@ void MainWindow::showPhoto(Photo photo) {
     filmStrip_->releaseLiveThumbnail();
     const std::filesystem::path path = photo.path();
     const DecodeOptions decodeOptions = decodeOptionsFor(photo, false);
-    open_.emplace(OpenPhoto{EditSession(std::move(photo)), nullptr, decodeOptions, std::nullopt,
-                            std::nullopt});
+    open_.emplace(OpenPhoto{EditSession(std::move(photo), lensDatabase_), nullptr, decodeOptions,
+                            std::nullopt, std::nullopt});
     redecodeRequest_ = 0;
     failedOptions_.reset();
     renderProgress_->setPhotoOpen(true);
@@ -2173,7 +2559,10 @@ void MainWindow::showPhoto(Photo photo) {
     renderIndicator_->report(0.0, ProgressStep::Decode);
     updateEditingActions();
     refreshPanel(); // The sidecar's state at once; the render waits for the pixels.
-    rememberFolder(path.parent_path());
+    // The strip's folder, not the photograph's: with subfolders it may lie below it.
+    if (!filmStrip_->folder().empty()) {
+        rememberFolder(filmStrip_->folder());
+    }
     QSettings().setValue("lastFile", QFileInfo(toQString(path)).absoluteFilePath());
 }
 
@@ -2267,8 +2656,112 @@ void MainWindow::chooseNegative(const NegativeSettings& negative) {
     guarded([this, &negative] {
         developPanel_->finishPendingEdit();
         photoView_->maskOverlay().abandonDrag();
+        // A correction turned on records the lens it was matched to in the same step; the session
+        // does that.
         open_->session.setNegative(negative);
         refreshPanel();
+    });
+}
+
+void MainWindow::lensDatabaseLoaded(const LensDatabase* database) {
+    lensDatabase_ = database;
+    if (!open_) {
+        return;
+    }
+    // A photograph opened before the database loaded records at its next lens step.
+    open_->session.setLensDatabase(database);
+    if (!editable() || !open_->session.photo().negative().lens.any()) {
+        // Nothing shown depends on it but the lens rows (and a decode still to come asks for its
+        // own render).
+        showPanel();
+        return;
+    }
+    // The renders held back for it, and the crop mode's, were made without it.
+    lastCropRender_.reset();
+    refreshPanel();
+}
+
+const LensView& MainWindow::lensView() {
+    OpenPhoto& open = *open_;
+    const Photo& photo = open.session.photo();
+    // The profile is resolved at 0 or 100, whatever the amount in between, so that a drag of the
+    // amount scales the held profile and never asks lensfun again.
+    const float amount = photo.negative().lens.vignettingAmount;
+    LensSettings key = photo.negative().lens;
+    key.vignettingAmount = amount > 0.0F ? profileVignettingAmount : minimumVignettingAmount;
+    const bool cached =
+        open.lensKey && open.lensKey->first == key && open.lensKey->second == lensDatabase_;
+    if (cached && open.lensAmount == amount) {
+        return open.lensView;
+    }
+    const detail::TimingSpan timing("window.lens");
+    // Lets a test tell a drag that only rescales the held profile from a resolution by lensfun.
+    timing.note(cached ? "scaled" : "resolved");
+    LensView resolved;
+    if (cached) {
+        resolved = open.lensView;
+    } else {
+        try {
+            NegativeSettings negative = photo.negative();
+            negative.lens = key;
+            resolved = resolveLensView(photo.with(std::move(negative)), lensDatabase_);
+        } catch (const std::exception& error) {
+            resolved.status.applicable = true;
+            resolved.status.text = tr("No profile: %1").arg(QString::fromUtf8(error.what()));
+        }
+        resolved.profile = resolved.correction;
+    }
+    resolved.correction = withVignettingAmount(resolved.profile, amount);
+    if (!(resolved.correction == open.lensView.correction)) {
+        // What the crop mode drew, and renders on their way, were made with the other correction.
+        open.lastCropImage.reset();
+        open.cropImageFloor = latestRequest_;
+        lastCropRender_.reset();
+    }
+    open.lensView = std::move(resolved);
+    open.lensKey.emplace(key, lensDatabase_);
+    open.lensAmount = amount;
+    return open.lensView;
+}
+
+void MainWindow::chooseLens() {
+    if (!editable() || photoView_->isCropMode() || lensDatabase_ == nullptr ||
+        !lensDatabase_->loaded()) {
+        return;
+    }
+    guarded([this] {
+        developPanel_->finishPendingEdit();
+        const Photo& photo = open_->session.photo();
+        const LensFacts& facts = photo.metadata().lens;
+        LensPickerDialog dialog(*lensDatabase_,
+                                lensDatabase_->mountOf(facts.cameraMaker, facts.cameraModel),
+                                lensView().status.candidates, this);
+        if (dialog.exec() != QDialog::Accepted) {
+            return;
+        }
+        const std::optional<LensIdentity> chosen = dialog.chosen();
+        if (!chosen) {
+            return;
+        }
+        const std::optional<Photo> recorded = withChosenLens(photo, *chosen, *lensDatabase_);
+        if (!recorded) {
+            statusLine_->showMessage(tr("The lens database does not list that lens."), 6000);
+            return;
+        }
+        chooseNegative(recorded->negative());
+    });
+}
+
+void MainWindow::resetLens() {
+    if (!editable() || photoView_->isCropMode()) {
+        return;
+    }
+    guarded([this] {
+        developPanel_->finishPendingEdit();
+        // Clearing the record lets the session match again if a correction is on.
+        NegativeSettings negative = open_->session.photo().negative();
+        negative.lens.lens.reset();
+        chooseNegative(negative);
     });
 }
 

@@ -4,6 +4,8 @@
 #include "CopySections.h"
 #include "CropEditing.h"
 #include "ExportQueue.h"
+#include "ExportSettings.h"
+#include "LensSupport.h"
 #include "MaskEditing.h"
 #include "PhotoLoader.h"
 #include "PreviewRenderer.h"
@@ -23,9 +25,11 @@
 #include <QPointF>
 #include <QSize>
 #include <QString>
+#include <QStringList>
 #include <QTimer>
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <filesystem>
@@ -33,6 +37,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -73,11 +78,42 @@ public:
     /// @param parent Parent widget, usually none.
     /// @param decoder Decodes the photographs; empty for ::arraw::app::PhotoLoader::imageDecoder.
     /// A test may give one it counts calls of.
+    /// @param lensDatabase Gives the lens database, called once on a thread of its own at
+    /// startup, and by the export queue and the thumbnails when they need it; empty for the
+    /// process's own (::arraw::LensDatabase::system). The lens settings stay disabled until it
+    /// has returned. A test may give one that loads a fixture.
     explicit MainWindow(DebugLog& debugLog, QWidget* parent = nullptr,
-                        PhotoLoader::Decoder decoder = {});
+                        PhotoLoader::Decoder decoder = {}, LensDatabaseSource lensDatabase = {});
 
     /// @brief Cuts the panel's signals off before the members they use are gone.
     ~MainWindow() override;
+
+    /// @brief Answer to the question about files that already exist in an export's folder.
+    enum class ExistingChoice {
+        ReplaceAll,   ///< Write every file, replacing those that exist.
+        SkipExisting, ///< Write only the files that do not exist yet.
+        Cancel,       ///< Export nothing.
+    };
+
+    /// @brief The questions exportShots asks, which a test may answer without a dialog.
+    ///
+    /// Each member left empty is the real dialog.
+    struct ExportPrompts {
+        /// Gives the settings to export with, or nothing when cancelled; receives the settings
+        /// stored last and a frame size to start the custom size at.
+        std::function<std::optional<ExportSettings>(const ExportSettings&, ImageSize)> settings;
+        /// Gives the folder to export into, or an empty path when cancelled; receives where
+        /// to start.
+        std::function<std::filesystem::path(const std::filesystem::path&)> folder;
+        /// Answers for the number of files that exist.
+        std::function<ExistingChoice(std::size_t)> existing;
+    };
+
+    /// @brief Replaces the dialogs of exportShots; for tests.
+    /// @param prompts Answers; a member left empty keeps the real dialog.
+    void setExportPrompts(ExportPrompts prompts) {
+        exportPrompts_ = std::move(prompts);
+    }
 
     /// @brief Opens a startup file or folder, restoring the last one when none is supplied.
     void openInitialPath(const std::optional<std::filesystem::path>& path = std::nullopt);
@@ -180,6 +216,16 @@ private:
     /// carries on while the export runs.
     void exportWithDialog();
 
+    /// @brief Exports shots as they were saved, into one folder chosen once.
+    ///
+    /// Asks for the settings once, then for the folder (starting at the last one used), names
+    /// the files with ::arraw::app::targetPaths, asks once about files that exist, and queues
+    /// one job per file. The jobs read each shot's sidecar on the export thread, so the open
+    /// photograph's unsaved edits are not included; the summary says so. The jobs report as one
+    /// batch: a summary when the last finishes, not a message per file.
+    /// @param primaries Primary files of the shots.
+    void exportShots(const QStringList& primaries);
+
     /// @brief Reports a finished export, and closes the window if it was waiting for them.
     /// @param result Outcome delivered by the export queue.
     void showExportResult(const ExportResult& result);
@@ -196,7 +242,9 @@ private:
     /// @brief Opens a photograph the user chose, and shows its folder in the film strip.
     ///
     /// The file itself is developed, even when it is a companion of a shot (a JPEG beside a
-    /// RAW); the strip selects the shot that holds it. Nothing changes if the file's
+    /// RAW); the strip selects the shot that holds it, once listed: a file below the strip's
+    /// folder that its listing under way has yet to bring keeps the strip as it is. Nothing
+    /// changes if the file's
     /// description cannot be read or the user cancels leaving the open photograph; its pixels
     /// are decoded afterwards, off the GUI thread (showPhoto()).
     /// @param path File to open.
@@ -207,9 +255,20 @@ private:
 
     /// @brief Fills the film strip with a folder and develops its first shot.
     ///
-    /// Asks about unsaved changes first. The first shot is the first the strip's filter shows.
+    /// Asks about unsaved changes first. The first shot is the first the strip's filter shows;
+    /// it is opened when the listing brings it, unless a shot was made active by then, or the
+    /// photograph still open was edited in the meantime (leaving it is not asked about twice).
     /// @param folder Folder to open.
     void openFolder(const std::filesystem::path& folder);
+
+    /// @brief Makes the first shot the strip's listing brings open, once it arrives.
+    void armFirstListed();
+
+    /// @brief Tells whether the open photograph gained unsaved changes since armFirstListed,
+    /// having had none then.
+    ///
+    /// Finishes an edit in progress first, as leaving the photograph would.
+    [[nodiscard]] bool editedSinceAsked();
 
     /// @brief Develops a shot of the strip, when the user lets go of the open photograph.
     ///
@@ -286,6 +345,12 @@ private:
     ///
     /// Ignored when no edit is open: a failure cancelled it, and the rest of that drag is dropped.
     void updateEdit(const DevelopState& state);
+
+    /// @brief Takes the negative settings a drag in the Negative group has reached.
+    ///
+    /// For the vignetting amount (ADR 050): the open edit keeps them and the preview shows the
+    /// scaled correction, without decoding again. Ignored when no edit is open.
+    void updateNegativeEdit(const NegativeSettings& negative);
 
     /// @brief Closes the edit as one history step.
     /// @param origin Kind of step it is.
@@ -418,6 +483,10 @@ private:
     /// @param geometry Geometry the panel's edited state carries.
     [[nodiscard]] GeometrySettings reconciledGeometry(const GeometrySettings& geometry);
 
+    /// @brief Shows the open photograph's state in the develop panel, lens rows included.
+    /// @pre A photograph is open.
+    void showPanel();
+
     /// @brief Shows the session's state in the panel and updates the actions, then asks for a
     /// render.
     /// @param renderDelay Time to hold the render back; a newer request or edit replaces it.
@@ -469,8 +538,28 @@ private:
     /// @brief Takes the negative settings the user chose in the Negative group, as one step.
     ///
     /// Not in the crop mode, whose history it would join.
+    /// The step that turns a lens correction on records the matched lens with it (ADR 050,
+    /// section 6), so undo removes both.
     /// @param negative Settings to carry from now on.
     void chooseNegative(const NegativeSettings& negative);
+
+    /// @brief Takes the lens database the loader thread made, and shows what it enables.
+    /// @param database The database, valid for the life of the program.
+    void lensDatabaseLoaded(const LensDatabase* database);
+
+    /// @brief Gives the open photograph's lens corrections and what the panel says of them.
+    ///
+    /// Resolved when the corrections (the amount only as 0 or 100), the recorded lens or the
+    /// database change, and kept until they do again. Matching a lens takes some milliseconds with
+    /// the full database.
+    /// @pre A photograph is open.
+    [[nodiscard]] const LensView& lensView();
+
+    /// @brief Lets the user choose the lens the corrections are for, from the database.
+    void chooseLens();
+
+    /// @brief Forgets the recorded lens and matches the photograph's again.
+    void resetLens();
 
     /// @brief Starts, keeps or cancels the re-decode that makes the shown pixels match the
     /// photograph's negative settings (ADR 049).
@@ -525,12 +614,25 @@ private:
         /// Newest render request made before the pixels last changed; the crop mode's cached
         /// image is made only from renders of later requests.
         std::uint64_t cropImageFloor = 0;
+        /// What lensView was resolved for: the corrections and recorded lens, and the database
+        /// (null while it loads). Empty before the first resolution.
+        std::optional<std::pair<LensSettings, const LensDatabase*>> lensKey = std::nullopt;
+        /// The vignetting amount lensView's correction is scaled to; the key holds it as 0 or 100.
+        float lensAmount = 0.0F;
+        /// The lens corrections and the panel's words about them, as of lensKey.
+        LensView lensView = {};
     };
 
     DebugLog& debugLog_;
     DebugWindow* debugWindow_ = nullptr;
     PhotoView* photoView_ = nullptr;
     FilmStrip* filmStrip_ = nullptr;
+    /// Whether the first shot the strip's listing brings is to be opened (a folder was opened,
+    /// or the subfolders that held the open photograph were dropped).
+    bool activateFirstListed_ = false;
+    /// Whether the open photograph had no unsaved changes when activateFirstListed_ was set: the
+    /// question of leaving it was answered then, or not needed.
+    bool cleanWhenArmed_ = true;
     QDockWidget* stripDock_ = nullptr;
     QMenu* viewMenu_ = nullptr;
     CullingActions* culling_ = nullptr;
@@ -557,6 +659,8 @@ private:
     bool maximizedBeforeFullScreen_ = false;
     /// Full Screen toggle (F11), checked while the window is full screen.
     QAction* fullScreenAction_ = nullptr;
+    /// View menu's "Refresh Folder", on at once when the strip shows a folder.
+    QAction* refreshFolderAction_ = nullptr;
     /// Hide Panels toggle (F12), checked while the panels are hidden.
     QAction* hidePanelsAction_ = nullptr;
     /// The dock toggles of F7, F8 and F9.
@@ -656,6 +760,22 @@ private:
     /// Renders of the crop mode on their way, with the state each shows, oldest first.
     std::deque<std::pair<std::uint64_t, DevelopState>> cropRequests_;
 
+    /// @brief What the jobs of one exportShots call have done so far.
+    struct ExportBatch {
+        std::size_t total = 0;   ///< Jobs queued.
+        std::size_t written = 0; ///< Files written.
+        std::size_t failed = 0;  ///< Jobs that failed.
+        std::size_t skipped = 0; ///< Shots left out before queueing.
+        QStringList details;     ///< Failures, then skips and notices, for the tooltip.
+        QString note;            ///< Sentence the summary ends with, or empty.
+    };
+
+    /// Batch of each queued job of exportShots, by the identifier the queue gave.
+    std::map<std::uint64_t, std::shared_ptr<ExportBatch>> exportBatches_;
+
+    /// Answers that replace the export questions; empty members ask.
+    ExportPrompts exportPrompts_;
+
     /// File names of the exports that have not reported yet, by the identifier the queue gave.
     std::map<std::uint64_t, QString> exportNames_;
 
@@ -664,6 +784,13 @@ private:
 
     /// Desktop preferences used by this application session.
     AppSettings runningSettings_;
+
+    /// Gives the lens database; called on the loader thread, the export thread and the
+    /// thumbnail thread, never on the interface thread.
+    LensDatabaseSource lensSource_;
+
+    /// The lens database once the loader thread returned it; null while it loads.
+    const LensDatabase* lensDatabase_ = nullptr;
 
     /// Worker that renders the preview.
     ///
@@ -685,6 +812,12 @@ private:
     /// Declared last, so it is destroyed first: it cancels the decode in
     /// progress and waits for its threads; see previewRenderer_.
     PhotoLoader photoLoader_;
+
+    /// Thread that loads the lens database at startup (ADR 050, step 7).
+    ///
+    /// Declared after every worker, so it is destroyed, and joined, first: the load cannot be
+    /// interrupted, so closing the window while it runs waits for it.
+    std::jthread lensLoader_;
 };
 
 } // namespace arraw::app

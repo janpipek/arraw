@@ -1,16 +1,21 @@
 #include "PyBindings.h"
 
+#include <ColorEncoding.h>
 #include <DevelopState.h>
 #include <EditSession.h>
+#include <LensDatabase.h>
+#include <LensResolution.h>
 #include <NegativeSettings.h>
 #include <Photo.h>
 #include <PhotoMarks.h>
 
 #include <cstddef>
+#include <new>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <variant>
 
 namespace arraw::python {
 
@@ -50,6 +55,9 @@ void bindSession(nb::module_& module) {
         .def_ro("detail", &HistoryStep::detail,
                 "What the origin applies to, such as a preset's name; empty otherwise.")
         .def_ro("negative", &HistoryStep::negative, "Negative settings after the step.")
+        .def_prop_ro(
+            "lens", [](const HistoryStep& step) { return step.negative.lens; },
+            "Lens settings after the step; the same as `negative.lens`.")
         .def(nb::self == nb::self)
         .def("__repr__", [](const HistoryStep& step) {
             return "HistoryStep(state=" + reprValue(step.state) +
@@ -68,8 +76,22 @@ void bindSession(nb::module_& module) {
                 "Group every key belongs to; None when there are no keys or they span groups.")
         .def_prop_ro(
             "negative", [](const ChangeDescription& change) { return change.negative; },
-            "Keys of the negative settings that differ ('demosaic'); empty unless made by "
-            "describe_change over two history steps.")
+            "Keys of the negative settings that differ, in the order 'demosaic', "
+            "'lensDistortion', 'lensVignetting', 'lensLateralCa' and 'lens' (the recorded lens); "
+            "empty unless made by describe_change over two history steps.")
+        .def_prop_ro(
+            "lens",
+            [](const ChangeDescription& change) {
+                std::vector<std::string> keys;
+                for (const std::string_view key : change.negative) {
+                    if (key.starts_with("lens")) {
+                        keys.emplace_back(key);
+                    }
+                }
+                return keys;
+            },
+            "The lens keys of `negative`: which corrections were switched and whether the "
+            "recorded lens changed.")
         .def(nb::self == nb::self)
         .def("__repr__", [](const ChangeDescription& change) {
             return "ChangeDescription(keys=" + reprValue(change.keys) +
@@ -119,7 +141,23 @@ void bindSession(nb::module_& module) {
     nb::class_<EditSession>(module, "EditSession",
                             "One photograph being edited: the document as it stands, and how it "
                             "got there.")
-        .def(nb::init<Photo>(), "photo"_a)
+        .def(
+            "__init__",
+            [](EditSession* self, Photo photo, const LensDatabase* database) {
+                // None is the process's database, but only a RAW has lens corrections to record.
+                if (database == nullptr &&
+                    !std::holds_alternative<NamedEncoding>(photo.metadata().encoding)) {
+                    database = withoutGil([] { return &LensDatabase::system(); });
+                }
+                new (self) EditSession(std::move(photo), database);
+            },
+            "photo"_a, "lens_database"_a.none() = nb::none(), nb::keep_alive<1, 3>(),
+            "Start editing `photo`. `lens_database` is the database the session records lens "
+            "matches in (None: the process's, loaded on first use, for a RAW only; other files "
+            "have none). It is kept alive as long as the session.")
+        .def_prop_ro("lens_database", &EditSession::lensDatabase, nb::rv_policy::reference,
+                     nb::sig("def lens_database(self) -> LensDatabase | None"),
+                     "The lens database the session records matches in, or None (not a RAW).")
         .def_prop_ro("photo", &EditSession::photo, nb::rv_policy::copy,
                      "Current photograph, including an edit in progress.")
         .def("begin", &EditSession::begin, "Open an edit; one already open is committed first.")
@@ -148,6 +186,65 @@ void bindSession(nb::module_& module) {
              "detail"_a = "",
              "Replace the negative settings as one history step; equal ones leave none. An open "
              "edit is committed first.")
+        .def("update_negative", &EditSession::updateNegative, "negative"_a,
+             "Change the negative settings provisionally, inside the open edit, so that a drag "
+             "of a lens amount is one history step on commit. RuntimeError when no edit is open "
+             "and ValueError when the settings are invalid, with nothing changed.")
+        .def(
+            "set_lens_corrections",
+            [](EditSession& session, std::optional<bool> distortion,
+               const nb::typed<nb::object, float>& vignettingAmount, std::optional<bool> lateralCa,
+               EditOrigin origin, std::string detail) {
+                NegativeSettings negative = session.photo().negative();
+                negative.lens.distortion = distortion.value_or(negative.lens.distortion);
+                if (!vignettingAmount.is_none()) {
+                    negative.lens.vignettingAmount =
+                        convertValue<float>(vignettingAmount, "vignetting_amount");
+                }
+                negative.lens.lateralCa = lateralCa.value_or(negative.lens.lateralCa);
+                session.setNegative(std::move(negative), origin, std::move(detail));
+            },
+            nb::kw_only(), "distortion"_a = nb::none(), "vignetting_amount"_a = nb::none(),
+            "lateral_ca"_a = nb::none(), "origin"_a = EditOrigin::Edit, "detail"_a = "",
+            "Set the lens corrections given (None keeps one) as one history step; "
+            "`vignetting_amount` is a number from 0 to 150 (100 is the profile; a bool is "
+            "refused). A correction turned on for a photograph with no recorded lens records "
+            "the lens matched from its EXIF in the same step, in the session's `lens_database`, "
+            "so undo takes both away; switching off keeps the record. Equal settings leave no "
+            "step.")
+        .def(
+            "choose_lens",
+            [](EditSession& session, const std::string& maker, const std::string& model,
+               const LensDatabase* database, EditOrigin origin, std::string detail) {
+                if (database == nullptr) {
+                    database = session.lensDatabase();
+                }
+                const auto chosen = withoutGil([&] {
+                    return withChosenLens(session.photo(), LensIdentity{maker, model},
+                                          lensDatabaseOr(database));
+                });
+                if (!chosen) {
+                    throw std::invalid_argument("'" + maker + "|" + model +
+                                                "' is not in the lens database, or the "
+                                                "photograph is not a RAW");
+                }
+                session.setNegative(chosen->negative(), origin, std::move(detail));
+            },
+            "maker"_a, "model"_a, nb::arg("database").none() = nb::none(),
+            "origin"_a = EditOrigin::Edit, "detail"_a = "",
+            "Record the lens the photographer chose, as one history step; ValueError when the "
+            "database (default: the session's, else the process's) does not list it. The "
+            "switches stay as they are.")
+        .def(
+            "reset_lens",
+            [](EditSession& session, EditOrigin origin, std::string detail) {
+                NegativeSettings negative = session.photo().negative();
+                negative.lens.lens.reset();
+                session.setNegative(std::move(negative), origin, std::move(detail));
+            },
+            "origin"_a = EditOrigin::Edit, "detail"_a = "",
+            "Forget the recorded lens, as one history step; the session matches the file's EXIF "
+            "again when a correction is on (\"reset to automatic\").")
         .def_prop_ro("history", &EditSession::history, nb::rv_policy::copy,
                      "Steps taken so far, the opening state first; a new list on every access.")
         .def_prop_ro("position", &EditSession::position,

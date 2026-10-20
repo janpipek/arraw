@@ -7,6 +7,9 @@
 #include <Edits.h>
 #include <ImageExport.h>
 #include <ImageImport.h>
+#include <LensCorrection.h>
+#include <LensDatabase.h>
+#include <LensResolution.h>
 #include <LocalAdjustmentEdits.h>
 #include <NegativeSettings.h>
 #include <Photo.h>
@@ -300,8 +303,9 @@ void bindPhoto(nb::module_& m) {
     bindFrozen<NegativeSettings>(
         m, "NegativeSettings",
         "What shapes the decoded negative, as opposed to what is done with it: a RAW's "
-        "demosaic. Changing it costs a decode; no develop edit can reach it.",
-        field("demosaic", &NegativeSettings::demosaic));
+        "demosaic and its lens corrections. Changing the demosaic costs a decode; the lens "
+        "corrections are a stage of the render and cost none; no develop edit can reach either.",
+        field("demosaic", &NegativeSettings::demosaic), field("lens", &NegativeSettings::lens));
 
     bindFrozen<PhotoMarks>(
         m, "PhotoMarks", "Culling marks of a photograph: rating -1 (rejected) to 5, and a label.",
@@ -591,44 +595,56 @@ void bindPhoto(nb::module_& m) {
     m.def(
         "develop",
         [](const ImageBuffer& source, const std::optional<DevelopState>& state,
-           const nb::object& size, const nb::object& filter, bool allowUpscale) {
+           const nb::object& size, const nb::object& filter, bool allowUpscale,
+           const std::optional<LensCorrection>& lens) {
             const RenderRequest request = requestFrom(size, filter, allowUpscale);
             return withoutGil([&] {
-                return develop(source, state.value_or(defaultStateFor(source.encoding())), request);
+                return develop(source, state.value_or(defaultStateFor(source.encoding())),
+                               lens.value_or(LensCorrection{}), request);
             });
         },
         "source"_a, "state"_a = nb::none(), nb::kw_only(), "size"_a = nb::none(),
         "filter"_a = requestDefaults.filter,
-        "allow_upscale"_a = (requestDefaults.upscale == Upscale::Allowed),
+        "allow_upscale"_a = (requestDefaults.upscale == Upscale::Allowed), "lens"_a = nb::none(),
         nb::sig("def develop(source: ImageBuffer, state: DevelopState | None = None, *, "
                 "size: int | tuple[int, int] | float | None = None, filter: ResizeFilter = "
-                "arraw._arraw.ResizeFilter.LANCZOS3, allow_upscale: bool = False) -> ImageBuffer"),
+                "arraw._arraw.ResizeFilter.LANCZOS3, allow_upscale: bool = False, "
+                "lens: LensCorrection | None = None) -> ImageBuffer"),
         "Develop a decoded buffer on the CPU; with no state, the defaults of its kind "
         "(default_state: colour noise reduction for a RAW, nothing for anything else). "
         "`size` renders the cropped result smaller: an int is the long edge, a (width, height) "
         "tuple a box to fit inside, a float a scale factor. Sizes only shrink unless "
-        "`allow_upscale`.");
+        "`allow_upscale`. `lens` is the correction to apply to the sensor frame, as "
+        "Photo.lens_correction resolves it; None applies none, since a buffer knows nothing "
+        "of its photograph.");
 
     m.def(
         "develop",
         [](const Photo& photo, const std::optional<DevelopState>& state, const nb::object& size,
-           const nb::object& filter, bool allowUpscale) {
+           const nb::object& filter, bool allowUpscale, const LensDatabase* lensDatabase) {
             const RenderRequest request = requestFrom(size, filter, allowUpscale);
             // Reported once, by open(), as in Photo.load.
             return withoutGil([&] {
                 const ImageBuffer source =
                     loadImage(photo.path(), discardedDiagnostics(), decodeOptionsFor(photo, false));
-                return develop(source, state.value_or(photo.state()), request);
+                // The photograph's own lens corrections, if it asks for any (ADR 050).
+                return develop(source, state.value_or(photo.state()),
+                               lensCorrectionOf(photo, lensDatabase), request);
             });
         },
         "source"_a, "state"_a = nb::none(), nb::kw_only(), "size"_a = nb::none(),
         "filter"_a = requestDefaults.filter,
         "allow_upscale"_a = (requestDefaults.upscale == Upscale::Allowed),
+        "lens_database"_a.none() = nb::none(),
         nb::sig("def develop(source: Photo, state: DevelopState | None = None, *, size: int "
                 "| tuple[int, int] | float | None = None, filter: ResizeFilter = "
-                "arraw._arraw.ResizeFilter.LANCZOS3, allow_upscale: bool = False) -> ImageBuffer"),
+                "arraw._arraw.ResizeFilter.LANCZOS3, allow_upscale: bool = False, "
+                "lens_database: LensDatabase | None = None) -> ImageBuffer"),
         "Decode a photograph and develop it with its own state unless `state` is given; "
-        "`size`, `filter` and `allow_upscale` are as for a decoded buffer.");
+        "`size`, `filter` and `allow_upscale` are as for a decoded buffer. The photograph's "
+        "own lens corrections are applied when it asks for any (Photo.lens_correction), looked "
+        "up in `lens_database`, by default the process's; what cannot be resolved is logged on "
+        "the 'arraw' logger and the render goes ahead without it.");
 
     nb::enum_<Tap>(m, "Tap", "Named position inside the pointwise chain that sample() stops at.")
         .value("CURVE_INPUT", Tap::CurveInput,
@@ -638,40 +654,47 @@ void bindPhoto(nb::module_& m) {
     m.def(
         "sample",
         [](const ImageBuffer& source, Tap tap, const std::optional<DevelopState>& state,
-           const nb::object& size, const nb::object& filter, bool allowUpscale) {
+           const nb::object& size, const nb::object& filter, bool allowUpscale,
+           const std::optional<LensCorrection>& lens) {
             const RenderRequest request = requestFrom(size, filter, allowUpscale);
             return withoutGil([&] {
-                return sample(source, state.value_or(defaultStateFor(source.encoding())), tap,
-                              request);
+                return sample(source, state.value_or(defaultStateFor(source.encoding())),
+                              lens.value_or(LensCorrection{}), tap, request);
             });
         },
         "source"_a, "tap"_a, "state"_a = nb::none(), nb::kw_only(), "size"_a = nb::none(),
         "filter"_a = requestDefaults.filter,
-        "allow_upscale"_a = (requestDefaults.upscale == Upscale::Allowed),
+        "allow_upscale"_a = (requestDefaults.upscale == Upscale::Allowed), "lens"_a = nb::none(),
         nb::sig("def sample(source: ImageBuffer, tap: Tap, state: DevelopState | None = None, *, "
                 "size: int | tuple[int, int] | float | None = None, filter: ResizeFilter = "
-                "arraw._arraw.ResizeFilter.LANCZOS3, allow_upscale: bool = False) -> ImageBuffer"),
+                "arraw._arraw.ResizeFilter.LANCZOS3, allow_upscale: bool = False, "
+                "lens: LensCorrection | None = None) -> ImageBuffer"),
         "Develop a decoded buffer on the CPU with the chain stopped at `tap`, to measure it: the "
         "same frame and size as develop() with the same arguments, in the tap's encoding.");
 
     m.def(
         "sample",
         [](const Photo& photo, Tap tap, const std::optional<DevelopState>& state,
-           const nb::object& size, const nb::object& filter, bool allowUpscale) {
+           const nb::object& size, const nb::object& filter, bool allowUpscale,
+           const LensDatabase* lensDatabase) {
             const RenderRequest request = requestFrom(size, filter, allowUpscale);
             return withoutGil([&] {
                 const ImageBuffer source =
                     loadImage(photo.path(), discardedDiagnostics(), decodeOptionsFor(photo, false));
-                return sample(source, state.value_or(photo.state()), tap, request);
+                return sample(source, state.value_or(photo.state()),
+                              lensCorrectionOf(photo, lensDatabase), tap, request);
             });
         },
         "source"_a, "tap"_a, "state"_a = nb::none(), nb::kw_only(), "size"_a = nb::none(),
         "filter"_a = requestDefaults.filter,
         "allow_upscale"_a = (requestDefaults.upscale == Upscale::Allowed),
+        "lens_database"_a.none() = nb::none(),
         nb::sig("def sample(source: Photo, tap: Tap, state: DevelopState | None = None, *, "
                 "size: int | tuple[int, int] | float | None = None, filter: ResizeFilter = "
-                "arraw._arraw.ResizeFilter.LANCZOS3, allow_upscale: bool = False) -> ImageBuffer"),
-        "Decode a photograph and sample it at `tap` with its own state unless `state` is given.");
+                "arraw._arraw.ResizeFilter.LANCZOS3, allow_upscale: bool = False, "
+                "lens_database: LensDatabase | None = None) -> ImageBuffer"),
+        "Decode a photograph and sample it at `tap` with its own state unless `state` is given, "
+        "through its own lens corrections as develop() applies them.");
 
     m.attr("CURVE_HISTOGRAM_BINS") = curveHistogramBins;
     // The curve_histogram signatures and docstrings below spell the default out.
@@ -715,16 +738,19 @@ void bindPhoto(nb::module_& m) {
     m.def(
         "curve_histogram",
         [](const ImageBuffer& source, const DevelopState& state, const nb::object& size,
-           bool allowUpscale) {
+           bool allowUpscale, const std::optional<LensCorrection>& lens) {
             const RenderRequest request =
                 requestFrom(size, nb::cast(curveHistogramRequest.filter), allowUpscale);
-            return withoutGil([&] { return curveHistogram(source, state, request); });
+            return withoutGil([&] {
+                return curveHistogram(source, state, lens.value_or(LensCorrection{}), request);
+            });
         },
         "source"_a, "state"_a, nb::kw_only(), "size"_a.none() = curveHistogramLongEdge,
         "allow_upscale"_a = (curveHistogramRequest.upscale == Upscale::Allowed),
+        "lens"_a = nb::none(),
         nb::sig("def curve_histogram(source: ImageBuffer, state: DevelopState, *, size: int | "
-                "tuple[int, int] | float | None = 1024, allow_upscale: bool = False) -> "
-                "CurveHistogram"),
+                "tuple[int, int] | float | None = 1024, allow_upscale: bool = False, "
+                "lens: LensCorrection | None = None) -> CurveHistogram"),
         "Sample a decoded buffer at Tap.CURVE_INPUT and count it. `size` is as for develop() "
         "and defaults to a 1024-pixel long edge; None counts the full cropped resolution. The "
         "resize is always bilinear, so no ringing reaches the end bins.");
@@ -732,20 +758,22 @@ void bindPhoto(nb::module_& m) {
     m.def(
         "curve_histogram",
         [](const Photo& photo, const std::optional<DevelopState>& state, const nb::object& size,
-           bool allowUpscale) {
+           bool allowUpscale, const LensDatabase* lensDatabase) {
             const RenderRequest request =
                 requestFrom(size, nb::cast(curveHistogramRequest.filter), allowUpscale);
             return withoutGil([&] {
                 const ImageBuffer source =
                     loadImage(photo.path(), discardedDiagnostics(), decodeOptionsFor(photo, false));
-                return curveHistogram(source, state.value_or(photo.state()), request);
+                return curveHistogram(source, state.value_or(photo.state()),
+                                      lensCorrectionOf(photo, lensDatabase), request);
             });
         },
         "source"_a, "state"_a = nb::none(), nb::kw_only(), "size"_a.none() = curveHistogramLongEdge,
         "allow_upscale"_a = (curveHistogramRequest.upscale == Upscale::Allowed),
+        "lens_database"_a.none() = nb::none(),
         nb::sig("def curve_histogram(source: Photo, state: DevelopState | None = None, *, size: "
-                "int | tuple[int, int] | float | None = 1024, allow_upscale: bool = False) -> "
-                "CurveHistogram"),
+                "int | tuple[int, int] | float | None = 1024, allow_upscale: bool = False, "
+                "lens_database: LensDatabase | None = None) -> CurveHistogram"),
         "Decode a photograph, sample it at Tap.CURVE_INPUT with its own state unless `state` is "
         "given, and count it; `size` and the resize as for a decoded buffer.");
 

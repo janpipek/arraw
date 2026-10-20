@@ -191,17 +191,18 @@ TEST_CASE("A plan names the decode its source came from", "[negative][plan]") {
 
     // The plan of the document and the plan of its pixels agree, and neither is the default's.
     REQUIRE(planFor(photo).decode == decodeOptionsFor(photo, false));
-    REQUIRE(planFor(source, photo.state()) == planFor(photo));
+    REQUIRE(planFor(source, photo.state(), LensCorrection{}) == planFor(photo));
     REQUIRE_FALSE(planFor(photo) == planFor(photo.with(NegativeSettings{})));
 
     // The half-size decode of a photograph is not the decode its document plans.
     const ImageBuffer reduced =
         loadImage(photo.path(), discardedDiagnostics(), decodeOptionsFor(photo, true));
-    REQUIRE(planFor(reduced, photo.state()).decode == DecodeOptions{.halfSize = true});
+    REQUIRE(planFor(reduced, photo.state(), LensCorrection{}).decode ==
+            DecodeOptions{.halfSize = true});
 
     // Pixels nobody decoded have no block.
     const ImageBuffer built = test::rainbow({4, 4}, PixelFormat::RgbaF32, workingEncoding);
-    REQUIRE_FALSE(planFor(built, {}).decode.has_value());
+    REQUIRE_FALSE(planFor(built, {}, LensCorrection{}).decode.has_value());
 }
 
 TEST_CASE("A negative edit clears ladders, and a rung of another decode is stale by value",
@@ -218,23 +219,26 @@ TEST_CASE("A negative edit clears ladders, and a rung of another decode is stale
     REQUIRE(bufferA->size() == bufferB->size());
 
     CheckpointLadder ladder;
-    static_cast<void>(resumeOrDevelop(ladder, bufferA, state, request));
-    REQUIRE(resumeOrDevelop(ladder, bufferA, state, request).resumedFrom.has_value());
+    static_cast<void>(resumeOrDevelop(ladder, bufferA, state, LensCorrection{}, request));
+    REQUIRE(
+        resumeOrDevelop(ladder, bufferA, state, LensCorrection{}, request).resumedFrom.has_value());
 
     // The same size, encoding and settings, another negative.
-    const LadderRender other = resumeOrDevelop(ladder, bufferB, state, request);
+    const LadderRender other = resumeOrDevelop(ladder, bufferB, state, LensCorrection{}, request);
     REQUIRE_FALSE(other.resumedFrom.has_value());
 
     // A rung of A is stale against B's plan even when one buffer is reused: the by-value rule,
     // which does not lean on the ladder's binding.
     ImageBuffer reused = bufferA->clone();
-    const RenderCheckpoint rung = developUntil(reused, state, Stage::Pointwise);
-    REQUIRE(canResumeFrom(rung, reused, state, Stage::Resize));
+    const RenderCheckpoint rung = developUntil(reused, state, LensCorrection{}, Stage::Pointwise);
+    REQUIRE(canResumeFrom(rung, reused, state, LensCorrection{}, Stage::Resize));
     reused.setDecodedWith(bufferB->decodedWith());
-    REQUIRE_FALSE(canResumeFrom(rung, reused, state, Stage::Resize));
-    REQUIRE_THROWS_AS(resumeFrom(rung, reused, state, Stage::Resize), std::invalid_argument);
+    REQUIRE_FALSE(canResumeFrom(rung, reused, state, LensCorrection{}, Stage::Resize));
+    REQUIRE_THROWS_AS(resumeFrom(rung, reused, state, LensCorrection{}, Stage::Resize),
+                      std::invalid_argument);
 
-    const auto why = staleReason(stateOf(rung), planFor(reused, state), reused.size());
+    const auto why =
+        staleReason(stateOf(rung), planFor(reused, state, LensCorrection{}), reused.size());
     REQUIRE(why.has_value());
     REQUIRE(std::string(*why).find("decoded differently") != std::string::npos);
 }
@@ -278,7 +282,7 @@ TEST_CASE("An absent demosaic key leaves the base, and bad ones are warned about
     }
 
     CollectedDiagnostics unknown;
-    REQUIRE(applyNegativeJson(R"({"lens": true})", base, unknown) == base);
+    REQUIRE(applyNegativeJson(R"({"sharpen": true})", base, unknown) == base);
     REQUIRE(unknown.entries().size() == 1);
     REQUIRE(unknown.entries().front().notice == Notice::SettingUnknown);
 

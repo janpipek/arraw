@@ -3,6 +3,8 @@
 #include "SampleConversion.h"
 #include "TimingTrace.h"
 
+#include <LensResolution.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -131,9 +133,15 @@ ProcessingPlan arraw::planFor(const ColorEncoding& encoding, const DevelopState&
 }
 
 ProcessingPlan arraw::planFor(const Photo& photo, const RenderRequest& request) {
+    return planFor(photo, lensCorrectionFor(photo), request);
+}
+
+ProcessingPlan arraw::planFor(const Photo& photo, const LensCorrection& lens,
+                              const RenderRequest& request) {
     // What the file declares is its full resolution: one sensor pixel a pixel.
     auto plan = planFor(photo.metadata().encoding, photo.state());
-    plan.pointwise.local = localPlanFor(photo.state(), photo.metadata().size);
+    plan.lens = LensPlan{lens};
+    plan.pointwise.local = localPlanFor(photo.state(), photo.metadata().size, brushFrameOf(lens));
     plan.pointwise.presence =
         presencePlanFor(photo.state().settings.presence, photo.metadata().encoding, 1.0,
                         photo.metadata().size, presenceReachOf(plan.pointwise.local));
@@ -145,10 +153,11 @@ ProcessingPlan arraw::planFor(const Photo& photo, const RenderRequest& request) 
 }
 
 ProcessingPlan arraw::planFor(const ImageBuffer& source, const DevelopState& state,
-                              const RenderRequest& request) {
+                              const LensCorrection& lens, const RenderRequest& request) {
     const detail::TimingSpan timing("develop.plan");
     auto plan = planFor(source.encoding(), state, source.pixelScale());
-    plan.pointwise.local = localPlanFor(state, source.size());
+    plan.lens = LensPlan{lens};
+    plan.pointwise.local = localPlanFor(state, source.size(), brushFrameOf(lens));
     plan.pointwise.presence =
         presencePlanFor(state.settings.presence, source.encoding(), source.pixelScale(),
                         source.size(), presenceReachOf(plan.pointwise.local));

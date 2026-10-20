@@ -46,7 +46,8 @@ ImageSize rasterOf(const LocalPlan& local) {
 /// Rasterises one brush banded into its channel of the planes.
 void bandedInto(const LocalMaskPlan& mask, std::uint32_t bucketRows, PackedCoverage& packed) {
     const ImageSize raster = packed.size;
-    const std::vector<PlacedStroke> placed = placedStrokes(*mask.brush.strokes, raster);
+    const std::vector<PlacedStroke> placed =
+        placedStrokes(*mask.brush.strokes, raster, 0, mask.brush.frame.get());
     const DabBuckets buckets(placed, raster.height, bucketRows);
     std::vector<std::uint8_t>& plane = packed.planes[mask.brush.slot / 4];
     const std::uint32_t channel = mask.brush.slot % 4;
@@ -214,7 +215,8 @@ const PackedCoverage& CoverageResidency::update(const LocalPlan& local, ImageSiz
         // starts the slot again.
         record = Record{};
         ++cacheCalls_;
-        const BrushCoverageCache::Result found = cache.coverage(brush.strokes, size);
+        const BrushCoverageCache::Result found =
+            cache.coverage(brush.strokes, size, true, brush.frame);
         if (found.lookup == CoverageLookup::Hit || found.lookup == CoverageLookup::ContentHit) {
             // Nothing was drawn, whatever was expected: the drawing's unit is done.
             completeUnit();
@@ -255,7 +257,7 @@ CoverageStatus statusOf(const BrushCoverageRef& brush, const CoverageResidency* 
     if (residency != nullptr && residency->holds(brush)) {
         return {CoverageReadiness::Held, brush.strokes->strokes().size()};
     }
-    const BrushCoverageCache::Peek peeked = cache.peek(brush.strokes, brush.raster);
+    const BrushCoverageCache::Peek peeked = cache.peek(brush.strokes, brush.raster, brush.frame);
     switch (peeked.lookup) {
     case CoverageLookup::Hit:
     case CoverageLookup::ContentHit:
@@ -356,13 +358,13 @@ PackedCoverage packCoverage(const LocalPlan& local) {
         std::shared_ptr<const CoverageTiles> tiles;
         if (retain) {
             const BrushCoverageCache::Result found =
-                brushCoverageCache().coverage(mask.brush.strokes, raster);
+                brushCoverageCache().coverage(mask.brush.strokes, raster, true, mask.brush.frame);
             tiles = found.tiles;
             if (found.lookup == CoverageLookup::Hit || found.lookup == CoverageLookup::ContentHit) {
                 completeUnit();
             }
         } else {
-            tiles = brushCoverageCache().find(mask.brush.strokes, raster);
+            tiles = brushCoverageCache().find(mask.brush.strokes, raster, mask.brush.frame);
             if (tiles) {
                 completeUnit();
             }

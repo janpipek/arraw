@@ -6,6 +6,7 @@
 #include <Develop.h>
 #include <DevelopState.h>
 #include <ImageBuffer.h>
+#include <LensCorrection.h>
 #include <Progress.h>
 #include <RenderCheckpoint.h>
 
@@ -46,9 +47,12 @@ namespace arraw {
 /// @param context Device to develop on; used from its owner thread only.
 /// @param source Decoded photograph, in the working or a camera encoding.
 /// @param state How the photograph is developed.
+/// @param lens Lens corrections to apply (ADR 050, section 9), run by one pass of the device
+/// after noise reduction and before the chain. Empty for none, which costs nothing.
 /// @param stopAfter Last boundary to run: ::arraw::Stage::Denoise leaves the
 /// source after noise reduction, in its own encoding and pending orientation
-/// (the upload itself, shared, when noise reduction is off);
+/// (the upload itself, shared, when noise reduction is off); ::arraw::Stage::Lens the
+/// corrected frame (the same image when no correction is active);
 /// ::arraw::Stage::Pointwise a result of the source's size with no geometry applied, and
 /// ::arraw::Stage::Geometry one with no resize, whatever @p request asks, and
 /// ::arraw::Stage::Resize one with no effects.
@@ -69,7 +73,7 @@ namespace arraw {
 /// @throws ::arraw::Cancelled if @p progress was cancelled before the work finished;
 /// nothing it made is kept.
 [[nodiscard]] RenderCheckpoint developOnGpu(GpuContext& context, const ImageBuffer& source,
-                                            const DevelopState& state,
+                                            const DevelopState& state, const LensCorrection& lens,
                                             Stage stopAfter = Stage::Effects,
                                             const RenderRequest& request = {},
                                             ProgressChannel* progress = nullptr);
@@ -84,6 +88,7 @@ namespace arraw {
 /// @param uploaded Result of ::arraw::uploadSource of @p source on @p context;
 /// left untouched, so it serves any number of renders.
 /// @param state How the photograph is developed.
+/// @param lens Lens corrections to apply; see the overload above.
 /// @param stopAfter Last boundary to run; see the overload above.
 /// @param request Size and filter to render at; see the overload above.
 /// @param progress Channel for progress and cancellation (ADR 042), or null: a
@@ -98,7 +103,8 @@ namespace arraw {
 /// nothing it made is kept.
 RenderCheckpoint developOnGpu(GpuContext& context, const ImageBuffer& source,
                               const DeviceImage& uploaded, const DevelopState& state,
-                              Stage stopAfter = Stage::Effects, const RenderRequest& request = {},
+                              const LensCorrection& lens, Stage stopAfter = Stage::Effects,
+                              const RenderRequest& request = {},
                               ProgressChannel* progress = nullptr);
 
 /// @brief Carries a render on from a checkpoint that is on this device.
@@ -123,6 +129,7 @@ RenderCheckpoint developOnGpu(GpuContext& context, const ImageBuffer& source,
 /// planning needs: its encoding, size, orientation and, for a resize, whether it
 /// is opaque.
 /// @param state How the photograph is developed now.
+/// @param lens Lens corrections now; see the first overload.
 /// @param stopAfter Last boundary to run; not before the checkpoint's.
 /// @param request Size and filter to render at; read only when @p stopAfter is
 /// ::arraw::Stage::Resize or later.
@@ -138,6 +145,7 @@ RenderCheckpoint developOnGpu(GpuContext& context, const ImageBuffer& source,
 /// nothing it made is kept.
 [[nodiscard]] RenderCheckpoint developOnGpu(GpuContext& context, const RenderCheckpoint& from,
                                             const ImageBuffer& source, const DevelopState& state,
+                                            const LensCorrection& lens,
                                             Stage stopAfter = Stage::Effects,
                                             const RenderRequest& request = {},
                                             ProgressChannel* progress = nullptr);
@@ -155,18 +163,18 @@ RenderCheckpoint developOnGpu(GpuContext& context, const ImageBuffer& source,
 /// @param source Decoded photograph, kept alive by the ladder.
 /// @param uploaded @p source on @p context, as ::arraw::uploadSource makes it.
 /// @param state How the photograph is developed.
+/// @param lens Lens corrections to apply; see ::arraw::developOnGpu.
 /// @param request What to render; see ::arraw::develop.
 /// @param progress Channel for progress and cancellation, or null.
 /// @return A checkpoint on the device at the effects, equal to what
 /// ::arraw::developOnGpu renders, and the boundary resumed from.
 /// @throws std::invalid_argument as ::arraw::developOnGpu, and if @p source is null.
 /// @throws ::arraw::Cancelled if @p progress was cancelled before the render finished.
-[[nodiscard]] LadderRender resumeOrDevelopOnGpu(GpuContext& context, CheckpointLadder& ladder,
-                                                std::shared_ptr<const ImageBuffer> source,
-                                                const DeviceImage& uploaded,
-                                                const DevelopState& state,
-                                                const RenderRequest& request = {},
-                                                ProgressChannel* progress = nullptr);
+[[nodiscard]] LadderRender
+resumeOrDevelopOnGpu(GpuContext& context, CheckpointLadder& ladder,
+                     std::shared_ptr<const ImageBuffer> source, const DeviceImage& uploaded,
+                     const DevelopState& state, const LensCorrection& lens,
+                     const RenderRequest& request = {}, ProgressChannel* progress = nullptr);
 
 /// @brief Tells whether rendering through a device ladder would draw brush coverage from nothing.
 ///
@@ -176,6 +184,7 @@ RenderCheckpoint developOnGpu(GpuContext& context, const ImageBuffer& source,
 /// @param ladder Ladder the render would go through.
 /// @param source Buffer the render would develop.
 /// @param state Settings of the render.
+/// @param lens Lens corrections of the render.
 /// @param request What to render.
 /// @param minimumSeconds Least modelled drawing time that counts.
 /// @return False for a state without brush masks.
@@ -183,6 +192,7 @@ RenderCheckpoint developOnGpu(GpuContext& context, const ImageBuffer& source,
 [[nodiscard]] bool drawsBrushCoverageOnGpu(const GpuContext& context,
                                            const CheckpointLadder& ladder,
                                            const ImageBuffer& source, const DevelopState& state,
+                                           const LensCorrection& lens,
                                            const RenderRequest& request = {},
                                            double minimumSeconds = 0.0);
 
@@ -198,6 +208,7 @@ RenderCheckpoint developOnGpu(GpuContext& context, const ImageBuffer& source,
 /// for what planning needs.
 /// @param uploaded Result of ::arraw::uploadSource of @p source on @p context.
 /// @param state How the photograph is developed.
+/// @param lens Lens corrections to apply; see ::arraw::developOnGpu.
 /// @param tap Where in the chain to stop.
 /// @param request What to render; see ::arraw::develop. A sample meant for
 /// ::arraw::curveHistogram passes ::arraw::curveHistogramRequest: the request is
@@ -214,7 +225,8 @@ RenderCheckpoint developOnGpu(GpuContext& context, const ImageBuffer& source,
 /// nothing it made is kept.
 [[nodiscard]] ImageBuffer sampleOnGpu(GpuContext& context, const ImageBuffer& source,
                                       const DeviceImage& uploaded, const DevelopState& state,
-                                      Tap tap, const RenderRequest& request = {},
+                                      const LensCorrection& lens, Tap tap,
+                                      const RenderRequest& request = {},
                                       ProgressChannel* progress = nullptr);
 
 /// @brief Uploads a decoded photograph, samples it at a tap, and reads the result back.
@@ -223,6 +235,7 @@ RenderCheckpoint developOnGpu(GpuContext& context, const ImageBuffer& source,
 /// @param context Device to sample on; used from its owner thread only.
 /// @param source Decoded photograph, in the working or a camera encoding.
 /// @param state How the photograph is developed.
+/// @param lens Lens corrections to apply; see ::arraw::developOnGpu.
 /// @param tap Where in the chain to stop.
 /// @param request What to render; see ::arraw::develop.
 /// @param progress Channel for progress and cancellation (ADR 042), or null: a
@@ -230,8 +243,8 @@ RenderCheckpoint developOnGpu(GpuContext& context, const ImageBuffer& source,
 /// @return A host buffer in the tap's encoding.
 /// @throws As the overload above.
 [[nodiscard]] ImageBuffer sampleOnGpu(GpuContext& context, const ImageBuffer& source,
-                                      const DevelopState& state, Tap tap,
-                                      const RenderRequest& request = {},
+                                      const DevelopState& state, const LensCorrection& lens,
+                                      Tap tap, const RenderRequest& request = {},
                                       ProgressChannel* progress = nullptr);
 
 } // namespace arraw

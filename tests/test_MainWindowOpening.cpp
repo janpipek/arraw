@@ -160,6 +160,8 @@ TEST_CASE("Switching photographs quickly ends on the last one, whole", "[app][wi
     // Whatever was still on its way of the others is dropped, not shown.
     QTest::qWait(300);
     CHECK(w.window.windowTitle().startsWith("c.dng"));
+    // The last shot asked for is active once the strip's background listing has brought it.
+    REQUIRE(QTest::qWaitFor([&] { return !w.strip().isListing(); }, 10000));
     CHECK(w.strip().activePrimary() == w.shot("c.dng"));
     CHECK(w.panelExposure() == 1.5);
     CHECK(w.developDock().isEnabled());

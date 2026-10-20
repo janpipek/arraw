@@ -5,6 +5,7 @@
 #include "DeviceChoice.h"
 #include "GpuContext.h"
 #include "GpuDevelop.h"
+#include "LensOptions.h"
 #include "ProcessingPlan.h"
 #include "SettingCodec.h"
 #include "ShotInputs.h"
@@ -21,6 +22,7 @@
 #include <EffectsSettings.h>
 #include <ImageExport.h>
 #include <ImageImport.h>
+#include <LensResolution.h>
 #include <MarksFilter.h>
 #include <NegativeSettings.h>
 #include <NoiseReductionSettings.h>
@@ -177,6 +179,8 @@ struct ExportRequest {
     cli::ExportEdits edits;
     /// @brief What `--demosaic` named, applied over each RAW's own negative; none keeps it.
     std::optional<Demosaic> demosaic;
+    /// @brief What `--lens-corrections`, `--lens` and `--lens-database` said (ADR 050).
+    cli::LensOptions lens;
     /// @brief Whether each photograph's sidecar is read; false is `--no-sidecar`.
     bool useSidecars = true;
     ExportOptions options;
@@ -741,6 +745,7 @@ void configure(QCommandLineParser& parser) {
                       "How a RAW's sensor mosaic becomes colour: linear, vng, ppg, ahd, dcb, dht "
                       "or aahd. Default: the sidecar's, or ahd. Other files ignore it.",
                       "name"});
+    cli::addLensOptions(parser, true);
     parser.addOption({"grain-seed",
                       "Which grain pattern, a whole number; 0 is one fixed pattern. Default: "
                       "the sidecar's, or a random one when the flags turn grain on.",
@@ -901,6 +906,12 @@ std::optional<ExportRequest> buildRequest(const QCommandLineParser& parser, std:
         }
     }
 
+    if (const auto lens = cli::readLensOptions(parser, true, "export", err, code)) {
+        request.lens = *lens;
+    } else {
+        return std::nullopt;
+    }
+
     if (parser.isSet("resize")) {
         try {
             request.render.size = cli::parseResize(parser.value("resize").toStdString());
@@ -1027,15 +1038,17 @@ std::unique_ptr<GpuContext> createContext(const ExportRequest& request, std::str
 /// Every device image, the checkpoint included, is gone before this returns,
 /// so the context can be destroyed whenever its owner likes.
 ImageBuffer developOnDevice(GpuContext& context, const ImageBuffer& source,
-                            const DevelopState& state, const RenderRequest& render) {
+                            const DevelopState& state, const LensCorrection& lens,
+                            const RenderRequest& render) {
     const RenderCheckpoint checkpoint =
-        developOnGpu(context, source, state, Stage::Effects, render);
+        developOnGpu(context, source, state, lens, Stage::Effects, render);
     return checkpoint.readBack();
 }
 
 /// @brief Exports every input, continuing past the ones that fail.
 int exportAll(const ExportRequest& request, std::ostream& err) {
     cli::StreamDiagnostics log(err, request.logFormat, request.quiet);
+    cli::LensDatabaseSource lenses(request.lens.database);
     std::size_t failures = 0;
     for (const std::string& option : request.ignoredResizeOptions) {
         log.record({.notice = Notice::OptionIgnored,
@@ -1167,8 +1180,16 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
                                               opened.metadata());
             Photo photo = opened.with(std::move(edited));
             if (request.demosaic) {
-                photo = photo.with(NegativeSettings{*request.demosaic});
+                NegativeSettings negative = photo.negative();
+                negative.demosaic = *request.demosaic;
+                photo = photo.with(std::move(negative));
             }
+            // The flags over the sidecar, as --demosaic is; the profile is only looked up for a
+            // photograph that asks for a correction, so a batch without one never loads it.
+            photo = cli::applyLensOptions(photo, request.lens, lenses);
+            const LensCorrection lens = photo.negative().lens.any()
+                                            ? lensCorrectionFor(photo, lenses.get(), log)
+                                            : LensCorrection{};
             // Decoded once, before the device is involved: a file that cannot be
             // read is the input's failure, whichever device would have developed it.
             const ImageBuffer source =
@@ -1178,11 +1199,12 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
             // device is then blamed for is developOnGpu and readBack alone, so
             // any exception from them, an image larger than the device's
             // textures included, means "the GPU could not".
-            (void)planFor(source, photo.state(), request.render);
+            (void)planFor(source, photo.state(), lens, request.render);
             std::optional<ImageBuffer> developed;
             if (context) {
                 try {
-                    developed = developOnDevice(*context, source, photo.state(), request.render);
+                    developed =
+                        developOnDevice(*context, source, photo.state(), lens, request.render);
                 } catch (const std::exception& failure) {
                     if (request.device.kind == cli::DeviceKind::Gpu) {
                         throw;
@@ -1203,7 +1225,7 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
                 }
             }
             if (!developed) {
-                developed = develop(source, photo.state(), request.render);
+                developed = develop(source, photo.state(), lens, request.render);
             }
             const ExportMetadata carried{input, photo.marks(), request.metadata,
                                          request.useSidecars};

@@ -123,13 +123,49 @@ enum class Notice {
     /// in words. One per mask and reason.
     BrushStrokesTrimmed,
 
-    /// @brief A document's list of local adjustments was written by a newer arraw, and was read
-    /// as far as it is understood: its version, then the newest this arraw knows.
-    NewerLocalAdjustmentsVersion,
-
     /// @brief An export left out metadata it could not read or copy from its
     /// source, but was written: what was left out and why.
     MetadataNotCarried,
+
+    /// @brief A lens correction is on, but the photograph names no lens that can be told from
+    /// another, such as an adapted manual lens, so it was skipped (ADR 050).
+    LensUnidentified,
+
+    /// @brief A lens correction is on, but a zoom's focal length was not recorded, so no profile
+    /// applies and it was skipped: the lens.
+    LensFocalUnknown,
+
+    /// @brief The camera is not in the lens database. Informational: the lens was matched without
+    /// it: the camera's maker, then its model.
+    CameraNotInDatabase,
+
+    /// @brief A lens correction is on, but no lens in the database fits the photograph, so it was
+    /// skipped: the name the photograph gives the lens, empty if none.
+    LensNotInDatabase,
+
+    /// @brief A lens correction is on, but two lenses fit equally well, so none was applied and a
+    /// photographer has to choose: the lenses' names, joined by ` | `.
+    LensAmbiguous,
+
+    /// @brief A lens correction is on, but the lens recorded for the photograph is not in the
+    /// database, so it was skipped, not matched again: the lens.
+    LensProfileMissing,
+
+    /// @brief The lens database holds another stamp than the one the lens was recorded against, so
+    /// its calibration may have been revised. Informational: the stamp recorded, then the stamp
+    /// now.
+    LensDatabaseChanged,
+
+    /// @brief A lens correction is on, but no lens database could be loaded, so it was skipped.
+    LensDatabaseMissing,
+
+    /// @brief A lens correction is on, but this build has no lensfun (`ARRAW_WITH_LENSFUN`), so it
+    /// was skipped.
+    LensfunUnavailable,
+
+    /// @brief The lens has no calibration for a correction that is on, so that correction was
+    /// skipped: the lens, then the corrections, joined by `, `.
+    LensNotCalibrated,
 };
 
 /// @brief One detail of a diagnostic, kept as a value rather than as prose.

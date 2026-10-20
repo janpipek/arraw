@@ -281,8 +281,10 @@ std::optional<QLineF> clippedLine(QPointF point, QPointF direction, const QRectF
 } // namespace
 
 MaskViewMapping::MaskViewMapping(DevelopedFrameMap frame, ViewTransform view,
-                                 double devicePixelRatio)
-    : frame_(std::move(frame)), view_(std::move(view)), ratio_(devicePixelRatio) {
+                                 double devicePixelRatio,
+                                 std::shared_ptr<const LensCorrection> lens)
+    : frame_(std::move(frame)), view_(std::move(view)), ratio_(devicePixelRatio),
+      lens_(std::move(lens)) {
     if (!(devicePixelRatio > 0.0)) {
         throw std::invalid_argument("The device pixel ratio must be positive");
     }
@@ -296,6 +298,13 @@ QPointF MaskViewMapping::widgetFrom(CorrectedPosition position) const {
 CorrectedPosition MaskViewMapping::correctedFrom(QPointF widget) const {
     const QPointF fraction = view_.frameFromView(widget * ratio_);
     return frame_.correctedFrom({fraction.x(), fraction.y()});
+}
+
+SensorPoint MaskViewMapping::sensorFrom(CorrectedPosition position) const noexcept {
+    if (lens_ == nullptr) {
+        return {static_cast<float>(position.u), static_cast<float>(position.v)};
+    }
+    return arraw::sensorFrom(*lens_, position);
 }
 
 QPointF MaskViewMapping::widgetFromLongEdge(QPointF position) const {

@@ -429,8 +429,9 @@ template <detail::SettingValue T>
 /// ::arraw::CopySection::Crop, are carried by the rules of ::arraw::withValue
 /// (looks-and-history plan, step 2), so a crop frames the same content on a
 /// photograph of another size or orientation, as ::arraw::withLook describes.
-/// ::arraw::CopySection::Demosaic belongs to the negative, not to a ::arraw::DevelopState, so
-/// only the overload of ::arraw::withLook over a ::arraw::Photo carries it (ADR 049).
+/// ::arraw::CopySection::Demosaic and ::arraw::CopySection::Lens belong to the negative, not to a
+/// ::arraw::DevelopState, so only the overload of ::arraw::withLook over a ::arraw::Photo carries
+/// them (ADR 049, ADR 050).
 inline constexpr auto copyableSections = std::to_array<CopySection>({
     CopySection::WhiteBalance,
     CopySection::Exposure,
@@ -447,6 +448,7 @@ inline constexpr auto copyableSections = std::to_array<CopySection>({
     CopySection::RotateAndFlip,
     CopySection::Crop,
     CopySection::Demosaic,
+    CopySection::Lens,
 });
 
 /// @brief Copy sections chosen until someone chooses otherwise, in enumeration order.
@@ -455,7 +457,8 @@ inline constexpr auto copyableSections = std::to_array<CopySection>({
 /// ::arraw::CopySection::Crop: as in Lightroom, a crop rarely suits another
 /// frame, so the geometry is carried only when chosen (looks-and-history
 /// plan, §3). ::arraw::CopySection::Demosaic is in: copying within one shoot is the usual case,
-/// and the same camera wants the same demosaic (ADR 049).
+/// and the same camera wants the same demosaic (ADR 049). So is ::arraw::CopySection::Lens, for
+/// the same reason (ADR 050).
 inline constexpr auto defaultCopySections = std::to_array<CopySection>({
     CopySection::WhiteBalance,
     CopySection::Exposure,
@@ -470,6 +473,7 @@ inline constexpr auto defaultCopySections = std::to_array<CopySection>({
     CopySection::Vignette,
     CopySection::Grain,
     CopySection::Demosaic,
+    CopySection::Lens,
 });
 
 /// @brief Settings taken from one photograph, to be carried onto others.
@@ -488,9 +492,9 @@ struct Look {
 
     /// @brief Negative settings of the photograph the look was taken from (ADR 049).
     ///
-    /// What ::arraw::CopySection::Demosaic carries. A preset file carries the section when it
-    /// holds a `"negative"` object (::arraw::negativeToJson); a look built from settings alone
-    /// holds the default.
+    /// What ::arraw::CopySection::Demosaic and ::arraw::CopySection::Lens carry (the latter the
+    /// corrections only). A preset file carries the sections when it holds a `"negative"`
+    /// object (::arraw::negativeToJson); a look built from settings alone holds the default.
     NegativeSettings negative{};
 
     friend bool operator==(const Look&, const Look&) = default;
@@ -514,7 +518,8 @@ struct Look {
 ///
 /// A section with a setting that needs a RAW (ADR 008) cannot cross a photograph that is not
 /// one; that is White Balance, whose Kelvin and tint mean nothing without a sensor, and
-/// Demosaic, which a file with no mosaic to read does not have.
+/// Demosaic, which a file with no mosaic to read does not have, and Lens, whose profiles are
+/// found for a RAW only (ADR 050).
 /// @param section Section to ask about.
 /// @param raw Whether the photograph is a RAW.
 [[nodiscard]] bool sectionApplies(CopySection section, bool raw) noexcept;
@@ -524,17 +529,20 @@ struct AppliedLook {
     /// @brief State with the look's sections carried onto it.
     DevelopState state;
 
-    /// @brief Negative settings after the look: the look's when ::arraw::CopySection::Demosaic
-    /// was chosen and carried, else the photograph's own. Always the target's own from the
+    /// @brief Negative settings after the look: the look's demosaic when
+    /// ::arraw::CopySection::Demosaic was chosen and carried, the look's lens corrections when
+    /// ::arraw::CopySection::Lens was, else the photograph's own. The lens recorded is always the
+    /// photograph's own: it is per shot, and the session records the target's match when it
+    /// commits the paste (::arraw::EditSession::setLensDatabase). Always the target's own from the
     /// overload without a photograph.
     NegativeSettings negative{};
 
     /// @brief Chosen sections not carried in full, because some of their settings apply to
     /// only one of the two photographs; in enumeration order, each once.
     ///
-    /// Today ::arraw::CopySection::WhiteBalance and ::arraw::CopySection::Demosaic, between a
-    /// RAW and a photograph that is not one. A front end tells the user: nothing was
-    /// wrong, but something they chose did not arrive.
+    /// Today ::arraw::CopySection::WhiteBalance, ::arraw::CopySection::Demosaic and
+    /// ::arraw::CopySection::Lens, between a RAW and a photograph that is not one. A front end
+    /// tells the user: nothing was wrong, but something they chose did not arrive.
     std::vector<CopySection> skipped;
 
     friend bool operator==(const AppliedLook&, const AppliedLook&) = default;
@@ -619,10 +627,10 @@ struct AppliedLook {
 /// @param entropy Where a new grain seed's bits come from; empty for `std::random_device`.
 /// @return @p state with the sections carried onto it, and the sections left out.
 /// @throws std::invalid_argument naming the section if @p sections holds one not in
-/// ::arraw::copyableSections, or ::arraw::CopySection::Demosaic, which needs a photograph
-/// (use the overload below); as ::arraw::withValue if a value of @p look is not valid, or,
-/// with a geometry section chosen, if @p photo declares no size or @p state's geometry is not
-/// valid for its frame.
+/// ::arraw::copyableSections, or ::arraw::CopySection::Demosaic or ::arraw::CopySection::Lens,
+/// which need a photograph (use the overload below); as ::arraw::withValue if a value of @p look is
+/// not valid, or, with a geometry section chosen, if @p photo declares no size or @p state's
+/// geometry is not valid for its frame.
 [[nodiscard]] AppliedLook withLook(const ImageMetadata& photo, DevelopState state, const Look& look,
                                    std::span<const CopySection> sections,
                                    const GrainEntropy& entropy = {});
@@ -630,18 +638,19 @@ struct AppliedLook {
 /// @brief Carries chosen sections of a look onto a photograph, its negative included.
 ///
 /// As the overload over a state, applied to `photo.state()`, and also
-/// ::arraw::CopySection::Demosaic, which replaces the photograph's negative by the look's
-/// (ADR 049). Between a RAW and a photograph that is not one it is skipped and listed in
-/// ::arraw::AppliedLook::skipped, as the white balance is; between two that are not RAWs it
-/// applies to neither, is not carried, and is not reported. A caller makes a single history
-/// step of the result (::arraw::EditSession::setState), and re-decodes only when the negative
-/// differs from the one the photograph was decoded with.
+/// ::arraw::CopySection::Demosaic, which replaces the photograph's demosaic by the look's
+/// (ADR 049), and ::arraw::CopySection::Lens, which replaces its lens corrections and leaves
+/// the lens recorded for it alone (ADR 050). Between a RAW and a photograph that is not one each
+/// is skipped and listed in ::arraw::AppliedLook::skipped, as the white balance is; between two
+/// that are not RAWs it applies to neither, is not carried, and is not reported. A caller makes a
+/// single history step of the result (::arraw::EditSession::setState), and re-decodes only when the
+/// negative differs from the one the photograph was decoded with.
 /// @param photo Document to carry the look onto.
 /// @param look Settings and negative to carry.
 /// @param sections Sections of @p look to carry, in any order.
 /// @param entropy Where a new grain seed's bits come from; empty for `std::random_device`.
 /// @return The state and negative to give @p photo, and the sections left out.
-/// @throws std::invalid_argument as the overload over a state, except for Demosaic.
+/// @throws std::invalid_argument as the overload over a state, except for Demosaic and Lens.
 [[nodiscard]] AppliedLook withLook(const Photo& photo, const Look& look,
                                    std::span<const CopySection> sections,
                                    const GrainEntropy& entropy = {});

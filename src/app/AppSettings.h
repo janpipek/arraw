@@ -30,6 +30,31 @@ struct AppSettings {
 /// @brief Stores desktop preferences without touching other settings groups.
 void saveAppSettings(const AppSettings& settings, QSettings& store);
 
+/// @brief Reads whether the film strip includes the subfolders of its folder.
+/// @return The stored flag; off when never stored.
+[[nodiscard]] bool restoreIncludeSubfolders(QSettings& store);
+
+/// @brief Stores whether the film strip includes the subfolders of its folder.
+void saveIncludeSubfolders(bool include, QSettings& store);
+
+/// @brief Least value of the film strip's cap on watched folders.
+inline constexpr int minWatchedFolders = 1;
+
+/// @brief Greatest value of the film strip's cap on watched folders.
+inline constexpr int maxWatchedFoldersLimit = 1000000;
+
+/// @brief Reads the most folders the film strip watches at once.
+///
+/// A hidden setting (`filmStrip/maxWatchedFolders`) for those who raised the system's limit on
+/// watches (`fs.inotify.max_user_watches` on Linux).
+/// @return The stored cap, kept within ::arraw::app::minWatchedFolders and
+/// ::arraw::app::maxWatchedFoldersLimit; the default of 1000 when never stored or not a number.
+[[nodiscard]] int restoreMaxWatchedFolders(QSettings& store);
+
+/// @brief Stores the most folders the film strip watches at once.
+/// @param limit Cap, kept within the bounds as it is restored.
+void saveMaxWatchedFolders(int limit, QSettings& store);
+
 /// @brief Restores the last photograph, falling back to its folder when the file is gone.
 /// @return An existing file or folder, or nothing when neither is available.
 [[nodiscard]] std::optional<std::filesystem::path> restoreOpenPath(QSettings& store);

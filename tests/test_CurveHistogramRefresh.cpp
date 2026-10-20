@@ -23,7 +23,7 @@ std::shared_ptr<const ImageBuffer> makeLevel() {
 }
 
 ProcessingPlan planOf(const ImageBuffer& level, const DevelopState& state) {
-    return planFor(level, state, curveHistogramRequest);
+    return planFor(level, state, LensCorrection{}, curveHistogramRequest);
 }
 
 } // namespace

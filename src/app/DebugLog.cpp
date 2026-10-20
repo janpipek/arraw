@@ -92,10 +92,28 @@ QString noticeName(Notice notice) {
         return QStringLiteral("LocalAdjustmentFieldIgnored");
     case Notice::BrushStrokesTrimmed:
         return QStringLiteral("BrushStrokesTrimmed");
-    case Notice::NewerLocalAdjustmentsVersion:
-        return QStringLiteral("NewerLocalAdjustmentsVersion");
     case Notice::MetadataNotCarried:
         return QStringLiteral("MetadataNotCarried");
+    case Notice::LensUnidentified:
+        return QStringLiteral("LensUnidentified");
+    case Notice::LensFocalUnknown:
+        return QStringLiteral("LensFocalUnknown");
+    case Notice::CameraNotInDatabase:
+        return QStringLiteral("CameraNotInDatabase");
+    case Notice::LensNotInDatabase:
+        return QStringLiteral("LensNotInDatabase");
+    case Notice::LensAmbiguous:
+        return QStringLiteral("LensAmbiguous");
+    case Notice::LensProfileMissing:
+        return QStringLiteral("LensProfileMissing");
+    case Notice::LensDatabaseChanged:
+        return QStringLiteral("LensDatabaseChanged");
+    case Notice::LensDatabaseMissing:
+        return QStringLiteral("LensDatabaseMissing");
+    case Notice::LensfunUnavailable:
+        return QStringLiteral("LensfunUnavailable");
+    case Notice::LensNotCalibrated:
+        return QStringLiteral("LensNotCalibrated");
     }
     return {};
 }

@@ -16,6 +16,7 @@
 namespace arraw {
 
 struct GeometryPlan;
+struct LensPlan;
 struct PointwisePlan;
 struct ProcessingPlan;
 struct ToneCurvePlan;
@@ -516,6 +517,57 @@ static_assert(offsetof(GpuEffectsBlock, grainModel) == 44);
 static_assert(offsetof(GpuEffectsBlock, grainLayers) == 48);
 static_assert(sizeof(GpuEffectsBlock) == 176);
 
+/// @brief The lens pass's uniform block, byte for byte as std140 lays it out.
+///
+/// The shader data contract of `src/gpu/shaders/lens.frag`. The positions are carried as offsets
+/// from the optical centre in pixels, not as absolute positions, so that no float holds a
+/// coordinate of a photograph's size: the centre is split into a whole and a fractional part, the
+/// output pixel's offset from it is exact, and the displacement of a sample is the offset times a
+/// small factor (the tables hold the scales less one, for the same reason). The result is
+/// within a few thousandths of a pixel of the CPU's double arithmetic at any size (ADR 050,
+/// section 9). The Catmull-Rom kernel, the edge rule and the clamp of its ringing are the CPU's
+/// (::arraw::applyLens).
+struct GpuLensBlock {
+    /// @brief Whole part of the optical centre in pixels, as a float.
+    std::array<float, 2> centerWhole{};
+
+    /// @brief Fractional part of the optical centre in pixels, in [0, 1).
+    std::array<float, 2> centerFraction{};
+
+    /// @brief Normalised radius per pixel of offset along each axis: `aspect / width / reach`
+    /// across, `1 / height / reach` down.
+    std::array<float, 2> radiusStep{};
+
+    /// @brief Whether the distortion table is present: 0 or 1.
+    std::uint32_t distorts = 0;
+
+    /// @brief Whether red and blue have tables: 0 or 1.
+    std::uint32_t colorSplit = 0;
+
+    /// @brief Whether the vignetting table is present: 0 or 1.
+    std::uint32_t dims = 0;
+
+    /// @brief The fill scale's reciprocal less one, `1 / fill - 1`; zero without distortion.
+    float fillGain = 0.0F;
+
+    /// @brief The fill scale's reciprocal; one without distortion.
+    float inverseFill = 1.0F;
+
+    /// @brief Index of the last node of the tables, as a float.
+    float lastNode = 0.0F;
+};
+
+static_assert(offsetof(GpuLensBlock, centerWhole) == 0);
+static_assert(offsetof(GpuLensBlock, centerFraction) == 8);
+static_assert(offsetof(GpuLensBlock, radiusStep) == 16);
+static_assert(offsetof(GpuLensBlock, distorts) == 24);
+static_assert(offsetof(GpuLensBlock, colorSplit) == 28);
+static_assert(offsetof(GpuLensBlock, dims) == 32);
+static_assert(offsetof(GpuLensBlock, fillGain) == 36);
+static_assert(offsetof(GpuLensBlock, inverseFill) == 40);
+static_assert(offsetof(GpuLensBlock, lastNode) == 44);
+static_assert(sizeof(GpuLensBlock) == 48);
+
 /// @brief Which part of the Denoise pass a ::arraw::GpuPass::DenoiseFilter render does.
 ///
 /// The CPU's steps in `src/core/Denoise.cpp`, one render each; the values are
@@ -719,6 +771,24 @@ static_assert(maximumPresenceRadius <= maximumDenoiseRadius,
 /// @throws std::invalid_argument if the output is wider or taller than
 /// ::arraw::maxGeometryOutputExtent, beyond which the shader is not exact.
 [[nodiscard]] GpuGeometryBlock packGeometry(const GeometryPlan& plan);
+
+/// @brief Fills the lens block from a resolved lens plan.
+/// @param plan Lens plan to pack; it must be active.
+/// @param size Size of the pass's input, which is also its output.
+/// @return The block, ready to be copied into a uniform buffer.
+[[nodiscard]] GpuLensBlock packLens(const LensPlan& plan, ImageSize size);
+
+/// @brief Packs the radial tables of a lens plan as an image the lens shader reads.
+///
+/// Texel `i` holds node `i` of each table: red the distortion scale less one, green red's scale
+/// less one, blue blue's scale less one and alpha the vignetting gain. A table that is absent is
+/// zeros in its channel, which the shader never reads. The scales are stored less one so that
+/// the shader interpolates small numbers, whose float rounding is a few millionths of a pixel
+/// at the far edge of a photograph. The result is labelled RGBA float in the working encoding
+/// only so that it can be uploaded; it holds table values, not colour.
+/// @param plan Lens plan to pack.
+/// @return An image ::arraw::lensTableNodes pixels wide and one tall.
+[[nodiscard]] ImageBuffer packLensTables(const LensPlan& plan);
 
 /// @brief Packs the weights of one axis of a resize as an image the shader reads.
 ///

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(arraw VERSION 0.4.0 LANGUAGES CXX)
+project(arraw VERSION 0.4.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -68,6 +68,68 @@ if(WIN32)
 else()
     pkg_check_modules(EXIV2 REQUIRED IMPORTED_TARGET exiv2>=0.28)
     set(ARRAW_EXIV2 PkgConfig::EXIV2)
+endif()
+
+# Lens profiles, optional at build time and required in a release (ADR 050). lensfun
+# resolves a lens's distortion, vignetting and lateral chromatic aberration; a build
+# without it still runs and says so, photograph by photograph, rather than rendering
+# a correction as if there were none. That makes a distributed binary without it a
+# worse program that looks the same, so release and CI builds ask for ON and fail at
+# configure time when it is missing, as LibRaw and exiv2 are required above. A
+# development tree stays on AUTO: it uses lensfun when it finds it.
+#   AUTO  build with lensfun when it is found (default)
+#   ON    require lensfun; configure fails naming the packages when it is missing
+#   OFF   compile lens corrections out
+# pkg-config first, as for exiv2, then the library and header by name for platforms
+# whose lensfun ships neither a .pc file nor its glib dependencies in the link line.
+# Linked PRIVATE: no lensfun type or macro appears in include/ (ARRAW_HAS_LENSFUN is
+# the engine's own); arraw::lensfunAvailable() reports it at run time.
+set(ARRAW_WITH_LENSFUN "AUTO" CACHE STRING
+        "Lens corrections through lensfun: AUTO (use if found), ON (require), OFF (disable)")
+set_property(CACHE ARRAW_WITH_LENSFUN PROPERTY STRINGS AUTO ON OFF)
+if(NOT ARRAW_WITH_LENSFUN MATCHES "^(AUTO|ON|OFF)$")
+    message(FATAL_ERROR "ARRAW_WITH_LENSFUN must be AUTO, ON or OFF, not '${ARRAW_WITH_LENSFUN}'.")
+endif()
+set(ARRAW_HAVE_LENSFUN OFF)
+if(NOT ARRAW_WITH_LENSFUN STREQUAL "OFF")
+    if(PkgConfig_FOUND)
+        pkg_check_modules(LENSFUN IMPORTED_TARGET lensfun)
+    endif()
+    if(TARGET PkgConfig::LENSFUN)
+        set(ARRAW_LENSFUN_VERSION "${LENSFUN_VERSION}")
+    else()
+        find_library(LENSFUN_LIB NAMES lensfun)
+        find_path(LENSFUN_INCLUDE_DIR lensfun.h PATH_SUFFIXES lensfun)
+        if(LENSFUN_LIB AND LENSFUN_INCLUDE_DIR)
+            set(lensfun_libs "${LENSFUN_LIB}")
+            foreach(dependency glib-2.0 gobject-2.0 intl iconv)
+                find_library(LENSFUN_${dependency}_LIB NAMES ${dependency})
+                if(LENSFUN_${dependency}_LIB)
+                    list(APPEND lensfun_libs "${LENSFUN_${dependency}_LIB}")
+                endif()
+            endforeach()
+            add_library(PkgConfig::LENSFUN INTERFACE IMPORTED)
+            set_target_properties(PkgConfig::LENSFUN PROPERTIES
+                    INTERFACE_LINK_LIBRARIES "${lensfun_libs}"
+                    INTERFACE_INCLUDE_DIRECTORIES "${LENSFUN_INCLUDE_DIR}")
+            set(ARRAW_LENSFUN_VERSION "unknown version")
+        endif()
+    endif()
+endif()
+if(TARGET PkgConfig::LENSFUN)
+    set(ARRAW_HAVE_LENSFUN ON)
+    add_library(arraw-lensfun INTERFACE)
+    target_link_libraries(arraw-lensfun INTERFACE PkgConfig::LENSFUN)
+    target_compile_definitions(arraw-lensfun INTERFACE ARRAW_HAS_LENSFUN=1)
+    message(STATUS "lensfun ${ARRAW_LENSFUN_VERSION}: lens corrections are built")
+elseif(ARRAW_WITH_LENSFUN STREQUAL "ON")
+    message(FATAL_ERROR "ARRAW_WITH_LENSFUN=ON, but lensfun was not found. Install its "
+            "development files (lensfun-devel on Fedora, liblensfun-dev on Debian and Ubuntu) "
+            "and its database (liblensfun-data-v1 on Debian and Ubuntu), or configure with "
+            "-DARRAW_WITH_LENSFUN=AUTO or OFF for a build without lens corrections.")
+else()
+    message(STATUS "lensfun: not built (${ARRAW_WITH_LENSFUN}); "
+            "lens corrections report that they are unavailable")
 endif()
 
 # On Windows vcpkg deploys the Qt DLLs next to each executable, but not the
@@ -269,6 +331,21 @@ add_library(arraw STATIC
         src/core/Shot.cpp
         src/core/QtImage.cpp
         src/core/QtImage.h
+        include/LensCorrection.h
+        include/LensDatabase.h
+        include/LensFacts.h
+        include/LensMatch.h
+        include/LensProblem.h
+        include/LensResolution.h
+        src/core/LensfunSource.cpp
+        src/core/Lens.cpp
+        src/core/Lens.h
+        src/core/LensCorrection.cpp
+        src/core/LensFactsReader.cpp
+        src/core/LensfunSource.h
+        src/core/LensMatch.cpp
+        src/core/LensResolution.cpp
+        src/core/LensFactsReader.h
         src/core/RawImport.cpp
         src/core/RawImport.h
         src/core/SampleConversion.h
@@ -299,6 +376,9 @@ target_include_directories(arraw PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/core/de
 # Private: nothing in include/ mentions Qt, and CMake still propagates the link
 # requirement to consumers of this static library.
 target_link_libraries(arraw PRIVATE arraw-trace Qt6::Core Qt6::Gui Qt6::Xml ${ARRAW_LIBRAW} ${ARRAW_EXIV2})
+if(ARRAW_HAVE_LENSFUN)
+    target_link_libraries(arraw PRIVATE arraw-lensfun)
+endif()
 # Stamped into exported files as their Software tag (ADR 032).
 target_compile_definitions(arraw PRIVATE ARRAW_VERSION="${PROJECT_VERSION}")
 # qt_standard_project_setup() turns AUTOMOC on globally; the engine has no Qt
@@ -357,6 +437,7 @@ qt_add_shaders(arraw-gpu "arraw-shaders"
         src/gpu/shaders/copy.frag
         src/gpu/shaders/develop.frag
         src/gpu/shaders/geometry.frag
+        src/gpu/shaders/lens.frag
         src/gpu/shaders/resize_across.frag
         src/gpu/shaders/resize_across_opaque.frag
         src/gpu/shaders/resize_down.frag
@@ -463,10 +544,17 @@ add_library(arraw-app-core STATIC
         src/app/QtMessageCapture.h
         src/app/FilmStripRules.cpp
         src/app/FilmStripRules.h
+        src/app/FolderLister.cpp
+        src/app/FolderLister.h
+        src/app/FolderResult.h
         src/app/FolderWatcher.cpp
         src/app/FolderWatcher.h
+        src/app/WatchBudget.cpp
+        src/app/WatchBudget.h
         src/app/HistoryModel.cpp
         src/app/HistoryModel.h
+        src/app/LensSupport.cpp
+        src/app/LensSupport.h
         src/app/MaskEditing.cpp
         src/app/MaskEditing.h
         src/app/MaskPresentation.cpp
@@ -518,6 +606,8 @@ add_library(arraw-app-ui STATIC
         src/app/ui/ExportDialog.h
         src/app/ui/FilmStrip.cpp
         src/app/ui/FilmStrip.h
+        src/app/ui/LensPickerDialog.cpp
+        src/app/ui/LensPickerDialog.h
         src/app/ui/MainWindow.cpp
         src/app/ui/MainWindow.h
         src/app/ui/MaskOverlay.cpp
@@ -570,6 +660,10 @@ add_library(arraw-cli-core STATIC
         src/cli/GpuTestCommand.h
         src/cli/InfoCommand.cpp
         src/cli/InfoCommand.h
+        src/cli/LensesCommand.cpp
+        src/cli/LensesCommand.h
+        src/cli/LensOptions.cpp
+        src/cli/LensOptions.h
         src/cli/ShotInputs.cpp
         src/cli/ShotInputs.h
         src/cli/StreamDiagnostics.cpp
@@ -642,6 +736,10 @@ if(UNIX AND NOT APPLE)
     # plugins, and the Vulkan loader Qt opens on demand.
     set(CPACK_DEBIAN_PACKAGE_DEPENDS
             "qt6-image-formats-plugins, libvulkan1, hicolor-icon-theme")
+    if(ARRAW_HAVE_LENSFUN)
+        # SHLIBDEPS finds liblensfun1; the database is data that no scan can see.
+        string(APPEND CPACK_DEBIAN_PACKAGE_DEPENDS ", liblensfun-data-v1")
+    endif()
     include(CPack)
 endif()
 

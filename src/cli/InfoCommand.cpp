@@ -2,6 +2,7 @@
 
 #include "Cli.h"
 #include "Command.h"
+#include "LensOptions.h"
 #include "SettingCodec.h"
 #include "ShotInputs.h"
 #include "SidecarWatch.h"
@@ -14,6 +15,7 @@
 #include <ExifInfo.h>
 #include <ImageImport.h>
 #include <ImageOrientation.h>
+#include <LensResolution.h>
 #include <LocalAdjustmentEdits.h>
 #include <MarksFilter.h>
 #include <NegativeSettings.h>
@@ -59,6 +61,39 @@ struct InfoRequest {
     bool useSidecars = true;
     bool quiet = false;
     cli::LogFormat logFormat = cli::LogFormat::Text;
+    /// @brief The lens database `--lens-database` named, if any.
+    std::optional<std::filesystem::path> lensDatabase;
+};
+
+/// @brief The lens of a RAW as `info` reports it: which one, from where, and what its
+/// corrections resolved to (ADR 050).
+struct LensReport {
+    /// @brief Whether there is anything to say; false for a file with no lens to speak of.
+    bool shown = false;
+
+    /// @brief The lens the corrections are for, when one was recorded or found.
+    std::optional<LensIdentity> lens;
+
+    /// @brief Whether the lens is the recorded one, rather than found now.
+    bool recorded = false;
+
+    /// @brief How a recorded lens was chosen.
+    LensOrigin origin = LensOrigin::Matched;
+
+    /// @brief Crop factor the profile is applied with.
+    std::optional<double> cropFactor;
+
+    /// @brief Stamp of the database the lens was looked up in, empty when none loaded.
+    std::string database;
+
+    /// @brief Stamp the lens was recorded against, empty when it was not recorded.
+    std::string recordedDatabase;
+
+    /// @brief Why there is no lens, when there is none.
+    std::string problem;
+
+    /// @brief What the switches that are on resolved to; empty when none is on or none resolved.
+    LensCorrection correction;
 };
 
 /// @brief One photograph as `info` reports it.
@@ -82,6 +117,9 @@ struct FileReport {
 
     /// @brief Other tools' namespaces in the sidecar, when it was read.
     std::vector<ForeignNamespace> others;
+
+    /// @brief The lens of a RAW, resolved; shown only when it has something to say.
+    LensReport lens;
 };
 
 /// @brief Reports a usage problem of `info`.
@@ -117,6 +155,13 @@ void configure(QCommandLineParser& parser) {
         "status is 0 when all were shown, 1 when any failed, 2 for a usage error. A\n"
         "sidecar that cannot be read fails its file, unless --no-sidecar is given,\n"
         "which reports the sidecar as ignored.\n"
+        "\n"
+        "A RAW that names a lens, or has a lens correction on or a lens recorded, also shows\n"
+        "its lens: which one, whether it is the recorded one or was matched just now, the crop\n"
+        "factor, the lens database's stamp, the corrections that are on, and the conditions\n"
+        "each was resolved for (read from the file or assumed). A correction that cannot be\n"
+        "applied is reported as a diagnostic that names the reason. --json gives a\n"
+        "\"lensCorrection\" object.\n"
         "The command never writes anything.");
     parser.addHelpOption();
     parser.addOption({"all", "List every develop setting, not only those that differ."});
@@ -124,6 +169,7 @@ void configure(QCommandLineParser& parser) {
                       "Print one JSON document for all files: {\"files\": [...]}. A file that "
                       "failed is left out of it."});
     parser.addOption({"no-sidecar", "Show each photograph as it opens without its .xmp sidecar."});
+    cli::addLensOptions(parser, false);
     parser.addOption({{"q", "quiet"}, "Drop informational diagnostics, keeping what went wrong."});
     cli::addMarksFilterOptions(parser);
     cli::addLogFormatOption(parser);
@@ -156,6 +202,11 @@ std::optional<InfoRequest> buildRequest(const QCommandLineParser& parser, std::o
     }
     request.filter = *filter;
     request.quiet = parser.isSet("quiet");
+    const auto lens = cli::readLensOptions(parser, false, "info", err, code);
+    if (!lens) {
+        return std::nullopt;
+    }
+    request.lensDatabase = lens->database;
     return request;
 }
 
@@ -481,6 +532,156 @@ void writeMasks(std::ostream& out, const DevelopState& state) {
     }
 }
 
+/// @brief Resolves what `info` says of a RAW's lens.
+///
+/// Looked at only when there is something to say: a correction is on, a lens is recorded, the
+/// file names a lens, or every setting was asked for, so a file without a lens never loads the
+/// database. A correction that is on is resolved as a render would, its notices going to @p log.
+LensReport lensReportOf(const Photo& photo, bool all, cli::LensDatabaseSource& source,
+                        DiagnosticLog& log) {
+    LensReport report;
+    const LensSettings& settings = photo.negative().lens;
+    const LensFacts& facts = photo.metadata().lens;
+    if (!isRaw(photo.metadata()) ||
+        !(all || settings.any() || settings.lens || !facts.lensNames.empty())) {
+        return report;
+    }
+    report.shown = true;
+    const LensDatabase& database = source.get();
+    report.database = database.stamp();
+    CollectedDiagnostics notes;
+    if (const auto match = resolveLensMatch(settings, facts, database, notes, photo.path())) {
+        report.lens = match->lens;
+        report.cropFactor = match->cropFactor;
+    }
+    if (settings.lens) {
+        report.recorded = true;
+        report.origin = settings.lens->origin;
+        report.recordedDatabase = settings.lens->database;
+        // The recorded lens is shown even when the database no longer lists it.
+        report.lens = LensIdentity{settings.lens->maker, settings.lens->model};
+        report.cropFactor = settings.lens->cropFactor;
+    }
+    if (!report.lens) {
+        for (const Diagnostic& note : notes.entries()) {
+            if (note.severity != Severity::Info) {
+                report.problem = describe(note);
+                break;
+            }
+        }
+    } else if (!notes.entries().empty() && settings.lens) {
+        // A recorded lens that has left the database still says so.
+        for (const Diagnostic& note : notes.entries()) {
+            if (note.notice == Notice::LensProfileMissing) {
+                report.problem = describe(note);
+            }
+        }
+    }
+    if (settings.any()) {
+        report.correction = lensCorrectionFor(photo, database, log);
+    }
+    return report;
+}
+
+/// @brief Spells how a provenance was resolved, one correction's conditions.
+std::string provenanceText(const LensProvenance& provenance) {
+    const auto condition = [](std::string text, bool read) {
+        return text + (read ? " (read)" : " (assumed)");
+    };
+    return condition("focal length " + shortestText(provenance.focalLength) + " mm",
+                     provenance.focalLengthRead) +
+           ", " +
+           condition("aperture f/" + shortestText(provenance.aperture), provenance.apertureRead) +
+           ", " +
+           condition("distance " + shortestText(provenance.distance) + " m",
+                     provenance.distanceRead);
+}
+
+/// @brief Writes the lens of a RAW as lines of text.
+void writeLens(std::ostream& out, const Photo& photo, const LensReport& report) {
+    const LensSettings& settings = photo.negative().lens;
+    if (report.lens) {
+        out << "  Lens: " << cli::terminalText(report.lens->model);
+        if (report.recorded) {
+            out << " (recorded, " << tokenOf(report.origin) << ")";
+        } else {
+            out << " (matched now)";
+        }
+        out << '\n';
+        if (!report.problem.empty()) {
+            out << "  Lens problem: " << cli::terminalText(report.problem) << '\n';
+        }
+        if (report.cropFactor) {
+            out << "  Lens crop factor: " << shortestText(*report.cropFactor) << '\n';
+        }
+    } else {
+        out << "  Lens: none"
+            << (report.problem.empty() ? "" : " (" + cli::terminalText(report.problem) + ")")
+            << '\n';
+    }
+    if (!report.database.empty()) {
+        out << "  Lens database: " << report.database;
+        if (!report.recordedDatabase.empty() && report.recordedDatabase != report.database) {
+            out << " (recorded against " << report.recordedDatabase << ")";
+        }
+        out << '\n';
+    }
+    std::string vignetting = "vignetting";
+    if (settings.vignettingAmount != profileVignettingAmount) {
+        vignetting += " " + shortestText(shortestDouble(settings.vignettingAmount)) + "%";
+    }
+    std::string on;
+    using Correction = std::pair<bool, std::string>;
+    for (const auto& [wanted, name] : {Correction{settings.distortion, "distortion"},
+                                       Correction{settings.vignettingAmount > 0.0F, vignetting},
+                                       Correction{settings.lateralCa, "chromatic aberration"}}) {
+        if (wanted) {
+            on += (on.empty() ? "" : ", ") + name;
+        }
+    }
+    out << "  Lens corrections: " << (on.empty() ? "off" : on) << '\n';
+    for (const auto& [from, name] :
+         {std::pair{&report.correction.distortionFrom, "distortion"},
+          std::pair{&report.correction.vignettingFrom, "vignetting"},
+          std::pair{&report.correction.lateralCaFrom, "chromatic aberration"}}) {
+        if (*from) {
+            out << "    " << name << ": " << provenanceText(**from) << '\n';
+        }
+    }
+}
+
+/// @brief Spells the lens of a RAW as a JSON object, or null when there is none to show.
+std::string lensJson(const LensReport& report) {
+    if (!report.shown) {
+        return "null";
+    }
+    const auto provenance = [](const std::optional<LensProvenance>& from) {
+        if (!from) {
+            return std::string("null");
+        }
+        return "{\"focalLength\": " + number(from->focalLength) +
+               ", \"focalLengthRead\": " + (from->focalLengthRead ? "true" : "false") +
+               ", \"aperture\": " + number(from->aperture) +
+               ", \"apertureRead\": " + (from->apertureRead ? "true" : "false") +
+               ", \"distance\": " + number(from->distance) +
+               ", \"distanceRead\": " + (from->distanceRead ? "true" : "false") +
+               ", \"cropFactor\": " + number(from->cropFactor) +
+               ", \"database\": " + jsonString(from->database) + "}";
+    };
+    return std::string("{\"lens\": ") +
+           (report.lens ? "{\"maker\": " + jsonString(report.lens->maker) +
+                              ", \"model\": " + jsonString(report.lens->model) + "}"
+                        : std::string("null")) +
+           ", \"source\": " +
+           (report.lens ? jsonString(report.recorded ? "recorded" : "matched") : "null") +
+           ", \"cropFactor\": " + (report.cropFactor ? number(*report.cropFactor) : "null") +
+           ", \"database\": " + (report.database.empty() ? "null" : jsonString(report.database)) +
+           ", \"problem\": " + (report.problem.empty() ? "null" : jsonString(report.problem)) +
+           ", \"distortion\": " + provenance(report.correction.distortionFrom) +
+           ", \"vignetting\": " + provenance(report.correction.vignettingFrom) +
+           ", \"lateralCa\": " + provenance(report.correction.lateralCaFrom) + "}";
+}
+
 /// @brief Writes one file as lines of text.
 void writeText(std::ostream& out, const FileReport& report, bool all) {
     const Photo& photo = report.photo;
@@ -536,6 +737,9 @@ void writeText(std::ostream& out, const FileReport& report, bool all) {
                                [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
         out << "  Demosaic: " << (name == "LINEAR" ? "Linear" : name) << '\n';
     }
+    if (report.lens.shown) {
+        writeLens(out, photo, report.lens);
+    }
     const auto listed =
         listedSettings(withoutUnusedSettings(photo.state().settings, isRaw(metadata)), all);
     if (listed.empty()) {
@@ -590,6 +794,7 @@ std::string jsonOfReport(const FileReport& report, bool all) {
         first = false;
     }
     return text + "}, \"negative\": " + negativeToJson(photo.negative()) +
+           ", \"lensCorrection\": " + lensJson(report.lens) +
            ", \"localAdjustments\": " + localAdjustmentsToJson(photo.state()) + "}";
 }
 
@@ -613,6 +818,7 @@ FileReport open(const InfoRequest& request, const std::filesystem::path& input,
                 false,
                 readExif(input, exifLog),
                 std::nullopt,
+                {},
                 {}};
     }
     cli::SidecarWatch watch(log);
@@ -645,7 +851,7 @@ FileReport open(const InfoRequest& request, const std::filesystem::path& input,
         return Photo(input, std::move(described), negative, std::move(state), contents->marks);
     };
     FileReport report{photoOf(std::move(metadata)), std::nullopt, sidecar, true,
-                      readExif(input, exifLog),     std::nullopt, {}};
+                      readExif(input, exifLog),     std::nullopt, {},      {}};
     if (contents) {
         report.creatorTool = contents->creatorTool;
         report.others = contents->others;
@@ -656,6 +862,7 @@ FileReport open(const InfoRequest& request, const std::filesystem::path& input,
 /// @brief Describes every input, continuing past the ones that fail.
 int infoAll(const InfoRequest& request, std::ostream& out, std::ostream& err) {
     cli::StreamDiagnostics log(err, request.logFormat, request.quiet);
+    cli::LensDatabaseSource lenses(request.lensDatabase);
     const cli::ExpandedInputs expanded = cli::expandInputs(request.inputs, log);
     std::size_t failures = expanded.unreadableFolders;
     std::size_t shown = 0;
@@ -671,6 +878,7 @@ int infoAll(const InfoRequest& request, std::ostream& out, std::ostream& err) {
             }
             FileReport report = open(request, input, log);
             report.shot = shot;
+            report.lens = lensReportOf(report.photo, request.all, lenses, log);
             if (request.json) {
                 out << (shown > 0 ? ", " : "") << jsonOfReport(report, request.all);
             } else {

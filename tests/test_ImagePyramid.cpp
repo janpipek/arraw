@@ -242,8 +242,8 @@ TEST_CASE("Developing a reduced level stays near developing the full photograph"
     REQUIRE(level == 2);
     ImageBuffer reduced = halved(halved(full));
 
-    const ImageBuffer exact = develop(full, state, request);
-    const ImageBuffer preview = develop(reduced, state, request);
+    const ImageBuffer exact = develop(full, state, LensCorrection{}, request);
+    const ImageBuffer preview = develop(reduced, state, LensCorrection{}, request);
     REQUIRE(preview.size() == exact.size());
 
     double sum = 0.0;

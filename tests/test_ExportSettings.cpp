@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <variant>
+#include <vector>
 
 using namespace arraw;
 using app::ExportSettings;
@@ -113,7 +114,7 @@ TEST_CASE("The source is recognised however its path is spelled", "[app][export]
     REQUIRE(isSameFile(dir.file("new.png"), dir.path() / "x" / ".." / "new.png"));
 }
 
-TEST_CASE("Settings are remembered, except the size", "[app][export][settings]") {
+TEST_CASE("Settings are remembered, the custom size included", "[app][export][settings]") {
     const test::TempDir dir;
     const QString file = QString::fromStdU16String(dir.file("settings.ini").u16string());
     ExportSettings settings;
@@ -141,8 +142,41 @@ TEST_CASE("Settings are remembered, except the size", "[app][export][settings]")
     REQUIRE(restored.allowEnlarging);
     REQUIRE(restored.quality == 55);
     REQUIRE(restored.sharpening == 33);
-    REQUIRE(restored.width == 0);
-    REQUIRE(restored.height == 0);
+    REQUIRE(restored.width == 123);
+    REQUIRE(restored.height == 456);
+}
+
+TEST_CASE("The original size is stored as no resizing, and is the default",
+          "[app][export][settings]") {
+    const test::TempDir dir;
+    const QString file = QString::fromStdU16String(dir.file("settings.ini").u16string());
+    QSettings store(file, QSettings::IniFormat);
+    REQUIRE_FALSE(app::restoreSettings(store).resize);
+
+    app::saveSettings(ExportSettings{.resize = true, .width = 2048, .height = 2048}, store);
+    ExportSettings restored = app::restoreSettings(store);
+    REQUIRE(restored.resize);
+    REQUIRE(restored.width == 2048);
+    REQUIRE(restored.height == 2048);
+
+    app::saveSettings(ExportSettings{}, store);
+    restored = app::restoreSettings(store);
+    REQUIRE_FALSE(restored.resize);
+}
+
+TEST_CASE("A bad stored size means the original size", "[app][export][settings]") {
+    const test::TempDir dir;
+    const QString file = QString::fromStdU16String(dir.file("settings.ini").u16string());
+    QSettings store(file, QSettings::IniFormat);
+    store.setValue("export/resize", true); // As older versions stored it: no box.
+    REQUIRE_FALSE(app::restoreSettings(store).resize);
+    store.setValue("export/width", 0);
+    store.setValue("export/height", 500);
+    REQUIRE_FALSE(app::restoreSettings(store).resize);
+    store.setValue("export/width", "wide");
+    REQUIRE_FALSE(app::restoreSettings(store).resize);
+    store.setValue("export/width", 100000);
+    REQUIRE_FALSE(app::restoreSettings(store).resize);
 }
 
 TEST_CASE("Metadata choices default, map to a selection, and are remembered",
@@ -192,4 +226,45 @@ TEST_CASE("Nothing stored, or nonsense, gives the defaults", "[app][export][sett
     REQUIRE(restored.encoding == defaults.encoding);
     REQUIRE(restored.quality == defaults.quality);
     REQUIRE(restored.sharpening == defaults.sharpening);
+}
+
+namespace {
+
+using Paths = std::vector<std::filesystem::path>;
+
+}
+
+TEST_CASE("Targets are the stems in the folder with the format's suffix", "[app][export]") {
+    const Paths sources{"/a/one.nef", "/b/two.cr2"};
+    const Paths targets = app::targetPaths(sources, "/out", ImageFileFormat::Tiff);
+    CHECK(targets == Paths{"/out/one.tif", "/out/two.tif"});
+    CHECK(app::targetPaths({}, "/out", ImageFileFormat::Jpeg).empty());
+}
+
+TEST_CASE("Targets of equal stems are numbered from 2, in the order given", "[app][export]") {
+    const Paths sources{"/a/x.nef", "/b/x.nef", "/c/x.cr2"};
+    CHECK(app::targetPaths(sources, "/out", ImageFileFormat::Jpeg) ==
+          Paths{"/out/x.jpg", "/out/x_2.jpg", "/out/x_3.jpg"});
+    // Deterministic.
+    CHECK(app::targetPaths(sources, "/out", ImageFileFormat::Jpeg) ==
+          app::targetPaths(sources, "/out", ImageFileFormat::Jpeg));
+}
+
+TEST_CASE("Targets collide whatever the letter case of the stem", "[app][export]") {
+    const Paths sources{"/a/IMG_1.NEF", "/b/img_1.nef"};
+    CHECK(app::targetPaths(sources, "/out", ImageFileFormat::Png) ==
+          Paths{"/out/IMG_1.png", "/out/img_1_2.png"});
+}
+
+TEST_CASE("A numbered target does not take a name another stem needs", "[app][export]") {
+    const Paths sources{"/a/x.nef", "/b/x.nef", "/c/x_2.nef"};
+    const Paths targets = app::targetPaths(sources, "/out", ImageFileFormat::Jpeg);
+    CHECK(targets == Paths{"/out/x.jpg", "/out/x_2.jpg", "/out/x_2_2.jpg"});
+}
+
+TEST_CASE("A target is never one of the sources", "[app][export]") {
+    // A JPEG shot exported as JPEG into its own folder.
+    const Paths sources{"/out/a.jpg", "/out/B.JPG", "/x/a.nef"};
+    const Paths targets = app::targetPaths(sources, "/out", ImageFileFormat::Jpeg);
+    CHECK(targets == Paths{"/out/a_2.jpg", "/out/B_2.jpg", "/out/a_3.jpg"});
 }

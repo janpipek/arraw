@@ -165,3 +165,14 @@ number.
 ## Note, 2026-10-08
 
 Masks are specified in [ADR 044](044-local-adjustments-are-masked-deltas-summed-into-the-chain.md): linear and radial geometry in the corrected frame and brush strokes (stored as strokes, not rasters) in the sensor frame, as decided here.
+
+## Amendment, 2026-10-18: the frames realised for lens corrections
+
+[ADR 050](050-lens-corrections-are-a-stage-between-noise-reduction-and-the-chain.md) realises the frames. The corrected frame is the output of `Stage::Lens`: the
+source's size and aspect, with distortion removed and zoomed by a **fill scale**
+(the smallest zoom of at least 1 that keeps every output sample inside the
+source), computed once in normalised coordinates so every resolution agrees. The
+crop stays in the upright frame, after that stage. Linear and radial masks stay
+in the corrected frame. Brush strokes stay in the sensor frame and are drawn by
+mapping each dab centre forward through the distortion table (a Newton inverse),
+radii unchanged; `sensorFrom` is no longer the identity.

@@ -53,6 +53,22 @@ QHBoxLayout* linkedRow(QSlider* slider, QSpinBox* spin, int low, int high, int v
     return row;
 }
 
+/// @brief Gives the size box's item that stands for the size in settings.
+/// @return 0 for the original size, 1.. for a preset long edge, the last item for custom.
+int sizeChoiceOf(const ExportSettings& settings) {
+    const auto edges = presetLongEdges();
+    if (!settings.resize) {
+        return 0;
+    }
+    if (settings.width == settings.height) {
+        const auto found = std::ranges::find(edges, settings.width);
+        if (found != edges.end()) {
+            return 1 + static_cast<int>(found - edges.begin());
+        }
+    }
+    return static_cast<int>(edges.size()) + 1;
+}
+
 } // namespace
 
 ExportDialog::ExportDialog(const ExportSettings& initial, ImageSize frame, QWidget* parent)
@@ -80,17 +96,24 @@ ExportDialog::ExportDialog(const ExportSettings& initial, ImageSize frame, QWidg
 
     auto* sizeGroup = new QGroupBox(tr("Output Size"));
     auto* sizeForm = new QFormLayout(sizeGroup);
-    resizeCheck_ = new QCheckBox(tr("Resize to fit"));
-    resizeCheck_->setChecked(initial.resize);
-    sizeForm->addRow(resizeCheck_);
+    sizeForm_ = sizeForm;
+    // Items: original, one per preset long edge, custom.
+    sizeBox_ = new QComboBox;
+    sizeBox_->addItem(tr("Original size"));
+    for (const std::uint32_t edge : presetLongEdges()) {
+        sizeBox_->addItem(tr("Long edge %1 px").arg(edge));
+    }
+    sizeBox_->addItem(tr("Custom\u2026"));
+    sizeBox_->setCurrentIndex(sizeChoiceOf(initial));
+    sizeForm->addRow(tr("Size:"), sizeBox_);
     widthSpin_ = new QSpinBox;
     widthSpin_->setRange(1, 99999);
-    widthSpin_->setValue(spinValue(frame.width));
+    widthSpin_->setValue(spinValue(initial.resize ? initial.width : frame.width));
     widthSpin_->setSuffix(tr(" px"));
     sizeForm->addRow(tr("Width:"), widthSpin_);
     heightSpin_ = new QSpinBox;
     heightSpin_->setRange(1, 99999);
-    heightSpin_->setValue(spinValue(frame.height));
+    heightSpin_->setValue(spinValue(initial.resize ? initial.height : frame.height));
     heightSpin_->setSuffix(tr(" px"));
     sizeForm->addRow(tr("Height:"), heightSpin_);
     enlargeCheck_ = new QCheckBox(tr("Allow enlarging"));
@@ -133,7 +156,7 @@ ExportDialog::ExportDialog(const ExportSettings& initial, ImageSize frame, QWidg
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
 
     connect(formatBox_, &QComboBox::currentIndexChanged, this, [this] { updateEnabled(); });
-    connect(resizeCheck_, &QCheckBox::toggled, this, [this] { updateEnabled(); });
+    connect(sizeBox_, &QComboBox::currentIndexChanged, this, [this] { updateEnabled(); });
     updateEnabled();
 }
 
@@ -146,19 +169,29 @@ void ExportDialog::updateEnabled() {
     }
     sixteenBitCheck_->setEnabled(!jpeg);
     qualityGroup_->setEnabled(jpeg);
-    const bool resize = resizeCheck_->isChecked();
-    widthSpin_->setEnabled(resize);
-    heightSpin_->setEnabled(resize);
-    enlargeCheck_->setEnabled(resize);
+    const int choice = sizeBox_->currentIndex();
+    const bool custom = choice == sizeBox_->count() - 1;
+    sizeForm_->setRowVisible(widthSpin_, custom);
+    sizeForm_->setRowVisible(heightSpin_, custom);
+    widthSpin_->setEnabled(custom);
+    heightSpin_->setEnabled(custom);
+    enlargeCheck_->setEnabled(choice != 0);
 }
 
 ExportSettings ExportDialog::settings() const {
+    const auto edges = presetLongEdges();
+    const int choice = sizeBox_->currentIndex();
+    const bool preset = choice >= 1 && choice <= static_cast<int>(edges.size());
+    const bool custom = choice == static_cast<int>(edges.size()) + 1;
+    const std::uint32_t edge = preset ? edges[static_cast<std::size_t>(choice - 1)] : 0;
+    const std::uint32_t width = custom ? static_cast<std::uint32_t>(widthSpin_->value()) : edge;
+    const std::uint32_t height = custom ? static_cast<std::uint32_t>(heightSpin_->value()) : edge;
     return {.format = formats[formatBox_->currentIndex()],
             .encoding = encodings[profileBox_->currentIndex()],
             .sixteenBit = sixteenBitCheck_->isChecked(),
-            .resize = resizeCheck_->isChecked(),
-            .width = static_cast<std::uint32_t>(widthSpin_->value()),
-            .height = static_cast<std::uint32_t>(heightSpin_->value()),
+            .resize = choice != 0,
+            .width = width,
+            .height = height,
             .allowEnlarging = enlargeCheck_->isChecked(),
             .quality = qualitySpin_->value(),
             .sharpening = sharpenSpin_->value(),

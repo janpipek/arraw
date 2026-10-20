@@ -48,6 +48,8 @@ struct Window {
         window.activateWindow();
         REQUIRE(QTest::qWaitForWindowActive(&window));
         REQUIRE(QTest::qWaitFor([this] { return !view().wholeFrameImage().isNull(); }, 20000));
+        // The strip's folder is listed in the background; the marks act on its active shot.
+        REQUIRE(QTest::qWaitFor([this] { return !strip().isListing(); }, 10000));
     }
 
     [[nodiscard]] PhotoView& view() const {

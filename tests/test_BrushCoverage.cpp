@@ -566,14 +566,14 @@ TEST_CASE("A copied ladder starts with no packed coverage", "[brush][residency][
     const DevelopState state = brushesOf({paintedMask(seed + 21, 3, everydayStyle, 0.75)});
     CheckpointLadder ladder;
     REQUIRE(LadderAccess::coverage(std::as_const(ladder)) == nullptr);
-    static_cast<void>(resumeOrDevelop(ladder, source, state));
+    static_cast<void>(resumeOrDevelop(ladder, source, state, LensCorrection{}));
     REQUIRE(LadderAccess::coverage(std::as_const(ladder)) != nullptr);
 
     const CheckpointLadder copy(ladder);
     REQUIRE(LadderAccess::coverage(copy) == nullptr);
     REQUIRE(copy.holds(Stage::Pointwise) == ladder.holds(Stage::Pointwise));
     CheckpointLadder assigned;
-    static_cast<void>(resumeOrDevelop(assigned, source, state));
+    static_cast<void>(resumeOrDevelop(assigned, source, state, LensCorrection{}));
     assigned = ladder;
     REQUIRE(LadderAccess::coverage(std::as_const(assigned)) == nullptr);
     // The original keeps its own.
@@ -582,8 +582,8 @@ TEST_CASE("A copied ladder starts with no packed coverage", "[brush][residency][
     // Clearing, or a plan without brushes, lets the planes go.
     ladder.clear();
     REQUIRE(LadderAccess::coverage(std::as_const(ladder)) == nullptr);
-    static_cast<void>(resumeOrDevelop(ladder, source, state));
-    static_cast<void>(resumeOrDevelop(ladder, source, DevelopState{}));
+    static_cast<void>(resumeOrDevelop(ladder, source, state, LensCorrection{}));
+    static_cast<void>(resumeOrDevelop(ladder, source, DevelopState{}, LensCorrection{}));
     REQUIRE(LadderAccess::coverage(std::as_const(ladder)) == nullptr);
 }
 
@@ -609,7 +609,7 @@ TEST_CASE("The Coverage step counts only the brushes whose coverage is not ready
 
     // The cache holds them: only the packing is left, so less.
     CheckpointLadder ladder;
-    static_cast<void>(resumeOrDevelop(ladder, source, state));
+    static_cast<void>(resumeOrDevelop(ladder, source, state, LensCorrection{}));
     const std::vector<double> cached = coverageUnitWeights(local, nullptr);
     REQUIRE(cached.size() == 2);
     REQUIRE(coverageOf(cached) < coverageOf(fresh));
@@ -619,13 +619,14 @@ TEST_CASE("The Coverage step counts only the brushes whose coverage is not ready
     const CoverageResidency* residency = LadderAccess::coverage(std::as_const(ladder));
     REQUIRE(residency != nullptr);
     REQUIRE(coverageUnitWeights(local, residency).empty());
-    const ProcessingPlan plan = planFor(*source, state, {});
+    const ProcessingPlan plan = planFor(*source, state, LensCorrection{}, {});
     const StepWeights held = renderStepWeights(plan, {}, residency);
     REQUIRE(held[static_cast<std::size_t>(ProgressStep::Coverage)] == 0.0);
     // A drag of the amount through the same ladder: still none.
     const DevelopState louder =
         withLocalDelta(state, state.localAdjustments[0].id, "exposure", 2.0);
-    const StepWeights dragged = renderStepWeights(planFor(*source, louder, {}), {}, residency);
+    const StepWeights dragged =
+        renderStepWeights(planFor(*source, louder, LensCorrection{}, {}), {}, residency);
     REQUIRE(dragged[static_cast<std::size_t>(ProgressStep::Coverage)] == 0.0);
     // Without the ladder, the same plan counts its packing.
     const StepWeights direct = renderStepWeights(plan, {});
@@ -712,64 +713,64 @@ TEST_CASE("drawsBrushCoverage is true only for coverage drawn from nothing",
     CheckpointLadder ladder;
 
     SECTION("a state without a brush") {
-        REQUIRE_FALSE(drawsBrushCoverage(ladder, *source, DevelopState{}));
+        REQUIRE_FALSE(drawsBrushCoverage(ladder, *source, DevelopState{}, LensCorrection{}));
     }
     SECTION("a new list at a size not cached") {
-        REQUIRE(drawsBrushCoverage(ladder, *source, state));
+        REQUIRE(drawsBrushCoverage(ladder, *source, state, LensCorrection{}));
         // Another size of the same list is also from nothing.
-        static_cast<void>(resumeOrDevelop(ladder, source, state));
-        REQUIRE_FALSE(drawsBrushCoverage(ladder, *source, state));
+        static_cast<void>(resumeOrDevelop(ladder, source, state, LensCorrection{}));
+        REQUIRE_FALSE(drawsBrushCoverage(ladder, *source, state, LensCorrection{}));
         const auto bigger = flatSource({600, 400});
         CheckpointLadder other;
-        REQUIRE(drawsBrushCoverage(other, *bigger, state));
+        REQUIRE(drawsBrushCoverage(other, *bigger, state, LensCorrection{}));
     }
     SECTION("after a ladder render of the same state, and after a delta-only edit") {
-        static_cast<void>(resumeOrDevelop(ladder, source, state));
-        REQUIRE_FALSE(drawsBrushCoverage(ladder, *source, state));
+        static_cast<void>(resumeOrDevelop(ladder, source, state, LensCorrection{}));
+        REQUIRE_FALSE(drawsBrushCoverage(ladder, *source, state, LensCorrection{}));
         const DevelopState louder =
             withLocalDelta(state, state.localAdjustments[0].id, "exposure", 3.0);
-        REQUIRE_FALSE(drawsBrushCoverage(ladder, *source, louder));
+        REQUIRE_FALSE(drawsBrushCoverage(ladder, *source, louder, LensCorrection{}));
         // The ladder holds it even when the cache lost it.
         brushCoverageCache().clear();
-        REQUIRE_FALSE(drawsBrushCoverage(ladder, *source, louder));
+        REQUIRE_FALSE(drawsBrushCoverage(ladder, *source, louder, LensCorrection{}));
         // A ladder that holds nothing, with the cache empty, would draw: an eviction.
         CheckpointLadder fresh;
-        REQUIRE(drawsBrushCoverage(fresh, *source, louder));
+        REQUIRE(drawsBrushCoverage(fresh, *source, louder, LensCorrection{}));
     }
     SECTION("an appended stroke extends what is held") {
-        static_cast<void>(resumeOrDevelop(ladder, source, state));
+        static_cast<void>(resumeOrDevelop(ladder, source, state, LensCorrection{}));
         const DevelopState more =
             withStrokeAppended(state, state.localAdjustments[0].id, cornerStroke());
-        REQUIRE_FALSE(drawsBrushCoverage(ladder, *source, more));
+        REQUIRE_FALSE(drawsBrushCoverage(ladder, *source, more, LensCorrection{}));
         CheckpointLadder fresh;
-        REQUIRE_FALSE(drawsBrushCoverage(fresh, *source, more));
+        REQUIRE_FALSE(drawsBrushCoverage(fresh, *source, more, LensCorrection{}));
     }
     SECTION("the cache holds the list behind another pointer") {
-        static_cast<void>(resumeOrDevelop(ladder, source, state));
+        static_cast<void>(resumeOrDevelop(ladder, source, state, LensCorrection{}));
         const DevelopState again = brushesOf({std::make_shared<const StrokeList>(*list)});
         CheckpointLadder fresh;
-        REQUIRE_FALSE(drawsBrushCoverage(fresh, *source, again));
+        REQUIRE_FALSE(drawsBrushCoverage(fresh, *source, again, LensCorrection{}));
     }
     SECTION("a minimum of modelled drawing time") {
-        REQUIRE(drawsBrushCoverage(ladder, *source, state, {}, 0.0));
+        REQUIRE(drawsBrushCoverage(ladder, *source, state, LensCorrection{}, {}, 0.0));
         // The modelled time of a few strokes at 0.06 MP is milliseconds.
-        REQUIRE_FALSE(drawsBrushCoverage(ladder, *source, state, {}, 10.0));
+        REQUIRE_FALSE(drawsBrushCoverage(ladder, *source, state, LensCorrection{}, {}, 10.0));
     }
     SECTION("a ladder that could resume past the pointwise pass draws nothing") {
-        static_cast<void>(resumeOrDevelop(ladder, source, state));
+        static_cast<void>(resumeOrDevelop(ladder, source, state, LensCorrection{}));
         // A copy keeps the rungs and loses the packed coverage; the cache lost the list too.
         const CheckpointLadder copy = ladder;
         brushCoverageCache().clear();
         REQUIRE(LadderAccess::coverage(copy) == nullptr);
-        REQUIRE_FALSE(drawsBrushCoverage(copy, *source, state));
+        REQUIRE_FALSE(drawsBrushCoverage(copy, *source, state, LensCorrection{}));
         // A render that has to start the pointwise pass again does draw it.
         const DevelopState louder =
             withLocalDelta(state, state.localAdjustments[0].id, "exposure", 3.0);
-        REQUIRE(drawsBrushCoverage(copy, *source, louder));
+        REQUIRE(drawsBrushCoverage(copy, *source, louder, LensCorrection{}));
     }
     SECTION("it draws, packs and inserts nothing") {
         const std::size_t entries = brushCoverageCache().entryCount();
-        REQUIRE(drawsBrushCoverage(ladder, *source, state));
+        REQUIRE(drawsBrushCoverage(ladder, *source, state, LensCorrection{}));
         REQUIRE(brushCoverageCache().entryCount() == entries);
         REQUIRE(ladder.empty());
         REQUIRE(LadderAccess::coverage(std::as_const(ladder)) == nullptr);
@@ -783,7 +784,7 @@ TEST_CASE("A ladder render and a direct render of the same strokes at once give 
     const auto source = flatSource(size);
     const DevelopState state = brushesOf({paintedMask(seed + 27, 4, everydayStyle, 0.75),
                                           paintedMask(seed + 28, 4, detailStyle, 0.75)});
-    const ImageBuffer reference = develop(*source, state);
+    const ImageBuffer reference = develop(*source, state, LensCorrection{});
     brushCoverageCache().clear();
 
     const auto same = [&](const ImageBuffer& image) {
@@ -795,18 +796,20 @@ TEST_CASE("A ladder render and a direct render of the same strokes at once give 
         std::vector<std::jthread> threads;
         threads.emplace_back([&] {
             CheckpointLadder ladder;
-            if (!same(resumeOrDevelop(ladder, source, state).checkpoint.readBack())) {
+            if (!same(resumeOrDevelop(ladder, source, state, LensCorrection{})
+                          .checkpoint.readBack())) {
                 ++wrong;
             }
         });
         threads.emplace_back([&] {
-            if (!same(develop(*source, state))) {
+            if (!same(develop(*source, state, LensCorrection{}))) {
                 ++wrong;
             }
         });
         threads.emplace_back([&] {
             CheckpointLadder ladder;
-            if (!same(resumeOrDevelop(ladder, source, state).checkpoint.readBack())) {
+            if (!same(resumeOrDevelop(ladder, source, state, LensCorrection{})
+                          .checkpoint.readBack())) {
                 ++wrong;
             }
         });
@@ -975,7 +978,7 @@ TEST_CASE("Through a ladder a grown update packs the tiles that changed, and und
     REQUIRE(path.points.size() >= 100);
 
     CheckpointLadder ladder;
-    static_cast<void>(resumeOrDevelop(ladder, source, state));
+    static_cast<void>(resumeOrDevelop(ladder, source, state, LensCorrection{}));
     const CoverageResidency* residency = LadderAccess::coverage(std::as_const(ladder));
     REQUIRE(residency != nullptr);
     const auto beforeTiles = brushCoverageCache().find(before, size);
@@ -989,10 +992,10 @@ TEST_CASE("Through a ladder a grown update packs the tiles that changed, and und
         const auto list = std::get<BrushMask>(live.localAdjustments[0].shape).strokes;
         const BrushCoverageCache::Peek peeked = brushCoverageCache().peek(list, size);
         // A growth is not coverage drawn from nothing, so it is not "drawing" for the window.
-        REQUIRE_FALSE(drawsBrushCoverage(ladder, *source, live));
+        REQUIRE_FALSE(drawsBrushCoverage(ladder, *source, live, LensCorrection{}));
         const std::uint64_t packedBefore = residency->tilesPacked();
         const std::uint64_t grownBefore = brushCoverageCache().lookups(CoverageLookup::Grown);
-        static_cast<void>(resumeOrDevelop(ladder, source, live));
+        static_cast<void>(resumeOrDevelop(ladder, source, live, LensCorrection{}));
         const auto current = brushCoverageCache().find(list, size);
         REQUIRE(current != nullptr);
         if (peeked.lookup == CoverageLookup::Grown) {
@@ -1015,7 +1018,7 @@ TEST_CASE("Through a ladder a grown update packs the tiles that changed, and und
     const std::uint64_t others = brushCoverageCache().lookups(CoverageLookup::Extended) +
                                  brushCoverageCache().lookups(CoverageLookup::Grown) +
                                  brushCoverageCache().lookups(CoverageLookup::Miss);
-    static_cast<void>(resumeOrDevelop(ladder, source, state));
+    static_cast<void>(resumeOrDevelop(ladder, source, state, LensCorrection{}));
     CHECK(brushCoverageCache().lookups(CoverageLookup::Hit) == hits + 1);
     CHECK(brushCoverageCache().lookups(CoverageLookup::Extended) +
               brushCoverageCache().lookups(CoverageLookup::Grown) +

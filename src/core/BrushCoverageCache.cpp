@@ -202,20 +202,21 @@ BrushCoverageCache::drawn(const std::shared_ptr<const CoverageTiles>& base,
 }
 
 std::shared_ptr<const CoverageTiles>
-BrushCoverageCache::find(const std::shared_ptr<const StrokeList>& strokes, ImageSize raster) {
+BrushCoverageCache::find(const std::shared_ptr<const StrokeList>& strokes, ImageSize raster,
+                         const BrushFrame& frame) {
     if (!strokes || raster.empty()) {
         return nullptr;
     }
     const std::scoped_lock lock(mutex_);
     for (Entry& entry : entries_) {
-        if (entry.size == raster && entry.list == strokes) {
+        if (matches(entry, raster, frame) && entry.list == strokes) {
             entry.lastUse = ++clock_;
             entry.superseded = false;
             return entry.tiles;
         }
     }
     for (Entry& entry : entries_) {
-        if (entry.size == raster && entry.list->contentHash() == strokes->contentHash() &&
+        if (matches(entry, raster, frame) && entry.list->contentHash() == strokes->contentHash() &&
             *entry.list == *strokes) {
             entry.lastUse = ++clock_;
             entry.superseded = false;
@@ -226,23 +227,23 @@ BrushCoverageCache::find(const std::shared_ptr<const StrokeList>& strokes, Image
 }
 
 BrushCoverageCache::Peek BrushCoverageCache::peek(const std::shared_ptr<const StrokeList>& strokes,
-                                                  ImageSize raster) const {
+                                                  ImageSize raster, const BrushFrame& frame) const {
     if (!strokes || raster.empty() || strokes->rasteriser() != brushRasteriserVersion) {
         return {};
     }
     const std::scoped_lock lock(mutex_);
     for (const Entry& entry : entries_) {
-        if (entry.size == raster && entry.list == strokes) {
+        if (matches(entry, raster, frame) && entry.list == strokes) {
             return {CoverageLookup::Hit, strokes->strokes().size()};
         }
     }
     for (const Entry& entry : entries_) {
-        if (entry.size == raster && entry.list->contentHash() == strokes->contentHash() &&
+        if (matches(entry, raster, frame) && entry.list->contentHash() == strokes->contentHash() &&
             *entry.list == *strokes) {
             return {CoverageLookup::ContentHit, strokes->strokes().size()};
         }
     }
-    if (growthBase(*strokes, raster)) {
+    if (growthBase(*strokes, raster, frame)) {
         return {CoverageLookup::Grown, strokes->strokes().size() - 1};
     }
     // The same test as ::arraw::BrushCoverageCache::coverage makes for the longest prefix to
@@ -251,7 +252,7 @@ BrushCoverageCache::Peek BrushCoverageCache::peek(const std::shared_ptr<const St
     std::size_t prefix = 0;
     for (const Entry& entry : entries_) {
         const auto held = entry.list->strokes();
-        if (entry.size == raster && entry.list->rasteriser() == strokes->rasteriser() &&
+        if (matches(entry, raster, frame) && entry.list->rasteriser() == strokes->rasteriser() &&
             !held.empty() && held.size() < wanted.size() && held.size() > prefix &&
             std::equal(held.begin(), held.end(), wanted.begin(),
                        [](const auto& a, const auto& b) { return a.get() == b.get(); })) {
@@ -264,8 +265,14 @@ BrushCoverageCache::Peek BrushCoverageCache::peek(const std::shared_ptr<const St
     return {};
 }
 
+bool BrushCoverageCache::matches(const Entry& entry, ImageSize raster,
+                                 const BrushFrame& frame) noexcept {
+    return entry.size == raster && sameBrushFrame(entry.frame, frame);
+}
+
 std::optional<std::size_t> BrushCoverageCache::growthBase(const StrokeList& wanted,
-                                                          ImageSize raster) const {
+                                                          ImageSize raster,
+                                                          const BrushFrame& frame) const {
     const auto w = wanted.strokes();
     if (w.empty()) {
         return std::nullopt;
@@ -275,7 +282,7 @@ std::optional<std::size_t> BrushCoverageCache::growthBase(const StrokeList& want
     std::size_t bestPoints = 0;
     for (std::size_t i = 0; i < entries_.size(); ++i) {
         const Entry& entry = entries_[i];
-        if (!(entry.size == raster) || !entry.settled ||
+        if (!matches(entry, raster, frame) || !entry.settled ||
             entry.list->rasteriser() != wanted.rasteriser()) {
             continue;
         }
@@ -303,16 +310,14 @@ std::optional<std::size_t> BrushCoverageCache::growthBase(const StrokeList& want
 
 BrushCoverageCache::Result
 BrushCoverageCache::coverage(const std::shared_ptr<const StrokeList>& strokes, ImageSize raster,
-                             bool retain) {
+                             bool retain, const BrushFrame& frame) {
     if (!strokes || raster.empty()) {
         throw std::invalid_argument("coverage needs a list and a size");
     }
     if (strokes->rasteriser() != brushRasteriserVersion) {
         throw std::invalid_argument("unknown brush rasteriser version");
     }
-    const auto sameSize = [&](const Entry& e) {
-        return e.size.width == raster.width && e.size.height == raster.height;
-    };
+    const auto sameSize = [&](const Entry& e) { return matches(e, raster, frame); };
     const auto counted = [&](CoverageLookup kind) {
         lookups_[static_cast<std::size_t>(kind)].fetch_add(1, std::memory_order_relaxed);
     };
@@ -343,13 +348,15 @@ BrushCoverageCache::coverage(const std::shared_ptr<const StrokeList>& strokes, I
                 counted(CoverageLookup::ContentHit);
                 Result result{entry.tiles, CoverageLookup::ContentHit, {}};
                 if (retain) {
-                    insert(
-                        {strokes, raster, entry.tiles, ++clock_, entry.settled, entry.settledDabs});
+                    Entry again{strokes,  raster,        entry.tiles,
+                                ++clock_, entry.settled, entry.settledDabs};
+                    again.frame = frame;
+                    insert(std::move(again));
                 }
                 return result;
             }
         }
-        if (const auto grown = growthBase(*strokes, raster)) {
+        if (const auto grown = growthBase(*strokes, raster, frame)) {
             Entry& entry = entries_[*grown];
             parent = entry.list;
             parentSettled = entry.settled;
@@ -382,7 +389,7 @@ BrushCoverageCache::coverage(const std::shared_ptr<const StrokeList>& strokes, I
     std::size_t madeDabs = 0;
     if (parent) {
         // Only the dabs the path gained since the settled grid, then the end dab.
-        PlacedStroke placed = placedStroke(*strokes->strokes().back(), raster);
+        PlacedStroke placed = placedStroke(*strokes->strokes().back(), raster, frame.get());
         const std::size_t regular = placed.regular;
         if (regular < settledDabs) {
             throw std::logic_error("a grown stroke lost dabs");
@@ -406,7 +413,7 @@ BrushCoverageCache::coverage(const std::shared_ptr<const StrokeList>& strokes, I
         made.result.dirty.erase(std::ranges::unique(made.result.dirty).begin(),
                                 made.result.dirty.end());
     } else {
-        std::vector<PlacedStroke> placed = placedStrokes(*strokes, raster, prefix);
+        std::vector<PlacedStroke> placed = placedStrokes(*strokes, raster, prefix, frame.get());
         const EndDab* end = nullptr;
         EndDab endDab{};
         if (!placed.empty()) {
@@ -424,6 +431,7 @@ BrushCoverageCache::coverage(const std::shared_ptr<const StrokeList>& strokes, I
     counted(made.result.lookup);
     if (retain) {
         Entry entry{strokes, raster, made.result.tiles, 0, made.settled, madeDabs};
+        entry.frame = frame;
         if (strokes->strokes().empty()) {
             entry.settled = nullptr;
         }
@@ -468,8 +476,7 @@ void BrushCoverageCache::insert(Entry entry, const StrokeList* replaces,
     // Two threads that missed on the same request both arrive here: keep one entry per key,
     // or the same coverage would count twice towards the budget.
     const auto duplicate = std::ranges::find_if(entries_, [&](const Entry& e) {
-        return e.list == entry.list && e.size.width == entry.size.width &&
-               e.size.height == entry.size.height;
+        return e.list == entry.list && matches(e, entry.size, entry.frame);
     });
     if (duplicate != entries_.end()) {
         releaseEntry(*duplicate);
@@ -479,8 +486,7 @@ void BrushCoverageCache::insert(Entry entry, const StrokeList* replaces,
         // The entry this one grew from, if no one replaced or evicted it meanwhile: a stroke of
         // 200 updates leaves one entry.
         const auto parent = std::ranges::find_if(entries_, [&](const Entry& e) {
-            return e.list.get() == replaces && e.size.width == entry.size.width &&
-                   e.size.height == entry.size.height;
+            return e.list.get() == replaces && matches(e, entry.size, entry.frame);
         });
         if (parent != entries_.end()) {
             releaseEntry(*parent);
@@ -491,8 +497,7 @@ void BrushCoverageCache::insert(Entry entry, const StrokeList* replaces,
         // The list this one extended stays for undo, but no Grown can use its settled grid, and
         // it goes first.
         const auto base = std::ranges::find_if(entries_, [&](const Entry& e) {
-            return e.list.get() == extends && e.size.width == entry.size.width &&
-                   e.size.height == entry.size.height;
+            return e.list.get() == extends && matches(e, entry.size, entry.frame);
         });
         if (base != entries_.end()) {
             base->superseded = true;

@@ -22,8 +22,10 @@ jobs:
       - name: Install build dependencies
         run: sudo tools/ci/install-deps.sh
 
+      # lensfun is required here, as in a release: a build that lost it would skip its
+      # tests and look green (ADR 050).
       - name: Configure
-        run: cmake --preset debug
+        run: cmake --preset debug -DARRAW_WITH_LENSFUN=ON
 
       - name: Build
         run: cmake --build --preset debug
@@ -31,8 +33,11 @@ jobs:
       # arraw-gpu-tests is part of the build and registered with ctest; it picks
       # its own headless platform, so no QT_QPA_PLATFORM is needed here, and
       # lavapipe stands in for a GPU (the device tests skip without Vulkan).
+      # ARRAW_REQUIRE_LENSFUN makes the [lensfun] tests fail rather than skip.
       - name: Test
         run: ctest --preset debug -j "$(nproc)"
+        env:
+          ARRAW_REQUIRE_LENSFUN: "1"
 
   python:
     name: Python bindings (Qt 6.10, Debug)
@@ -53,5 +58,8 @@ jobs:
       # Builds the _arraw module and arraw-cli (the parity tests compare the two),
       # then runs pytest with ARRAW_REQUIRE_CLI=1, so a missing CLI fails
       # instead of skipping.
+      # The recipe forwards ARRAW_WITH_LENSFUN to both configures.
       - name: Test
         run: just py-test
+        env:
+          ARRAW_WITH_LENSFUN: "ON"

@@ -5,6 +5,7 @@
 #include "Denoise.h"
 #include "Effects.h"
 #include "LadderAccess.h"
+#include "Lens.h"
 #include "Presence.h"
 #include "ProcessingPlan.h"
 #include "ProgressScope.h"
@@ -258,6 +259,15 @@ struct CpuStages {
         switch (stage) {
         case Stage::Denoise:
             return Pixels::owned(applyDenoise(pixels.view(), plan.denoise));
+        case Stage::Lens: {
+            // Only read, as Denoise: a float source is not copied first, an integer one is
+            // converted, since the pass works in float.
+            const ImageBuffer& input = pixels.view();
+            if (input.format() == workingFormat) {
+                return Pixels::owned(applyLens(input, plan.lens));
+            }
+            return Pixels::owned(applyLens(toRgbaF32(input), plan.lens));
+        }
         case Stage::Pointwise:
             return Pixels::owned(pointwise(pixels.view(), plan));
         case Stage::Geometry:
@@ -349,10 +359,11 @@ bool onHost(const CheckpointState& rung) {
 } // namespace
 
 ImageBuffer arraw::develop(const ImageBuffer& source, const DevelopState& state,
-                           const RenderRequest& request, ProgressChannel* progress) {
+                           const LensCorrection& lens, const RenderRequest& request,
+                           ProgressChannel* progress) {
     const detail::TimingSpan timing("cpu.develop");
     // The direct path: no checkpoint, so nothing is shared and nothing copied.
-    const ProcessingPlan plan = planFor(source, state, request);
+    const ProcessingPlan plan = planFor(source, state, lens, request);
     detail::ProgressRoot root(progress, detail::observedStepWeights(progress, plan, request),
                               ProgressStep::Denoise);
     CpuStages backend;
@@ -363,12 +374,12 @@ ImageBuffer arraw::develop(const ImageBuffer& source, const DevelopState& state,
 }
 
 RenderCheckpoint arraw::developUntil(const ImageBuffer& source, const DevelopState& state,
-                                     Stage stopAfter, const RenderRequest& request,
-                                     ProgressChannel* progress) {
+                                     const LensCorrection& lens, Stage stopAfter,
+                                     const RenderRequest& request, ProgressChannel* progress) {
     requireBoundary(stopAfter);
     // Only a render that reaches the resize plans one: stopping earlier ignores
     // the request, and has no use for the opacity scan.
-    ProcessingPlan plan = planFor(source, state, plannedRequest(request, stopAfter));
+    ProcessingPlan plan = planFor(source, state, lens, plannedRequest(request, stopAfter));
     // Measured against the whole render the request asks for, so that the
     // resumes after this one carry on from where it stops.
     detail::ProgressRoot root(progress, detail::observedStepWeights(progress, plan, request),
@@ -382,15 +393,16 @@ RenderCheckpoint arraw::developUntil(const ImageBuffer& source, const DevelopSta
 }
 
 RenderCheckpoint arraw::resumeFrom(const RenderCheckpoint& from, const ImageBuffer& source,
-                                   const DevelopState& state, Stage stopAfter,
-                                   const RenderRequest& request, ProgressChannel* progress) {
+                                   const DevelopState& state, const LensCorrection& lens,
+                                   Stage stopAfter, const RenderRequest& request,
+                                   ProgressChannel* progress) {
     requireBoundary(stopAfter);
     const CheckpointState& held = stateOf(from);
     const auto* pixels = std::get_if<ImageBuffer>(&held.pixels);
     if (pixels == nullptr) {
         throw std::invalid_argument("A checkpoint on a device cannot be resumed on the CPU");
     }
-    ProcessingPlan plan = planFor(source, state, plannedRequest(request, stopAfter));
+    ProcessingPlan plan = planFor(source, state, lens, plannedRequest(request, stopAfter));
     requireResumable(held, plan, source.size(), stopAfter);
     // From the checkpoint's share of the whole render, which a refused one never reports.
     detail::ProgressRoot root(progress, detail::observedStepWeights(progress, plan, request),
@@ -411,13 +423,13 @@ RenderCheckpoint arraw::resumeFrom(const RenderCheckpoint& from, const ImageBuff
 
 LadderRender arraw::resumeOrDevelop(CheckpointLadder& ladder,
                                     std::shared_ptr<const ImageBuffer> source,
-                                    const DevelopState& state, const RenderRequest& request,
-                                    ProgressChannel* progress) {
+                                    const DevelopState& state, const LensCorrection& lens,
+                                    const RenderRequest& request, ProgressChannel* progress) {
     if (!source) {
         throw std::invalid_argument("A render through a ladder needs a source");
     }
     // Planned before the ladder is touched, so that a bad request drops nothing.
-    ProcessingPlan plan = planFor(*source, state, request);
+    ProcessingPlan plan = planFor(*source, state, lens, request);
     LadderAccess::bind(ladder, source);
     const std::optional<Stage> resumedFrom =
         LadderAccess::deepestUsable(ladder, plan, source->size(), onHost);
@@ -445,9 +457,9 @@ LadderRender arraw::resumeOrDevelop(CheckpointLadder& ladder,
 }
 
 bool arraw::drawsBrushCoverage(const CheckpointLadder& ladder, const ImageBuffer& source,
-                               const DevelopState& state, const RenderRequest& request,
-                               double minimumSeconds) {
-    const ProcessingPlan plan = planFor(source, state, request);
+                               const DevelopState& state, const LensCorrection& lens,
+                               const RenderRequest& request, double minimumSeconds) {
+    const ProcessingPlan plan = planFor(source, state, lens, request);
     if (LadderAccess::hasUsableFrom(ladder, Stage::Pointwise, plan, source.size(), onHost)) {
         // The render resumes past the pointwise pass and draws nothing.
         return false;
@@ -457,21 +469,22 @@ bool arraw::drawsBrushCoverage(const CheckpointLadder& ladder, const ImageBuffer
 }
 
 bool arraw::canResumeFrom(const RenderCheckpoint& from, const ImageBuffer& source,
-                          const DevelopState& state, Stage stopAfter,
+                          const DevelopState& state, const LensCorrection& lens, Stage stopAfter,
                           const RenderRequest& request) {
     const CheckpointState& held = stateOf(from);
     requireStopAfter(held.boundary, stopAfter);
     // Planned as both backends' resumes plan, so that the answer is theirs.
-    const ProcessingPlan plan = planFor(source, state, plannedRequest(request, stopAfter));
+    const ProcessingPlan plan = planFor(source, state, lens, plannedRequest(request, stopAfter));
     return !staleReason(held, plan, source.size()).has_value();
 }
 
-ImageBuffer arraw::sample(const ImageBuffer& source, const DevelopState& state, Tap tap,
-                          const RenderRequest& request, ProgressChannel* progress) {
+ImageBuffer arraw::sample(const ImageBuffer& source, const DevelopState& state,
+                          const LensCorrection& lens, Tap tap, const RenderRequest& request,
+                          ProgressChannel* progress) {
     // Validated first, so a bad tap costs nothing.
     static_cast<void>(tapEncoding(tap));
     const detail::TimingSpan timing("cpu.sample");
-    const ProcessingPlan plan = planFor(source, state, request);
+    const ProcessingPlan plan = planFor(source, state, lens, request);
     // A sample stops before the effects, which therefore take no share.
     detail::StepWeights weights = detail::observedStepWeights(progress, plan, request);
     weights[static_cast<std::size_t>(ProgressStep::Effects)] = 0.0;

@@ -115,21 +115,21 @@ void requireWellFormed(const std::vector<Progress>& reports) {
 TEST_CASE("A render with a channel gives the bits of one without", "[progress][develop][slow]") {
     const ImageBuffer source = makeSource();
     const DevelopState state = everyStep();
-    const ImageBuffer unobserved = develop(source, state, resized());
+    const ImageBuffer unobserved = develop(source, state, LensCorrection{}, resized());
     ProgressChannel channel([](const Progress&) {});
-    const ImageBuffer observed = develop(source, state, resized(), &channel);
+    const ImageBuffer observed = develop(source, state, LensCorrection{}, resized(), &channel);
     REQUIRE(sameBits(unobserved, observed));
 
     // A channel without a callback only carries cancellation, and changes nothing either.
     ProgressChannel quiet;
-    REQUIRE(sameBits(unobserved, develop(source, state, resized(), &quiet)));
+    REQUIRE(sameBits(unobserved, develop(source, state, LensCorrection{}, resized(), &quiet)));
 }
 
 TEST_CASE("Progress rises through the steps in order and ends at one", "[progress][develop]") {
     const ImageBuffer source = makeSource();
     Recorder recorder;
     ProgressChannel channel(recorder.callback());
-    static_cast<void>(develop(source, everyStep(), resized(), &channel));
+    static_cast<void>(develop(source, everyStep(), LensCorrection{}, resized(), &channel));
     requireWellFormed(recorder.reports);
 
     // Every step the plan runs is named on the way.
@@ -147,7 +147,7 @@ TEST_CASE("Progress rises through the steps in order and ends at one", "[progres
 TEST_CASE("A render with nothing on reports its start and its end", "[progress][develop]") {
     Recorder recorder;
     ProgressChannel channel(recorder.callback());
-    static_cast<void>(develop(makeSource(), {}, {}, &channel));
+    static_cast<void>(develop(makeSource(), {}, LensCorrection{}, {}, &channel));
     requireWellFormed(recorder.reports);
     REQUIRE(recorder.reports.front().fraction == 0.0);
 }
@@ -155,7 +155,7 @@ TEST_CASE("A render with nothing on reports its start and its end", "[progress][
 TEST_CASE("Reports are thinned to visible steps", "[progress][develop]") {
     Recorder recorder;
     ProgressChannel channel(recorder.callback());
-    static_cast<void>(develop(makeSource(), everyStep(), resized(), &channel));
+    static_cast<void>(develop(makeSource(), everyStep(), LensCorrection{}, resized(), &channel));
     const auto& reports = recorder.reports;
     // At most one report per 1/512 of the whole, plus the step changes and the end.
     REQUIRE(reports.size() <= 512 + 2 * progressStepCount + 2);
@@ -173,7 +173,8 @@ TEST_CASE("A cancelled channel stops a render before it starts", "[progress][can
     Recorder recorder;
     ProgressChannel channel(recorder.callback());
     channel.cancel();
-    REQUIRE_THROWS_AS(develop(makeSource(), everyStep(), resized(), &channel), Cancelled);
+    REQUIRE_THROWS_AS(develop(makeSource(), everyStep(), LensCorrection{}, resized(), &channel),
+                      Cancelled);
     REQUIRE(recorder.reports.empty());
     REQUIRE(detail::currentProgress() == nullptr);
 }
@@ -198,25 +199,27 @@ TEST_CASE("A cancellation during a render stops it, and nothing reports after",
             }
         });
         self = &channel;
-        REQUIRE_THROWS_AS(develop(source, state, resized(), &channel), Cancelled);
+        REQUIRE_THROWS_AS(develop(source, state, LensCorrection{}, resized(), &channel), Cancelled);
         REQUIRE(cancelledAt != 0);
         REQUIRE(reports.size() == cancelledAt);
         REQUIRE(reports.back().fraction < 1.0);
         REQUIRE(detail::currentProgress() == nullptr);
     }
     // And the engine is as it was: an unobserved render after gives the same bits.
-    REQUIRE(sameBits(develop(source, state, resized()), develop(source, state, resized())));
+    REQUIRE(sameBits(develop(source, state, LensCorrection{}, resized()),
+                     develop(source, state, LensCorrection{}, resized())));
 }
 
 TEST_CASE("A channel cancelled after a render finished leaves its result, and stops the next",
           "[progress][cancel]") {
     const ImageBuffer source = makeSource();
     ProgressChannel channel;
-    const ImageBuffer done = develop(source, {}, {}, &channel);
+    const ImageBuffer done = develop(source, {}, LensCorrection{}, {}, &channel);
     channel.cancel();
-    REQUIRE(sameBits(done, develop(source, {}, {})));
-    REQUIRE_THROWS_AS(develop(source, {}, {}, &channel), Cancelled);
-    REQUIRE_THROWS_AS(developUntil(source, {}, Stage::Pointwise, {}, &channel), Cancelled);
+    REQUIRE(sameBits(done, develop(source, {}, LensCorrection{}, {})));
+    REQUIRE_THROWS_AS(develop(source, {}, LensCorrection{}, {}, &channel), Cancelled);
+    REQUIRE_THROWS_AS(developUntil(source, {}, LensCorrection{}, Stage::Pointwise, {}, &channel),
+                      Cancelled);
 }
 
 TEST_CASE("A callback that throws stops the render with what it threw", "[progress][develop]") {
@@ -228,7 +231,8 @@ TEST_CASE("A callback that throws stops the render with what it threw", "[progre
         }
     });
     try {
-        static_cast<void>(develop(makeSource(), everyStep(), resized(), &channel));
+        static_cast<void>(
+            develop(makeSource(), everyStep(), LensCorrection{}, resized(), &channel));
         FAIL("the render did not stop");
     } catch (const Cancelled&) {
         FAIL("a callback's exception came out as a cancellation");
@@ -249,19 +253,19 @@ TEST_CASE("A chain of resumes on one channel reads as one render", "[progress][r
     std::vector<std::size_t> starts;
     starts.push_back(recorder.reports.size());
     const RenderCheckpoint denoised =
-        developUntil(source, state, Stage::Denoise, request, &channel);
+        developUntil(source, state, LensCorrection{}, Stage::Denoise, request, &channel);
     starts.push_back(recorder.reports.size());
     const RenderCheckpoint pointwise =
-        resumeFrom(denoised, source, state, Stage::Pointwise, request, &channel);
+        resumeFrom(denoised, source, state, LensCorrection{}, Stage::Pointwise, request, &channel);
     starts.push_back(recorder.reports.size());
     const RenderCheckpoint geometry =
-        resumeFrom(pointwise, source, state, Stage::Geometry, request, &channel);
+        resumeFrom(pointwise, source, state, LensCorrection{}, Stage::Geometry, request, &channel);
     starts.push_back(recorder.reports.size());
     const RenderCheckpoint resizedPixels =
-        resumeFrom(geometry, source, state, Stage::Resize, request, &channel);
+        resumeFrom(geometry, source, state, LensCorrection{}, Stage::Resize, request, &channel);
     starts.push_back(recorder.reports.size());
-    const RenderCheckpoint effects =
-        resumeFrom(resizedPixels, source, state, Stage::Effects, request, &channel);
+    const RenderCheckpoint effects = resumeFrom(resizedPixels, source, state, LensCorrection{},
+                                                Stage::Effects, request, &channel);
 
     // One monotone stream, each call ending short of one until the last.
     requireWellFormed(recorder.reports);
@@ -273,14 +277,15 @@ TEST_CASE("A chain of resumes on one channel reads as one render", "[progress][r
         REQUIRE(recorder.reports[starts[call]].fraction ==
                 recorder.reports[starts[call] - 1].fraction);
     }
-    REQUIRE(sameBits(effects.readBack(), develop(source, state, request)));
+    REQUIRE(sameBits(effects.readBack(), develop(source, state, LensCorrection{}, request)));
 }
 
 TEST_CASE("A cancelled resume leaves the checkpoint it started from usable",
           "[progress][resume][slow]") {
     const ImageBuffer source = makeSource();
     const DevelopState state = everyStep();
-    const RenderCheckpoint pointwise = developUntil(source, state, Stage::Pointwise, resized());
+    const RenderCheckpoint pointwise =
+        developUntil(source, state, LensCorrection{}, Stage::Pointwise, resized());
     ProgressChannel* self = nullptr;
     ProgressChannel channel([&](const Progress& progress) {
         if (progress.step == ProgressStep::Geometry && progress.fraction > 0.0) {
@@ -288,10 +293,12 @@ TEST_CASE("A cancelled resume leaves the checkpoint it started from usable",
         }
     });
     self = &channel;
-    REQUIRE_THROWS_AS(resumeFrom(pointwise, source, state, Stage::Effects, resized(), &channel),
-                      Cancelled);
-    const RenderCheckpoint done = resumeFrom(pointwise, source, state, Stage::Effects, resized());
-    REQUIRE(sameBits(done.readBack(), develop(source, state, resized())));
+    REQUIRE_THROWS_AS(
+        resumeFrom(pointwise, source, state, LensCorrection{}, Stage::Effects, resized(), &channel),
+        Cancelled);
+    const RenderCheckpoint done =
+        resumeFrom(pointwise, source, state, LensCorrection{}, Stage::Effects, resized());
+    REQUIRE(sameBits(done.readBack(), develop(source, state, LensCorrection{}, resized())));
 }
 
 TEST_CASE("A sample and a histogram report and can be cancelled", "[progress][sample][slow]") {
@@ -299,17 +306,21 @@ TEST_CASE("A sample and a histogram report and can be cancelled", "[progress][sa
     const DevelopState state = everyStep();
     Recorder recorder;
     ProgressChannel channel(recorder.callback());
-    const ImageBuffer observed = sample(source, state, Tap::CurveInput, resized(), &channel);
+    const ImageBuffer observed =
+        sample(source, state, LensCorrection{}, Tap::CurveInput, resized(), &channel);
     requireWellFormed(recorder.reports);
-    REQUIRE(sameBits(observed, sample(source, state, Tap::CurveInput, resized())));
+    REQUIRE(
+        sameBits(observed, sample(source, state, LensCorrection{}, Tap::CurveInput, resized())));
 
     Recorder counted;
     ProgressChannel histogramChannel(counted.callback());
-    static_cast<void>(curveHistogram(source, state, curveHistogramRequest, &histogramChannel));
+    static_cast<void>(
+        curveHistogram(source, state, LensCorrection{}, curveHistogramRequest, &histogramChannel));
     requireWellFormed(counted.reports);
     histogramChannel.cancel();
-    REQUIRE_THROWS_AS(curveHistogram(source, state, curveHistogramRequest, &histogramChannel),
-                      Cancelled);
+    REQUIRE_THROWS_AS(
+        curveHistogram(source, state, LensCorrection{}, curveHistogramRequest, &histogramChannel),
+        Cancelled);
 }
 
 TEST_CASE("A decode reports its start and its end, and a cancelled one stops",
@@ -346,7 +357,7 @@ TEST_CASE("An unobserved call inside an observed one reports nothing into it",
         detail::ProgressRoot outer(&channel, weights, ProgressStep::Pointwise);
         const std::size_t before = recorder.reports.size();
         // A nested public call, passed no channel, as sample calls develop's passes.
-        static_cast<void>(develop(makeSource(), everyStep(), resized()));
+        static_cast<void>(develop(makeSource(), everyStep(), LensCorrection{}, resized()));
         REQUIRE(recorder.reports.size() == before);
         REQUIRE(detail::currentProgress() != nullptr);
         outer.finish(ProgressStep::Pointwise);
@@ -407,7 +418,7 @@ TEST_CASE("Each pass of a CPU render runs the loops its span declares", "[progre
     const auto run = [](const ImageBuffer& source, const DevelopState& state) {
         Recorder recorder;
         ProgressChannel channel(recorder.callback());
-        static_cast<void>(develop(source, state, resized(), &channel));
+        static_cast<void>(develop(source, state, LensCorrection{}, resized(), &channel));
         requireWellFormed(recorder.reports);
     };
     DevelopState state;
@@ -452,9 +463,10 @@ TEST_CASE("The Coverage step runs the units it declares, direct and through a la
         Recorder recorder;
         ProgressChannel channel(recorder.callback());
         if (ladder != nullptr) {
-            static_cast<void>(resumeOrDevelop(*ladder, source, wanted, resized(), &channel));
+            static_cast<void>(
+                resumeOrDevelop(*ladder, source, wanted, LensCorrection{}, resized(), &channel));
         } else {
-            static_cast<void>(develop(*source, wanted, resized(), &channel));
+            static_cast<void>(develop(*source, wanted, LensCorrection{}, resized(), &channel));
         }
         requireWellFormed(recorder.reports);
         return recorder.reports;

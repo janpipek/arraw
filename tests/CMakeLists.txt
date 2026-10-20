@@ -19,6 +19,10 @@ add_executable(arraw-tests
         support/TestImages.cpp
         test_AppSettings.cpp
         test_BrushBench.cpp
+        test_FolderDiff.cpp
+        test_FolderLister.cpp
+        test_FolderListingBench.cpp
+        test_WatchBudget.cpp
         test_BrushCoverage.cpp
         test_BrushCoverageCache.cpp
         test_BrushMask.cpp
@@ -43,6 +47,12 @@ add_executable(arraw-tests
         test_DisplayImage.cpp
         test_EditSession.cpp
         test_Edits.cpp
+        test_LensCorrection.cpp
+        test_LensDatabase.cpp
+        test_LensFrames.cpp
+        test_LensMatch.cpp
+        test_LensSettings.cpp
+        test_LensStage.cpp
         test_LocalAdjustments.cpp
         test_LocalAdjustmentsJson.cpp
         test_LocalAdjustmentsSidecar.cpp
@@ -134,12 +144,19 @@ add_executable(arraw-widget-tests
         test_CropOverlay.cpp
         test_CurveEditor.cpp
         test_DevelopPanel.cpp
+        test_ExportDialog.cpp
         test_MainWindowHistory.cpp
+        test_MainWindowLens.cpp
         test_MainWindowView.cpp
         test_MainWindowCopy.cpp
+        test_MainWindowExport.cpp
         test_MainWindowCrop.cpp
         test_MainWindowMasks.cpp
         test_MainWindowNegative.cpp
+        test_FilmStripListing.cpp
+        test_FilmStripListingBench.cpp
+        test_FilmStripNotice.cpp
+        test_FilmStripSubfolders.cpp
         test_MainWindowOpening.cpp
         test_MaskOverlay.cpp
         test_MasksPanel.cpp
@@ -211,6 +228,7 @@ add_executable(arraw-gpu-tests
         gpu/test_GpuRenderDigest.cpp
         gpu/test_GpuDevelop.cpp
         gpu/test_GpuLadder.cpp
+        gpu/test_GpuLens.cpp
         gpu/test_GpuEffects.cpp
         gpu/test_GpuExport.cpp
         gpu/test_GpuPasses.cpp

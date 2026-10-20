@@ -74,6 +74,9 @@ both commands through one helper (`ShotInputs`).
 
 ## Consequences
 
+Superseded in part by ADR 052: the film strip now lists in the background, folder by folder, and
+a change re-reads only the folder that changed.
+
 - The film strip's model is `listShots` plus a `MarksFilter` in its proxy; it
   adds the folder watcher, which re-lists and diffs, and the thumbnails.
 - A folder is read once and all at once: `listShots` is a snapshot, not a

@@ -258,8 +258,9 @@ Look lookOf(const Photo& photo) {
 }
 
 bool sectionApplies(CopySection section, bool raw) noexcept {
-    // The demosaic has no row in the table: it needs a mosaic, which only a RAW has.
-    if (section == CopySection::Demosaic) {
+    // The demosaic and the lens corrections have no row in the table: the first needs a mosaic,
+    // and the profiles of the second are found for a RAW only.
+    if (section == CopySection::Demosaic || section == CopySection::Lens) {
         return raw;
     }
     return raw || std::ranges::none_of(developSettingDescriptors, [&](const FieldDescriptor& d) {
@@ -271,7 +272,7 @@ bool sectionApplies(CopySection section, bool raw) noexcept {
 namespace {
 
 /// @brief Carries the sections that are settings of the state; ::arraw::CopySection::Demosaic
-/// has no row, so it passes through unseen.
+/// and ::arraw::CopySection::Lens have no row, so they pass through unseen.
 AppliedLook carrySettings(const ImageMetadata& photo, DevelopState state, const Look& look,
                           std::span<const CopySection> sections, const GrainEntropy& entropy) {
     constexpr std::size_t sectionCount = copySectionNames.size();
@@ -323,9 +324,12 @@ AppliedLook carrySettings(const ImageMetadata& photo, DevelopState state, const 
 
 AppliedLook withLook(const ImageMetadata& photo, DevelopState state, const Look& look,
                      std::span<const CopySection> sections, const GrainEntropy& entropy) {
-    if (std::ranges::find(sections, CopySection::Demosaic) != sections.end()) {
-        throw std::invalid_argument(
-            "demosaic is a setting of the negative, which needs a photograph to carry onto");
+    for (const CopySection negativeSection : {CopySection::Demosaic, CopySection::Lens}) {
+        if (std::ranges::find(sections, negativeSection) != sections.end()) {
+            throw std::invalid_argument(
+                std::string(copySectionNames[static_cast<std::size_t>(negativeSection)]) +
+                " is a setting of the negative, which needs a photograph to carry onto");
+        }
     }
     return carrySettings(photo, std::move(state), look, sections, entropy);
 }
@@ -334,15 +338,29 @@ AppliedLook withLook(const Photo& photo, const Look& look, std::span<const CopyS
                      const GrainEntropy& entropy) {
     AppliedLook result = carrySettings(photo.metadata(), photo.state(), look, sections, entropy);
     result.negative = photo.negative();
-    if (std::ranges::find(sections, CopySection::Demosaic) == sections.end()) {
-        return result;
-    }
     const bool toRaw = !std::holds_alternative<NamedEncoding>(photo.metadata().encoding);
-    if (look.fromRaw && toRaw) {
+    const auto chosen = [&](CopySection section) {
+        return std::ranges::find(sections, section) != sections.end();
+    };
+    // Each negative section crosses between two RAWs, is lost between a RAW and anything else,
+    // and applies to neither between two photographs that are not.
+    const auto crosses = [&](CopySection section) {
+        if (!chosen(section)) {
+            return false;
+        }
+        if (look.fromRaw != toRaw) {
+            result.skipped.push_back(section);
+        }
+        return look.fromRaw && toRaw;
+    };
+    if (crosses(CopySection::Demosaic)) {
         validate(look.negative);
-        result.negative = look.negative;
-    } else if (look.fromRaw != toRaw) {
-        result.skipped.push_back(CopySection::Demosaic);
+        result.negative.demosaic = look.negative.demosaic;
+    }
+    if (crosses(CopySection::Lens)) {
+        validate(look.negative);
+        // The corrections only: the lens recorded is per shot, and stays the target's own.
+        result.negative.lens = withCorrectionsOf(result.negative.lens, look.negative.lens);
     }
     return result;
 }

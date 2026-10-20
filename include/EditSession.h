@@ -15,6 +15,8 @@
 
 namespace arraw {
 
+class LensDatabase;
+
 /// @brief Kind of change that made a history step, beyond what its states show.
 ///
 /// Front ends word a step from this, the detail and ::arraw::describeChange, so
@@ -43,8 +45,8 @@ struct HistoryStep {
 
     /// @brief Negative settings after the step (ADR 049).
     ///
-    /// Only ::arraw::EditSession::setNegative and the two-part ::arraw::EditSession::setState
-    /// change it from one step to the next.
+    /// Only ::arraw::EditSession::setNegative, the two-part ::arraw::EditSession::setState and
+    /// ::arraw::EditSession::updateNegative change it from one step to the next.
     NegativeSettings negative;
 
     friend bool operator==(const HistoryStep&, const HistoryStep&) = default;
@@ -110,8 +112,9 @@ struct ChangeDescription {
     /// @brief Group every key belongs to; empty when there are no keys or they span groups.
     std::optional<SettingGroup> group;
 
-    /// @brief Keys of the negative settings that differ, in the order `"demosaic"`, ...; empty
-    /// when the two negatives are equal. Filled only by the overload over history steps.
+    /// @brief Keys of the negative settings that differ, in the order `"demosaic"`,
+    /// `"lensDistortion"`, `"lensVignetting"`, `"lensLateralCa"` and `"lens"` (the recorded lens);
+    /// empty when the two negatives are equal. Filled only by the overload over history steps.
     std::vector<std::string_view> negative;
 
     /// @brief How the local adjustments differ; empty when they do not. The counter alone is not
@@ -152,9 +155,10 @@ struct ChangeDescription {
 /// that edits produce. An edit is opened with begin(), changed any number of
 /// times with update() and closed with commit() or cancel(), so that a slider
 /// drag or a brush stroke is one history step rather than a hundred (ADR 022).
-/// History holds develop states and negative settings: marks are not undone. The negative is
-/// chosen, never dragged, so begin(), update() and commit() leave it as it is, and
-/// setNegative() makes its own step (ADR 049).
+/// History holds develop states and negative settings: marks are not undone. An open edit
+/// remembers both, so update() and updateNegative() may change either and commit() makes one
+/// step if either differs; cancel() restores both. setNegative() makes a step of its own
+/// (ADR 049, 050).
 ///
 /// History is a list of steps and a position in it, the opening state first.
 /// Undo and redo move the position, and so does goTo(): navigating is not an
@@ -170,9 +174,33 @@ public:
     /// @brief Starts editing a photograph, with a history of just its opening state.
     /// @param photo Document to edit, usually from ::arraw::openPhoto, which is
     /// taken to be what its sidecar holds (or defaults, when there is none).
-    explicit EditSession(Photo photo)
+    /// @param lensDatabase Database the session records lens matches in, as setLensDatabase().
+    explicit EditSession(Photo photo, const LensDatabase* lensDatabase = nullptr)
         : photo_(photo), saved_(std::move(photo)),
-          history_{{saved_.state(), EditOrigin::Opened, {}, saved_.negative()}} {}
+          history_{{saved_.state(), EditOrigin::Opened, {}, saved_.negative()}},
+          lensDatabase_(lensDatabase) {}
+
+    /// @brief Sets the lens database the session records matches in.
+    ///
+    /// The session records the lens match itself (ADR 050): a step that changes the lens settings
+    /// and leaves a correction on with no lens recorded records ::arraw::recordLensMatch in that
+    /// same step. That is commit() (so begin(), goTo(), undo(), redo() and save() too),
+    /// setNegative() and the two-part setState(), before they ask whether anything changed.
+    /// update(), updateNegative(), cancel(), discardChanges() and navigation never record, and
+    /// neither does a step that leaves the lens settings alone. A recorded lens, matched or
+    /// chosen, is never replaced. With no database the step is made as given. Only the next step
+    /// uses a new database: nothing already made or open is touched. Not thread-safe, like the
+    /// rest of the session.
+    /// @param database Database to match in, which must outlive the session or be detached first;
+    /// null for none. Not owned.
+    void setLensDatabase(const LensDatabase* database) noexcept {
+        lensDatabase_ = database;
+    }
+
+    /// @brief Gives the lens database the session records matches in, or null.
+    [[nodiscard]] const LensDatabase* lensDatabase() const noexcept {
+        return lensDatabase_;
+    }
 
     /// @brief Current state of the document, including an edit in progress.
     ///
@@ -192,16 +220,30 @@ public:
     /// @throws std::invalid_argument if @p state is not valid; nothing changes.
     void update(DevelopState state);
 
+    /// @brief Changes the negative settings provisionally, inside the open edit.
+    ///
+    /// For a slider that drags a negative setting, such as the vignetting amount (ADR 050): the
+    /// drag is one history step with any develop updates. photo() carries the latest negative,
+    /// and a caller that decodes compares it with the one its pixels were decoded with. The lens
+    /// match is not recorded here, but by commit() (see setLensDatabase()).
+    /// @param negative Negative settings the document carries from now on, until the next update.
+    /// @throws std::logic_error if no edit is open.
+    /// @throws std::invalid_argument if @p negative is not valid; nothing changes.
+    void updateNegative(NegativeSettings negative);
+
     /// @brief Closes the open edit as one history step.
     ///
-    /// An edit that ends where it started leaves no step. A new step drops
-    /// every step after the position, so what could be redone is gone.
+    /// An edit that ends where it started, in both the state and the negative, leaves no step. A
+    /// new step drops every step after the position, so what could be redone is gone. A step that
+    /// changes the lens settings records the lens match first (see setLensDatabase()), so an
+    /// edit that only adds the record still makes a step. If matching throws, the edit stays open
+    /// and the history is as it was.
     /// @param origin Kind of change the step is.
     /// @param detail What the origin applies to, such as a preset's name.
     /// @throws std::logic_error if no edit is open.
     void commit(EditOrigin origin = EditOrigin::Edit, std::string detail = {});
 
-    /// @brief Closes the open edit, restoring the state it started from.
+    /// @brief Closes the open edit, restoring the state and negative it started from.
     /// @throws std::logic_error if no edit is open.
     void cancel();
 
@@ -223,8 +265,9 @@ public:
 
     /// @brief Replaces the negative settings as one history step.
     ///
-    /// An open edit is committed first. Setting the negative it already has leaves no step. A
-    /// new step drops every step after the position. A caller that decodes (the window) compares
+    /// An open edit is committed first. Setting the negative it already has leaves no step, after
+    /// the lens match is recorded when the step changes the lens settings (see setLensDatabase()).
+    /// A new step drops every step after the position. A caller that decodes (the window) compares
     /// photo().negative() with the one its pixels were decoded with after this, as after undo.
     /// @param negative Negative settings the document carries from now on.
     /// @param origin Kind of change the step is.
@@ -236,7 +279,8 @@ public:
     /// @brief Replaces the negative settings and the develop state as one history step.
     ///
     /// For a paste or a preset, which carry both. An open edit is committed first; when neither
-    /// part differs there is no step.
+    /// part differs there is no step. The lens match is recorded as for setNegative(); if matching
+    /// throws, the edit and the history stay as they were.
     /// @param negative Negative settings the document carries from now on.
     /// @param state State the document carries from now on.
     /// @param origin Kind of change the step is.
@@ -302,7 +346,9 @@ public:
 
     /// @brief Writes the photograph to its sidecar and makes that the saved state.
     ///
-    /// An open edit is committed first. History is kept: saving is not an edit.
+    /// An open edit is committed first. History is kept: saving is not an edit. With an open edit
+    /// that is due a lens record, the file holds the photograph as the commit leaves it, with the
+    /// match recorded, so nothing is unsaved straight after.
     /// @throws std::runtime_error as ::arraw::writeSidecar does; nothing changes.
     void save();
 
@@ -329,14 +375,32 @@ private:
     /// Photograph as the sidecar holds it.
     Photo saved_;
 
-    /// State the open edit started from; empty when no edit is open.
-    std::optional<DevelopState> baseline_;
+    /// What an open edit started from.
+    struct Baseline {
+        DevelopState state;        ///< Develop state at begin().
+        NegativeSettings negative; ///< Negative settings at begin().
+    };
+
+    /// Gives @p after with the lens match recorded when its lens settings differ from @p before.
+    [[nodiscard]] Photo withLensRecorded(const LensSettings& before, const Photo& after) const;
+
+    /// Makes @p next, which already carries any record, the photograph and ends the open edit.
+    void commitPhoto(Photo next, EditOrigin origin, std::string detail);
+
+    /// Tells whether the open edit is back where it began. Requires an open edit.
+    [[nodiscard]] bool baselineIsCurrent() const noexcept;
+
+    /// Start of the open edit; empty when no edit is open.
+    std::optional<Baseline> baseline_;
 
     /// Steps taken, the opening state first; never empty.
     std::vector<HistoryStep> history_;
 
     /// Index in history_ of the step the document is at, when no edit is open.
     std::size_t position_ = 0;
+
+    /// Database the lens match is recorded in; not owned, may be null.
+    const LensDatabase* lensDatabase_ = nullptr;
 };
 
 } // namespace arraw

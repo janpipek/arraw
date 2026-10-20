@@ -165,7 +165,7 @@ std::optional<LiveStroke> LiveStroke::begin(const DevelopState& baseline,
     captured.flow = std::clamp(settings.flow, 0.0F, 1.0F);
     captured.erase = erase;
     const CorrectedPosition corrected = mapping.correctedFrom(press);
-    const SensorPoint at = clampedPoint(sensorFrom(corrected));
+    const SensorPoint at = clampedPoint(mapping.sensorFrom(corrected));
     refused = refusalOf(stroke.base_, stroke.id_, probeStroke(captured, at));
     if (refused != BrushRefusal::None) {
         return std::nullopt;
@@ -200,7 +200,7 @@ bool LiveStroke::extend(QPointF pointer, const MaskViewMapping& mapping, bool re
     if (release ? gap == 0.0 : gap < spacing) {
         return false;
     }
-    const SensorPoint point = clampedPoint(sensorFrom(corrected));
+    const SensorPoint point = clampedPoint(mapping.sensorFrom(corrected));
     const SensorPoint last = live_.points.back();
     if (point == last) {
         return false;

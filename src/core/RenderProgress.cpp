@@ -19,6 +19,32 @@ namespace {
 // were banded (ADR 043): a 6000x4000 source turned by 3 degrees and resized to
 // 1500 pixels, the resize's share split between its passes as before.
 
+// The lens pass, bicubic (Catmull-Rom), measured with the hidden `[.lensbench]` test on a release
+// build at 24 MP on eight threads (ADR 050, step 7): distortion alone 26 ns a pixel, lateral CA
+// alone 28, both 44, vignetting alone 6, and vignetting beside either 7 more (all three: 51).
+// The pass's output allocation is in each figure, and the cost of two resampled corrections is
+// less than the sum of the two.
+
+/// @brief Cost of the lens pass per pixel of the source for a set of corrections.
+/// @param correction Corrections the pass applies.
+double lensCostPerPixel(const LensCorrection& correction) noexcept {
+    const bool distortion = !correction.distortion.empty();
+    const bool lateralCa = correction.hasLateralCa();
+    const bool vignetting = !correction.vignetting.empty();
+    double cost = 0.0;
+    if (distortion && lateralCa) {
+        cost = 44.0;
+    } else if (distortion) {
+        cost = 26.0;
+    } else if (lateralCa) {
+        cost = 28.0;
+    }
+    if (vignetting) {
+        cost += distortion || lateralCa ? 7.0 : 6.0;
+    }
+    return cost;
+}
+
 /// @brief Cost of the pointwise chain per pixel of the source, the zeroing of its result included.
 constexpr double pointwiseCost = 7.0;
 
@@ -126,6 +152,9 @@ detail::StepWeights detail::renderStepWeights(const ProcessingPlan& plan,
         at(ProgressStep::Coverage) = sumOf(coverageUnitWeights(plan.pointwise.local, residency));
     } catch (const std::exception&) {
         // Only an allocation can fail here; the pass itself would say so.
+    }
+    if (plan.lens.active()) {
+        at(ProgressStep::Lens) = lensCostPerPixel(plan.lens.correction) * pixelsOf(source);
     }
     at(ProgressStep::Pointwise) =
         (pointwiseCost + (plan.pointwise.presence.active() ? presenceSampleCost : 0.0)) *

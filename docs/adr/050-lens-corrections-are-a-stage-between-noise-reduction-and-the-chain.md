@@ -1,6 +1,6 @@
 # Lens corrections are a stage between noise reduction and the chain
 
-Status: proposed, 2026-10-17. The plan is
+Status: accepted, 2026-10-18 (proposed 2026-10-17). The plan is
 [lens-corrections-plan.md](../ideas/lens-corrections-plan.md). It is Phase 2 of
 [ADR 049](049-settings-of-the-negative-sit-beside-the-develop-state.md).
 
@@ -401,3 +401,232 @@ carry the database's attribution.
   crop rescaling, interpolation and an XML parser in core.
 - **Adobe's `crs:LensProfile*` keys**, which `old` claimed. They name Adobe
   profiles; a round-trip cannot hold.
+
+## Amendment, 2026-10-18: as built
+
+Steps 0 to 10 of the plan are built. Where the code differs from the text above,
+the code holds:
+
+- **Failures are a `LensProblem`, not a `Notice`.** `LensProblem`
+  (`include/LensProblem.h`) names why a correction was not resolved
+  (`LensUnidentified`, `LensFocalUnknown`, `CameraNotInDatabase`,
+  `LensNotInDatabase`, `LensAmbiguous`, `LensProfileMissing`,
+  `LensDatabaseChanged`, `LensDatabaseMissing`, `LensfunUnavailable`). The
+  resolution carries it, and a render turns it into the matching diagnostic.
+  The diagnostics also gain `LensNotCalibrated`: the lens was found but has no
+  calibration for a correction that is on, so that one is skipped.
+- **`sampleLensfun` takes the database** (`LensDatabase`) and the match; the
+  only file that includes `<lensfun.h>` is still `LensfunSource.cpp`.
+- **The tables have 129 nodes** (`lensTableNodes`), chosen by measurement: linear
+  interpolation stays under 0.05 sensor pixels at the corners and edges of a
+  24 MP frame for the strongest profile of the test database.
+- **`lensCost` is measured per combination** of corrections (distortion, lateral
+  CA, vignetting) in `RenderProgress.cpp`, not a single weight.
+- **Python's `lens` argument is optional on the buffer-form calls**, where the
+  caller holds pixels and no `Photo`; it defaults to no correction. The
+  `Photo` forms resolve it themselves.
+- **Paste before the database has loaded** matches live at render time and
+  records the lens on the next toggle, since a paste cannot wait on the
+  database off the GUI thread.
+- **GPU parity** (section 9) is measured on lavapipe only. No hardware GPU was
+  available, so the tolerance is not confirmed on a real device.
+- **Not yet done:** the hand check on the user's Canon 80D files (plan step 11),
+  and packaging (`just rpm`, `rpm-smoke`, the `.deb`'s `liblensfun1`
+  dependency) was written but not run here. See `docs/todo.md`.
+
+The amendments named in the Consequences are made in ADRs 009, 012, 031, 044,
+045 and 049, and in 022 and 030 for the history step and the saved sidecar.
+
+## Amendment, 2026-10-19: vignetting is an amount
+
+The hand check of 2026-10-19 (a6400, Sony E PZ 16-50 f/3.5-5.6 OSS; `docs/todo.md`,
+step 11) found that arraw applies lensfun's vignetting gain exactly (within 1 to
+3 %), but the profile, measured on a NEX-7, is too strong for this body: at
+f/3.5 a flat wall ends 1.26× the centre at r = 0.75 and 1.35× at r = 0.93. A
+switch can only take all of a wrong profile or none of it. The plan is
+[lens-vignetting-amount-plan.md](../ideas/lens-vignetting-amount-plan.md).
+
+These decisions are made by the user (2026-10-19):
+
+- **An amount replaces the vignetting switch.** One value: 0 is off, 100 is
+  lensfun's profile as it is. There is no separate switch.
+- **The amount scales stops.** The gain applied is `g ^ (amount / 100)`, where
+  `g` is the profile's gain at that radius, so 50 is half the stops at every
+  radius. The range is 0 to 150.
+- **Everything the switch reached carries the amount**: settings and
+  validation, the render on both devices, the cache keys, history, the
+  sidecar, the JSON, Copy Settings, the CLI and Python.
+
+Distortion and lateral CA stay switches. "Kept: three switches without
+sliders" above now reads two switches and an amount. Where this section and §1,
+§6, §8 differ, this section holds.
+
+### The setting
+
+`LensSettings::vignetting` (`bool`) becomes `float vignettingAmount`, in
+percent, default 0, with `minimumVignettingAmount` (0),
+`profileVignettingAmount` (100) and `maximumVignettingAmount` (150) beside it in
+`NegativeSettings.h`, as `EffectsSettings.h` bounds its sliders. `validate`
+refuses an amount that is not finite or lies outside the range. The lens
+settings stay outside the descriptor table (ADR 049), so they get constants, not
+a `FieldDescriptor`.
+
+The C++ name changes on purpose: a `bool` converts silently to `float`, so
+`lens.vignetting = true` would still compile and mean 1 %. Under the new name
+every old use fails to compile. **Stored names do not change**: the sidecar
+keeps `arraw:lensVignetting`, the JSON `"vignetting"`, and `describeChange` the
+key `"lensVignetting"`.
+
+`kindsOf` asks for a vignetting profile when the amount is above 0, and
+`LensSettings::any()` counts it the same way. So "a correction is turned on"
+(§6) now also means the amount leaving 0. That step records the match, and
+taking the amount back to 0 keeps the record, as switching off did.
+
+### Where the amount is applied: to the resolved table
+
+`resolveLens` samples the profile as before, then passes it through
+`withVignettingAmount(LensCorrection, float amount)` (public,
+`LensCorrection.h`), which raises each node of the vignetting table to
+`amount / 100`. `LensCorrection` therefore holds the gain the render applies,
+not the profile's. Nothing after resolution changes. The CPU pass
+(`Lens.cpp`), the GPU pass (`GpuPlan.cpp`), `LensPlan`, the progress weights
+and the thumbnail digest read the table as they did.
+
+- **At 0**, no vignetting is sampled, as for the old "off": the same
+  `LensCorrection`, plan, rungs and render.
+- **At 100** the table is returned untouched, not passed through `pow`, so it
+  is bit for bit the old "on".
+- **Changing only the amount** changes `LensPlan` by value, so it resumes from
+  the Denoise rung and decodes nothing, as a toggle does. The brush frame
+  (`brushFrameOf`) holds distortion only, so the brush cache does not notice.
+- **lensfun is not asked again for an amount.** The table at any amount above
+  0 is a pure function of the table at 100. A caller that redraws while the
+  amount changes (the window) keeps the resolution at 100 and applies
+  `withVignettingAmount` itself. The result is the same bits `resolveLens`
+  gives, by construction.
+
+### A dragged negative
+
+ADR 022 keeps the negative out of `begin`/`update`/`commit`, because "a
+negative is chosen, never dragged". A slider drags it. `EditSession` gains
+`updateNegative(NegativeSettings)`: the open edit's baseline holds the
+negative as well as the state, and `commit`, `cancel`, `canUndo` and `canRedo`
+compare both. A drag is one history step, and `photo()` carries the dragged
+amount, so the render path stays "render `session.photo()`". The session
+records the match at the commit, not on every move, so a drag that ends at 0
+records nothing (next section).
+
+### The session records the match
+
+The first draft of this amendment left recording to the callers. The window
+called `withMatchRecorded` before `setNegative` and before a paste, and the
+Python bindings called `recordLensMatch`, which is what §6 describes ("The app
+does it in `setNegative`, and paste and preset application do it for each
+target"). The user decided otherwise (2026-10-19): **the session owns the
+rule**, so that no caller can forget it. Where §6 and the 2026-10-18 notes
+differ from this section, this section holds. The plan's addendum
+([lens-vignetting-amount-plan.md](../ideas/lens-vignetting-amount-plan.md),
+"the session records the lens match") has the details and the work packages.
+
+- **The database.** `EditSession` holds a non-owning `const LensDatabase*`,
+  given at construction or through `setLensDatabase`, and set by whoever owns
+  the database. The window sets it on each session it opens and again when the
+  loader thread returns. Python's session takes the process's database for a RAW
+  unless it is given one. The database must outlive the session.
+- **The rule.** A step that changes the lens settings, and leaves a correction
+  on with no lens recorded, records the match (`recordLensMatch`, origin
+  `matched`) in that same step. The rule applies wherever a step is made:
+  `commit`, `setNegative`, and the two-part `setState`. It does not apply on
+  `updateNegative`, `undo`, `redo`, `goTo`, `cancel` or `discardChanges`. It
+  does not apply to develop-only or demosaic-only steps either, so that a step
+  worded "Exposure" does not also pin a lens. The match is recorded before the
+  session asks whether anything changed. `save` with an open edit writes the
+  photograph as the commit will leave it. One match costs about 1 ms with the
+  full database, so it runs on the commit path, on the interface thread.
+- **A recorded lens is never replaced.** That holds for `matched` and `chosen`
+  alike. "Reset to automatic" clears the record, and the reset step matches
+  again by the same rule. A paste keeps the target's own record.
+- **No database.** The step is made without a record, and renders match live.
+  A database attached later changes only the steps after it. It adds no step,
+  and it does not touch the current photograph or the history. The window still
+  refuses a paste that turns a correction on while the database loads, and its
+  switches and slider stay disabled until then. So in the window a lens step
+  always finds the database. The 2026-10-18 note that such a paste "records the
+  lens on the next toggle" never matched the code, which has refused it since
+  the feature was built.
+- **What goes.** The window's `withMatchRecorded` and `withLensReset`, and
+  Python's own calls to `recordLensMatch` in `set_lens_corrections` and
+  `reset_lens`. `recordLensMatch` itself stays: the session calls it, and Python
+  scripts that write a `Photo` without a session still need it. The CLI does not
+  change. It has no session and writes no sidecar, and it never recorded a
+  match.
+
+### Persistence
+
+- **Sidecar.** `arraw:lensVignetting` holds the amount as its shortest
+  decimal. It is absent at 0. `True` and `False` (any case) are still read, as
+  100 and 0. A number outside the range is clamped, with `SettingClamped`.
+  Anything else is reported and read as 0, and the file keeps it under the "differs
+  from what reading gave" rule. A sidecar that says `True` and is not edited keeps
+  `True`.
+- **JSON.** `"lens": {"vignetting": <number>}`. `true` and `false` are read as
+  100 and 0, a number out of range is clamped with `SettingClamped`, and
+  anything else gets `SettingMalformed` and leaves the base.
+- **No version bump** of `sidecarVersion` or `settingsJsonVersion`. Only a key
+  this unmerged branch introduced changes. A bump would make every older reader
+  warn about every sidecar. An older build of this branch reads a number as
+  unreadable, which means off, and leaves it in the file.
+- **Thumbnail keys** of photographs whose lens settings are not the default
+  change once, because the negative's JSON now spells `100`/`0` where it spelt
+  `true`/`false`. Their pixels do not change. Photographs without lens settings
+  keep their keys.
+
+### History, copying, CLI, Python, GPU
+
+- **History**: one entry per step, worded "Lens: vignetting 60%", or "Lens:
+  vignetting off" at 0.
+- **Copy Settings and presets**: `CopySection::Lens` carries the amount with
+  the two switches. Paste and the CLI use one helper, `withCorrectionsOf`, so a
+  future correction field is copied in one place.
+- **CLI**: `--lens-corrections` takes `vignetting=N` (0 to 150). A bare
+  `vignetting` is 100, and `all` is distortion, `vignetting=100` and ca. `info`
+  prints `vignetting 60%` for any amount but 100, which prints as `vignetting`.
+- **Python**: `LensSettings.vignetting_amount` (`float`), and
+  `with_lens_corrections` / `set_lens_corrections` take `vignetting_amount=`.
+  A `bool` is refused with `TypeError`, as the bindings refuse it for every
+  number (`convertValue`): `True` would otherwise be 1 %. An amount out of
+  range raises `ValueError` from `validate`. `EditSession.update_negative`
+  binds the new method.
+- **GPU**: no change. The parity test gains a case at an amount between 0 and
+  100.
+
+### Rejected
+
+- **The amount in `LensPlan`, applied by the pass.** This needs new math in
+  `Lens.cpp` and the shader (a `pow` per pixel, or a second table), a parity
+  test of its own, and every cache key would have to add the amount beside the
+  table.
+- **The amount as another render argument.** It would change every render
+  signature that §4 already widened, to carry one number that the table can
+  hold.
+- **Scaling the gain linearly** (`1 + (g − 1) · amount / 100`). Rejected by the
+  user in favour of stops.
+- **A switch plus an amount.** Two controls for one decision. Rejected by the
+  user.
+- **The window committing only on release** and previewing a correction it
+  scales itself. The render would stop following `session.photo()`, and
+  everything that reads the photograph during the drag (the histogram, the
+  status line) would fall behind.
+- **Each caller recording the match** (this amendment's first draft, and §6 as
+  written). The window, the paste, a future preset path and Python would each
+  have to remember the rule, and the slider would be one more caller.
+- **Recording on any step**, a develop edit included. This would heal a
+  photograph that was left unrecorded, but an "Exposure" step would also pin a
+  lens and read "2 changes".
+- **Recording when the database arrives**, for the open photograph. It would
+  add a step that the photographer did not make, or rewrite one that exists.
+
+The ADRs that call vignetting a switch gain a line each: 022 (the dragged
+negative, and the session recording the match at commit), 030 (`lensVignetting`
+holds a number), 045 (an amount change resumes as a toggle does) and 049 (§7:
+two switches and an amount).

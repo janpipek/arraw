@@ -2,6 +2,7 @@
 
 #include "BrushPainting.h"
 #include "CurveEditing.h"
+#include "LensSupport.h"
 #include "MaskEditing.h"
 
 #include <CurveHistogram.h>
@@ -19,6 +20,7 @@
 
 class QAbstractButton;
 class QButtonGroup;
+class QCheckBox;
 class QComboBox;
 class QLabel;
 class QPushButton;
@@ -46,6 +48,9 @@ struct PanelContext {
 
     /// @brief Negative settings the Negative group shows (ADR 049).
     NegativeSettings negative{};
+
+    /// @brief What the Negative group's lens rows say about the photograph's lens (ADR 050).
+    LensStatus lens{};
 };
 
 /// @brief Panel of the develop controls, showing a state and reporting edits to it.
@@ -158,6 +163,19 @@ signals:
     /// A choice, never a drag: the window makes it one history step and re-decodes.
     /// @param negative Settings with the chosen value, other values as last shown.
     void negativeChosen(const arraw::NegativeSettings& negative);
+
+    /// @brief Announces negative settings a drag of the vignetting amount has reached.
+    ///
+    /// Follows editStarted() and precedes editFinished(), as stateEdited() does for a develop
+    /// edit: the window keeps the settings in the open edit, and the drag is one history step.
+    /// @param negative Settings with the amount reached, other values as last shown.
+    void negativeEdited(const arraw::NegativeSettings& negative);
+
+    /// @brief Announces that the user asked to choose the lens of the corrections by hand.
+    void chooseLensRequested();
+
+    /// @brief Announces that the user asked to forget the recorded lens and match it again.
+    void resetLensRequested();
 
     /// @brief Announces that the Pick button was checked or unchecked by the user.
     /// @param picking Whether the picker is now armed.
@@ -333,6 +351,18 @@ private:
     QComboBox* demosaicCombo_ = nullptr;
     /// Note under the demosaic choice that says why it is disabled.
     QLabel* negativeNote_ = nullptr;
+    /// Switches of the lens corrections: distortion, lateral CA.
+    QCheckBox* lensDistortion_ = nullptr;
+    /// Slider over the vignetting amount, in percent of the lens profile's correction.
+    SettingSlider* lensVignetting_ = nullptr;
+    QCheckBox* lensCa_ = nullptr;
+    /// Line that names the lens or says why there is no profile.
+    QLabel* lensStatus_ = nullptr;
+    /// Second line: a revised database, a missing calibration.
+    QLabel* lensNote_ = nullptr;
+    /// "Choose lens…" and "Reset to automatic".
+    QPushButton* lensChoose_ = nullptr;
+    QPushButton* lensReset_ = nullptr;
     /// Negative settings last shown, the base of the next choice.
     NegativeSettings shownNegative_{};
     /// Treatment row and every group but Crop, disabled in the crop mode.

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AppSettings.h"
+#include "LensSupport.h"
 
 #include <DecodeOptions.h>
 #include <Develop.h>
@@ -8,6 +9,7 @@
 #include <ImageBuffer.h>
 #include <ImageExport.h>
 #include <NegativeSettings.h>
+#include <Photo.h>
 
 #include <condition_variable>
 #include <cstddef>
@@ -29,10 +31,20 @@ namespace arraw::app {
 /// Owns everything it needs, so that the photograph may be edited, or
 /// replaced, while the job waits and runs.
 struct ExportJob {
+    /// Whether the export thread opens input itself, with ::arraw::openPhoto, and takes state,
+    /// decode, document and the metadata's marks from it, the sidecar's saved settings. The
+    /// fields they replace are then ignored. For a photograph that is not open in the window:
+    /// opening reads the file's header and sidecar, which a batch of many would not do on the
+    /// interface thread. What the open reports is part of the result's warnings.
+    bool fromSaved = false;
     /// How the photograph was developed when the export was asked for.
     DevelopState state;
     /// How the photograph must be decoded, from decodeOptionsFor() (ADR 049).
     DecodeOptions decode;
+    /// The photograph as it was when the export was asked for, whose lens corrections the export
+    /// thread resolves against the lens database (::arraw::lensCorrectionFor, ADR 050): off the
+    /// interface thread, and by the same code every other front end uses. Empty to apply none.
+    std::optional<Photo> document;
     /// File to decode when source is null; the export thread then decodes it with decode.
     std::filesystem::path input;
     /// Full-resolution decoded photograph, shared, never copied; null when the window's source
@@ -63,6 +75,10 @@ struct ExportResult {
     bool onGpu = false;
     /// Why the CPU developed when the GPU was wanted, or empty when it was not.
     std::string fallbackReason;
+    /// Sentences about lens corrections that were asked for and could not be applied, such as a
+    /// lens that is not in the database; empty when all were applied or none asked. The export
+    /// still went ahead without them. Meaningful only when error is empty.
+    std::vector<std::string> lensNotices;
 };
 
 /// @brief Worker thread that develops and writes exports, one after the other.
@@ -88,8 +104,10 @@ public:
     /// throw; what it throws is dropped.
     /// @param device Where exports may be developed.
     /// @param settings Desktop GPU preference, captured for the lifetime of the worker.
+    /// @param lensDatabase Gives the lens database to resolve corrections against, called on the
+    /// worker when a job asks for one; empty for ::arraw::app::systemLensDatabase.
     explicit ExportQueue(std::function<void(ExportResult)> onResult, Device device = Device::Auto,
-                         AppSettings settings = {});
+                         AppSettings settings = {}, LensDatabaseSource lensDatabase = {});
 
     ExportQueue(const ExportQueue&) = delete;
     ExportQueue& operator=(const ExportQueue&) = delete;
@@ -131,6 +149,9 @@ private:
 
     /// Desktop preferences captured before the worker starts.
     AppSettings settings_;
+
+    /// Gives the lens database; called on the worker.
+    LensDatabaseSource lensDatabase_;
 
     /// Guard of queue_ and lastId_.
     std::mutex mutex_;

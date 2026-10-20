@@ -31,14 +31,14 @@ TEST_CASE("The GPU render digest", "[.digest]") {
                         "gpu/" + source.name + "/" + state.name + "/" + request.name;
                     for (const Stage stop : digestStages) {
                         writer.render(base + "/until-" + digestStageName(stop), [&] {
-                            return developOnGpu(context, source.buffer, state.state, stop,
-                                                request.request)
+                            return developOnGpu(context, source.buffer, state.state,
+                                                LensCorrection{}, stop, request.request)
                                 .readBack();
                         });
                     }
                     writer.render(base + "/sample", [&] {
-                        return sampleOnGpu(context, source.buffer, state.state, Tap::CurveInput,
-                                           request.request);
+                        return sampleOnGpu(context, source.buffer, state.state, LensCorrection{},
+                                           Tap::CurveInput, request.request);
                     });
                 }
             }

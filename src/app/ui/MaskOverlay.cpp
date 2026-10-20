@@ -173,6 +173,15 @@ void MaskOverlay::setScene(const DevelopState& state, const std::optional<Source
     refresh(false);
 }
 
+void MaskOverlay::setLens(const LensCorrection& lens) {
+    if ((lens_ == nullptr && !lens.active()) || (lens_ != nullptr && *lens_ == lens)) {
+        return;
+    }
+    lens_ = lens.active() ? std::make_shared<const LensCorrection>(lens) : nullptr;
+    scheduleCoverage();
+    update();
+}
+
 void MaskOverlay::setSelection(std::optional<LocalAdjustmentId> id) {
     const std::optional<LocalAdjustmentId> reconciled = reconciledSelection(state_, id);
     if (reconciled == selection_) {
@@ -277,7 +286,7 @@ std::optional<MaskViewMapping> MaskOverlay::mapping() const {
     if (!frame_) {
         return std::nullopt;
     }
-    return MaskViewMapping(*frame_, view_->transform(), view_->devicePixelRatioF());
+    return MaskViewMapping(*frame_, view_->transform(), view_->devicePixelRatioF(), lens_);
 }
 
 const LocalAdjustment* MaskOverlay::selectedMask() const {
@@ -295,6 +304,7 @@ std::optional<MaskOverlay::CoverageInputs> MaskOverlay::coverageInputs() const {
     inputs.invert = mask->invert;
     inputs.geometry = state_.settings.geometry;
     inputs.source = source_;
+    inputs.lens = lens_ != nullptr ? *lens_ : LensCorrection{};
     inputs.widget = size();
     inputs.zoom = t.zoom();
     inputs.centre = t.centre();
@@ -357,7 +367,8 @@ void MaskOverlay::updateCoverage() {
         }
         const ImageSize grid{static_cast<std::uint32_t>(columns), static_cast<std::uint32_t>(rows)};
         const LocalAdjustment& mask = *selectedMask();
-        const MaskCoverage covered = maskCoverage(mask, *frame_, region, grid);
+        const MaskCoverage covered =
+            maskCoverage(mask, *frame_, region, grid, lens_ != nullptr ? *lens_ : LensCorrection{});
         QImage image(static_cast<int>(grid.width), static_cast<int>(grid.height),
                      QImage::Format_ARGB32_Premultiplied);
         for (int y = 0; y < image.height(); ++y) {

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "BrushRaster.h"
 #include "ColorSpaces.h"
 #include "Presence.h"
 #include "TonePlan.h"
@@ -8,6 +9,7 @@
 #include <ColorEncoding.h>
 #include <DevelopState.h>
 #include <ImageBuffer.h>
+#include <LensCorrection.h>
 #include <SettingDescriptors.h>
 
 #include <algorithm>
@@ -67,17 +69,25 @@ enum class LocalMaskKind : std::uint32_t {
     Brush = 2,  ///< Strokes painted on the photograph; read from packed coverage.
 };
 
+/// @brief Gives the part of a lens correction that moves a brush stroke.
+/// @param lens Resolved correction, its fill scale set.
+/// @return The map from the sensor frame to the corrected one, or null when the correction has no
+/// distortion and so moves nothing.
+[[nodiscard]] BrushFrame brushFrameOf(const LensCorrection& lens);
+
 /// @brief Where a brush mask's coverage comes from, and where it lives (ADR 044, section 7).
 struct BrushCoverageRef {
     std::shared_ptr<const StrokeList> strokes; ///< Null for linear and radial masks.
     ImageSize raster;                          ///< The rendered source's size.
     std::uint32_t slot = 0;  ///< 0 to 15, in plan order: plane slot / 4, channel slot % 4.
     std::uint32_t phase = 0; ///< Dither phase: the mask's index in the state's list.
+    BrushFrame frame;        ///< Map of the strokes into the raster's frame; null for the identity.
 
-    /// @brief Compares by meaning: equal sizes, slots and phases, and the same pointer or equal
-    /// lists.
+    /// @brief Compares by meaning: equal sizes, frames, slots and phases, and the same pointer or
+    /// equal lists.
     friend bool operator==(const BrushCoverageRef& a, const BrushCoverageRef& b) {
         return a.raster == b.raster && a.slot == b.slot && a.phase == b.phase &&
+               sameBrushFrame(a.frame, b.frame) &&
                (a.strokes == b.strokes ||
                 (a.strokes != nullptr && b.strokes != nullptr && *a.strokes == *b.strokes));
     }
@@ -173,10 +183,13 @@ struct LocalPlan {
 /// @param state State to resolve.
 /// @param source Size of the pixels the pointwise chain runs on: a pyramid level, a half-size
 /// decode, or the full source.
+/// @param frame Where brush strokes lie in the corrected frame the chain runs in
+/// (::arraw::brushFrameOf); null for lens corrections off.
 /// @return The block; the default one when nothing remains.
 /// @throws std::invalid_argument if a setting or an adjustment's number is not finite, or an
 /// adjustment is degenerate.
-[[nodiscard]] LocalPlan localPlanFor(const DevelopState& state, ImageSize source);
+[[nodiscard]] LocalPlan localPlanFor(const DevelopState& state, ImageSize source,
+                                     const BrushFrame& frame = nullptr);
 
 /// @brief Resolves one mask's shape against the size of the source being rendered.
 ///
@@ -185,7 +198,9 @@ struct LocalPlan {
 /// @param shape Shape, normalised (::arraw::normalised(const Mask&)).
 /// @param invert Whether the weight is turned to `1 - w`.
 /// @param source Size of the pixels the weight is evaluated at; not empty.
-[[nodiscard]] LocalMaskPlan resolvedMask(const Mask& shape, bool invert, ImageSize source);
+/// @param frame Where a brush's strokes lie in the corrected frame; null for the identity.
+[[nodiscard]] LocalMaskPlan resolvedMask(const Mask& shape, bool invert, ImageSize source,
+                                         const BrushFrame& frame = nullptr);
 
 /// @brief Gives what a block's masks can add to Texture, Clarity and Dehaze, for the bases the
 /// Presence plan prepares (ADR 044, section 5).

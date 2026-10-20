@@ -5,6 +5,7 @@
 #include "PyramidSize.h"
 
 #include <DevelopedFrame.h>
+#include <LensCorrection.h>
 
 #include <algorithm>
 #include <cmath>
@@ -22,9 +23,10 @@ namespace {
 /// Takes the coarsest pyramid level whose pixel is no larger than a grid cell, and the first level
 /// from there down that the shared cache already holds; draws the grid's own level only if none
 /// is held. A cell is `round(255 * m)` of the coverage `m` of the pixel its centre falls on, 0 off
-/// the picture, complemented when @p invert.
-void sampleBrush(const BrushMask& brush, bool invert, ImageSize source, double cell,
-                 const CorrectedPosition& origin, const CorrectedPosition& across,
+/// the picture, complemented when @p invert. The strokes are drawn through @p lens, as a render
+/// draws them.
+void sampleBrush(const BrushMask& brush, bool invert, const BrushFrame& lens, ImageSize source,
+                 double cell, const CorrectedPosition& origin, const CorrectedPosition& across,
                  const CorrectedPosition& down, ImageSize grid, std::uint8_t* out) {
     const std::uint8_t outside = invert ? 255 : 0;
     if (brush.strokes->empty()) {
@@ -39,12 +41,12 @@ void sampleBrush(const BrushMask& brush, bool invert, ImageSize source, double c
     std::shared_ptr<const CoverageTiles> tiles;
     ImageSize size = sizes.back();
     for (auto level = sizes.rbegin(); level != sizes.rend() && !tiles; ++level) {
-        tiles = detail::brushCoverageCache().find(brush.strokes, *level);
+        tiles = detail::brushCoverageCache().find(brush.strokes, *level, lens);
         size = *level;
     }
     if (!tiles) {
         size = sizes.back();
-        tiles = detail::brushCoverageCache().coverage(brush.strokes, size).tiles;
+        tiles = detail::brushCoverageCache().coverage(brush.strokes, size, true, lens).tiles;
     }
     const double acrossU = across.u - origin.u;
     const double acrossV = across.v - origin.v;
@@ -112,7 +114,8 @@ CorrectedPosition DevelopedFrameMap::correctedFromLongEdge(LongEdgePoint point) 
 }
 
 MaskCoverage arraw::maskCoverage(const LocalAdjustment& adjustment, const DevelopedFrameMap& frame,
-                                 DevelopedRegion region, ImageSize size) {
+                                 DevelopedRegion region, ImageSize size,
+                                 const LensCorrection& lens) {
     if (size.empty() || size.width > maximumCoverageSide || size.height > maximumCoverageSide) {
         throw std::invalid_argument("A coverage grid must be 1 to 4096 cells on each side");
     }
@@ -143,8 +146,8 @@ MaskCoverage arraw::maskCoverage(const LocalAdjustment& adjustment, const Develo
     const double downV = (down.v - origin.v) * sourceHeight;
     if (const auto* brush = std::get_if<BrushMask>(&shape)) {
         const double cell = std::min(std::hypot(acrossU, acrossV), std::hypot(downU, downV));
-        sampleBrush(*brush, adjustment.invert, frame.source().size, cell, origin, across, down,
-                    size, coverage.weights.data());
+        sampleBrush(*brush, adjustment.invert, brushFrameOf(lens), frame.source().size, cell,
+                    origin, across, down, size, coverage.weights.data());
         return coverage;
     }
     const LocalMaskPlan mask = resolvedMask(shape, adjustment.invert, frame.source().size);
@@ -160,8 +163,4 @@ MaskCoverage arraw::maskCoverage(const LocalAdjustment& adjustment, const Develo
         }
     }
     return coverage;
-}
-
-SensorPoint arraw::sensorFrom(CorrectedPosition position) noexcept {
-    return {static_cast<float>(position.u), static_cast<float>(position.v)};
 }

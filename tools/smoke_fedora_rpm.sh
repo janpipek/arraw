@@ -33,6 +33,12 @@ fi
         dnf install -y --setopt=install_weak_deps=False \
             desktop-file-utils glib2 shared-mime-info "$1"
         arraw-cli --version | grep -qx "arraw-cli $2"
+        # lensfun came with the package, its database too, and arraw-cli was built with it.
+        rpm -q lensfun
+        arraw-cli --version | grep -q "^lensfun [0-9]"
+        # The system database is found, and knows the reference body and its kit lens.
+        arraw-cli lenses --info | grep -q "^Lenses: [1-9]"
+        arraw-cli lenses --camera "Canon EOS 80D" | grep -q "EF-S 18-135mm"
         # The GUI, offscreen: the dynamic linker and Qt find everything.
         QT_QPA_PLATFORM=offscreen arraw-ui --help | grep -q "^Usage:"
         desktop-file-validate \

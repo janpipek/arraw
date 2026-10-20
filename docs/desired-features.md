@@ -20,6 +20,9 @@ you have your untouched negative back.
 **1. Open.** Point arraw at a single file or a whole folder. There is nothing to import
 and nothing to wait for — the folder *is* the session. Arrow keys walk the filmstrip;
 RAW+JPEG pairs are shown as one frame with the RAW as the primary.
+"Include subfolders" lists the whole tree, however large, in the background: the strip fills
+in while the window stays usable, and a change on disk updates only the folder that changed
+(`F5` re-reads the folder; a notice says when a huge tree has folders that are not watched).
 
 **2. Cull.** Rate `1`–`5`, `0` to clear, `X` to reject; assign one of five colour labels.
 Filter the filmstrip by rating or label to work only on the keepers. Marks are written to
@@ -52,7 +55,7 @@ top: turning on B&W hides the colour controls and reveals the mixer.
 | **Negative** | Demosaic choice (Linear, VNG, PPG, AHD, DCB, DHT, AAHD) for a RAW. It re-decodes the file, so it is kept apart from the develop sliders; it is saved, undoable, and copied and pasted with the look |
 | **Detail** | Texture, Clarity, Dehaze, Sharpen; separate Luminance noise (amount/detail) and Colour noise (strength/smoothness) reduction, both edge-aware |
 | **Geometry** | 90° rotation and flips, Straighten (±45°), Crop with aspect presets |
-| **Lens Corrections** | Profile-driven distortion, vignetting and chromatic-aberration correction, from the lensfun database or the profile embedded in the file |
+| **Lens Corrections** | Profile-driven distortion, vignetting and chromatic-aberration correction, from the lensfun database, matched from the file's EXIF and recorded with the edit, off by default and for a RAW only; profiles embedded in the file are a later option |
 | **Effects** | Post-crop vignette (amount / midpoint / feather) and film grain (amount / size / roughness) |
 
 ### Local adjustments

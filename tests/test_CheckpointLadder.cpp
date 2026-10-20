@@ -84,23 +84,24 @@ TEST_CASE("A ladder render equals develop, fresh and resumed after each kind of 
                 INFO(named.name << " / " << state.name << " / " << request.name);
                 CheckpointLadder ladder;
                 const LadderRender fresh =
-                    resumeOrDevelop(ladder, source, state.state, request.request);
+                    resumeOrDevelop(ladder, source, state.state, LensCorrection{}, request.request);
                 REQUIRE_FALSE(fresh.resumedFrom.has_value());
                 REQUIRE(sameBits(fresh.checkpoint.readBack(),
-                                 develop(*source, state.state, request.request)));
+                                 develop(*source, state.state, LensCorrection{}, request.request)));
                 for (const Edit& edit : edits()) {
                     INFO("then edited in " << edit.label);
                     // Every edit starts from the ladder the fresh render left.
                     CheckpointLadder resumed;
-                    static_cast<void>(
-                        resumeOrDevelop(resumed, source, state.state, request.request));
+                    static_cast<void>(resumeOrDevelop(resumed, source, state.state,
+                                                      LensCorrection{}, request.request));
                     DevelopState edited = state.state;
                     edit.apply(edited);
                     const RenderRequest asked = edit.request(request.request);
-                    const LadderRender render = resumeOrDevelop(resumed, source, edited, asked);
+                    const LadderRender render =
+                        resumeOrDevelop(resumed, source, edited, LensCorrection{}, asked);
                     REQUIRE(render.resumedFrom == edit.expected(state.state));
-                    REQUIRE(
-                        sameBits(render.checkpoint.readBack(), develop(*source, edited, asked)));
+                    REQUIRE(sameBits(render.checkpoint.readBack(),
+                                     develop(*source, edited, LensCorrection{}, asked)));
                 }
             }
         }
@@ -113,7 +114,8 @@ TEST_CASE("After a fresh render a ladder holds the boundaries passed, and never 
     CheckpointLadder ladder;
     REQUIRE(ladder.empty());
 
-    static_cast<void>(resumeOrDevelop(ladder, source, stateWith(0.0F, 0.0, -40.0F), fitting(80)));
+    static_cast<void>(resumeOrDevelop(ladder, source, stateWith(0.0F, 0.0, -40.0F),
+                                      LensCorrection{}, fitting(80)));
     REQUIRE_FALSE(ladder.empty());
     // A collapsed geometry is kept: a viewport change resumes from it.
     REQUIRE(ladder.holds(Stage::Pointwise));
@@ -123,8 +125,8 @@ TEST_CASE("After a fresh render a ladder holds the boundaries passed, and never 
     REQUIRE_FALSE(ladder.holds(Stage::Effects));
 
     CheckpointLadder denoising;
-    static_cast<void>(
-        resumeOrDevelop(denoising, source, stateWith(0.0F, 3.0, -40.0F, 40.0F), fitting(80)));
+    static_cast<void>(resumeOrDevelop(denoising, source, stateWith(0.0F, 3.0, -40.0F, 40.0F),
+                                      LensCorrection{}, fitting(80)));
     for (const Stage stage : {Stage::Denoise, Stage::Pointwise, Stage::Geometry, Stage::Resize}) {
         REQUIRE(denoising.holds(stage));
     }
@@ -176,9 +178,11 @@ TEST_CASE("An edit resumes from the newest rung it can still use, and drops the 
     CheckpointLadder ladder;
     for (const Step& step : steps) {
         INFO(step.label);
-        const LadderRender render = resumeOrDevelop(ladder, source, step.state, step.request);
+        const LadderRender render =
+            resumeOrDevelop(ladder, source, step.state, LensCorrection{}, step.request);
         REQUIRE(render.resumedFrom == step.resumed);
-        REQUIRE(sameBits(render.checkpoint.readBack(), develop(*source, step.state, step.request)));
+        REQUIRE(sameBits(render.checkpoint.readBack(),
+                         develop(*source, step.state, LensCorrection{}, step.request)));
         // Whatever the render resumed from, the rungs it passed are held again.
         REQUIRE(ladder.holds(Stage::Pointwise));
         REQUIRE(ladder.holds(Stage::Geometry));
@@ -191,20 +195,23 @@ TEST_CASE("Another source clears a ladder, and so does clear", "[ladder]") {
     const auto source = makeSource();
     const DevelopState state = stateWith(0.3F, 2.0);
     CheckpointLadder ladder;
-    static_cast<void>(resumeOrDevelop(ladder, source, state, fitting(80)));
-    REQUIRE(resumeOrDevelop(ladder, source, state, fitting(80)).resumedFrom == Stage::Resize);
+    static_cast<void>(resumeOrDevelop(ladder, source, state, LensCorrection{}, fitting(80)));
+    REQUIRE(resumeOrDevelop(ladder, source, state, LensCorrection{}, fitting(80)).resumedFrom ==
+            Stage::Resize);
 
     // Same size, encoding and settings, other pixels: only the ladder's binding tells.
     ImageBuffer changed = source->clone();
     changed.samples<float>()[0] += 0.5F;
     const auto other = std::make_shared<const ImageBuffer>(std::move(changed));
-    const LadderRender again = resumeOrDevelop(ladder, other, state, fitting(80));
+    const LadderRender again = resumeOrDevelop(ladder, other, state, LensCorrection{}, fitting(80));
     REQUIRE_FALSE(again.resumedFrom.has_value());
-    REQUIRE(sameBits(again.checkpoint.readBack(), develop(*other, state, fitting(80))));
+    REQUIRE(sameBits(again.checkpoint.readBack(),
+                     develop(*other, state, LensCorrection{}, fitting(80))));
 
     ladder.clear();
     REQUIRE(ladder.empty());
-    REQUIRE_FALSE(resumeOrDevelop(ladder, other, state, fitting(80)).resumedFrom.has_value());
+    REQUIRE_FALSE(resumeOrDevelop(ladder, other, state, LensCorrection{}, fitting(80))
+                      .resumedFrom.has_value());
 }
 
 TEST_CASE("A request that cannot be rendered throws and leaves the ladder as it was",
@@ -215,18 +222,22 @@ TEST_CASE("A request that cannot be rendered throws and leaves the ladder as it 
     bad.region = RenderRequest::Region{0.6, 0.1, 0.2, 0.9};
 
     CheckpointLadder empty;
-    REQUIRE_THROWS_AS(resumeOrDevelop(empty, source, state, bad), std::invalid_argument);
+    REQUIRE_THROWS_AS(resumeOrDevelop(empty, source, state, LensCorrection{}, bad),
+                      std::invalid_argument);
     REQUIRE(empty.empty());
 
     CheckpointLadder ladder;
-    static_cast<void>(resumeOrDevelop(ladder, source, state, fitting(80)));
-    REQUIRE_THROWS_AS(resumeOrDevelop(ladder, source, state, bad), std::invalid_argument);
+    static_cast<void>(resumeOrDevelop(ladder, source, state, LensCorrection{}, fitting(80)));
+    REQUIRE_THROWS_AS(resumeOrDevelop(ladder, source, state, LensCorrection{}, bad),
+                      std::invalid_argument);
     REQUIRE(ladder.holds(Stage::Pointwise));
     REQUIRE(ladder.holds(Stage::Geometry));
     REQUIRE(ladder.holds(Stage::Resize));
-    REQUIRE(resumeOrDevelop(ladder, source, state, fitting(80)).resumedFrom == Stage::Resize);
+    REQUIRE(resumeOrDevelop(ladder, source, state, LensCorrection{}, fitting(80)).resumedFrom ==
+            Stage::Resize);
 
-    REQUIRE_THROWS_AS(resumeOrDevelop(ladder, nullptr, state, fitting(80)), std::invalid_argument);
+    REQUIRE_THROWS_AS(resumeOrDevelop(ladder, nullptr, state, LensCorrection{}, fitting(80)),
+                      std::invalid_argument);
 }
 
 TEST_CASE("A render cancelled part-way keeps the rungs it finished, and the next resumes from them",
@@ -241,14 +252,16 @@ TEST_CASE("A render cancelled part-way keeps the rungs it finished, and the next
         }
     });
     self = &channel;
-    REQUIRE_THROWS_AS(resumeOrDevelop(ladder, source, state, fitting(60), &channel), Cancelled);
+    REQUIRE_THROWS_AS(
+        resumeOrDevelop(ladder, source, state, LensCorrection{}, fitting(60), &channel), Cancelled);
     REQUIRE(ladder.holds(Stage::Pointwise));
     REQUIRE(ladder.holds(Stage::Geometry));
     REQUIRE_FALSE(ladder.holds(Stage::Resize));
 
-    const LadderRender next = resumeOrDevelop(ladder, source, state, fitting(60));
+    const LadderRender next = resumeOrDevelop(ladder, source, state, LensCorrection{}, fitting(60));
     REQUIRE(next.resumedFrom == Stage::Geometry);
-    REQUIRE(sameBits(next.checkpoint.readBack(), develop(*source, state, fitting(60))));
+    REQUIRE(sameBits(next.checkpoint.readBack(),
+                     develop(*source, state, LensCorrection{}, fitting(60))));
 }
 
 TEST_CASE("An observed ladder render reports from the share of the rung it resumes from",
@@ -259,7 +272,8 @@ TEST_CASE("An observed ladder render reports from the share of the rung it resum
 
     ReportLog fresh;
     ProgressChannel freshChannel(fresh.callback());
-    static_cast<void>(resumeOrDevelop(ladder, source, state, fitting(60), &freshChannel));
+    static_cast<void>(
+        resumeOrDevelop(ladder, source, state, LensCorrection{}, fitting(60), &freshChannel));
     REQUIRE(fresh.wellFormed());
     REQUIRE(fresh.reports.front().step == ProgressStep::Denoise);
 
@@ -268,12 +282,13 @@ TEST_CASE("An observed ladder render reports from the share of the rung it resum
     ReportLog resumed;
     ProgressChannel resumedChannel(resumed.callback());
     const LadderRender render =
-        resumeOrDevelop(ladder, source, edited, fitting(60), &resumedChannel);
+        resumeOrDevelop(ladder, source, edited, LensCorrection{}, fitting(60), &resumedChannel);
     REQUIRE(render.resumedFrom == Stage::Resize);
     REQUIRE(resumed.wellFormed());
     REQUIRE(resumed.reports.front().step == ProgressStep::Effects);
     REQUIRE(resumed.reports.front().fraction > 0.0);
 
     // Observing changes no bit.
-    REQUIRE(sameBits(render.checkpoint.readBack(), develop(*source, edited, fitting(60))));
+    REQUIRE(sameBits(render.checkpoint.readBack(),
+                     develop(*source, edited, LensCorrection{}, fitting(60))));
 }

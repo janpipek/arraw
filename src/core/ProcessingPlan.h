@@ -5,6 +5,7 @@
 #include "Denoise.h"
 #include "Effects.h"
 #include "GeometryPlan.h"
+#include "Lens.h"
 #include "PointwisePlan.h"
 
 #include <ColorEncoding.h>
@@ -151,6 +152,14 @@ struct ProcessingPlan {
     /// default, and the pass does not run.
     DenoisePlan denoise{};
 
+    /// @brief Distortion, lateral chromatic aberration and vignetting, resolved.
+    ///
+    /// Its own pass after noise reduction, so that noise reduction sees unresampled noise and
+    /// everything after it works in the corrected frame (ADR 050, ADR 009). It holds the tables
+    /// and no size, so a toggle changes this block alone: the Denoise rung survives and nothing
+    /// is decoded again. With every correction off it is the default, and the pass does not run.
+    LensPlan lens{};
+
     /// @brief White balance, tone, Presence, curves, shoulder and colour controls, resolved.
     ///
     /// The fused per-pixel chain (ADR 011), as one block.
@@ -176,15 +185,16 @@ struct ProcessingPlan {
 /// @brief Groups the plan's blocks by the pass that consumes them.
 ///
 /// ADR 011's partition, with the passes that exist today: one block per
-/// ::arraw::Stage, so this is a flat `std::tie` and a pass that arrives (decode,
-/// lens, spots) adds a block and a line. The grouping is what the prefix
+/// ::arraw::Stage, so this is a flat `std::tie` and a pass that arrives (spots) adds a block
+/// and a line. The grouping is what the prefix
 /// comparison folds over, so there is no per-stage line to forget, only this
 /// list to keep honest. ::arraw::ProcessingPlan::decode is the one member outside it: it
 /// is compared before any stage.
 /// @param plan Plan to view by stage.
 /// @return One tuple element per ::arraw::Stage, in pipeline order.
 [[nodiscard]] inline auto stagesOf(const ProcessingPlan& plan) {
-    return std::tie(plan.denoise, plan.pointwise, plan.geometry, plan.resize, plan.effects);
+    return std::tie(plan.denoise, plan.lens, plan.pointwise, plan.geometry, plan.resize,
+                    plan.effects);
 }
 
 static_assert(std::tuple_size_v<decltype(stagesOf(std::declval<const ProcessingPlan&>()))> ==
@@ -282,11 +292,14 @@ static_assert(std::tuple_size_v<decltype(stagesOf(std::declval<const ProcessingP
 /// whole buffer, and only when the request actually resizes.
 /// @param source Decoded pixels the plan is for.
 /// @param state State to resolve.
+/// @param lens Lens corrections the render applies (ADR 050), resolved for these pixels'
+/// photograph; empty for none. The plan holds them as they are, so two plans that differ only in
+/// them are stale by value from the Lens boundary on.
 /// @param request Size and filter to render at; the default is the cropped size.
 /// @throws std::invalid_argument as the other overloads, and if @p request
 /// cannot be resolved (see ::arraw::resolvedSize).
 [[nodiscard]] ProcessingPlan planFor(const ImageBuffer& source, const DevelopState& state,
-                                     const RenderRequest& request = {});
+                                     const LensCorrection& lens, const RenderRequest& request = {});
 
 /// @brief Works out what a photograph's document means for its pixels.
 ///
@@ -296,6 +309,8 @@ static_assert(std::tuple_size_v<decltype(stagesOf(std::declval<const ProcessingP
 ///
 /// A photograph carries no pixels, so whether they are opaque is unknown here:
 /// the resize it plans is never marked ::arraw::ResizePlan::opaque.
+/// The lens corrections are resolved from the photograph itself (::arraw::lensCorrectionFor),
+/// against the process's database when it asks for one.
 /// @param photo Document to resolve.
 /// @param request Size and filter to render at; the default is the cropped size.
 /// @return The plan both backends execute.
@@ -303,12 +318,22 @@ static_assert(std::tuple_size_v<decltype(stagesOf(std::declval<const ProcessingP
 /// cannot be resolved, or @p request cannot be resolved against its crop.
 [[nodiscard]] ProcessingPlan planFor(const Photo& photo, const RenderRequest& request = {});
 
+/// @brief Works out what a photograph's document means for its pixels, with its lens resolved
+/// by the caller.
+/// @param photo Document to resolve.
+/// @param lens Lens corrections the render applies; see the overload over pixels.
+/// @param request Size and filter to render at; the default is the cropped size.
+/// @return The plan both backends execute.
+/// @throws std::invalid_argument as the overload without @p lens.
+[[nodiscard]] ProcessingPlan planFor(const Photo& photo, const LensCorrection& lens,
+                                     const RenderRequest& request = {});
+
 /// @brief Whether two plans give the same sample at a tap.
 ///
 /// What tells a caller that a sample, or a histogram of one, is still current
 /// after an edit: dragging a curve changes the plan but not the curve input,
 /// so a curve widget need not sample again (ADR 035). Compares the denoise
-/// block, which runs before the chain, the fields the chain reads up to
+/// and lens blocks, which run before the chain, the fields the chain reads up to
 /// @p tap, then geometry and the resize, which a sample runs through as a
 /// render does. Exact float equality, for the reasons
 /// ::arraw::prefixMatches gives. The source is not part of a plan, so the
@@ -320,8 +345,8 @@ static_assert(std::tuple_size_v<decltype(stagesOf(std::declval<const ProcessingP
 /// it, and in geometry and the resize.
 [[nodiscard]] inline bool sameAtTap(const ProcessingPlan& first, const ProcessingPlan& second,
                                     Tap tap) {
-    const bool sameFrame = first.denoise == second.denoise && first.geometry == second.geometry &&
-                           first.resize == second.resize;
+    const bool sameFrame = first.denoise == second.denoise && first.lens == second.lens &&
+                           first.geometry == second.geometry && first.resize == second.resize;
     switch (tap) {
     case Tap::CurveInput:
         return sameFrame &&

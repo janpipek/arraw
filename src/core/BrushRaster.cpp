@@ -64,7 +64,24 @@ PixelSpan dabSpan(float centre, float radius) noexcept {
             static_cast<std::int64_t>(std::ceil(c + r)) + 2};
 }
 
-PlacedStroke placedStroke(const Stroke& stroke, ImageSize raster) {
+namespace {
+
+/// Moves dab centres from the sensor frame to the corrected one.
+void mapDabs(std::vector<DabCentre>& dabs, ImageSize raster, const LensCorrection& lens) {
+    const double width = raster.width;
+    const double height = raster.height;
+    for (DabCentre& dab : dabs) {
+        const SensorPoint at{static_cast<float>(dab.x / width), static_cast<float>(dab.y / height)};
+        if (const auto corrected = correctedFrom(lens, at)) {
+            dab.x = static_cast<float>(corrected->u * width);
+            dab.y = static_cast<float>(corrected->v * height);
+        }
+    }
+}
+
+} // namespace
+
+PlacedStroke placedStroke(const Stroke& stroke, ImageSize raster, const LensCorrection* lens) {
     const double longEdge = std::max(raster.width, raster.height);
     const double radius = static_cast<double>(stroke.radius) * longEdge;
     // A dab thinner than ::arraw::minimumDrawnRadius is drawn that wide with its flow scaled by
@@ -79,6 +96,9 @@ PlacedStroke placedStroke(const Stroke& stroke, ImageSize raster) {
     placed.flow = static_cast<float>(static_cast<double>(stroke.flow) * areaRatio);
     placed.erase = stroke.erase;
     placed.dabs = dabCentres(stroke, raster, true, &placed.regular);
+    if (lens != nullptr) {
+        mapDabs(placed.dabs, raster, *lens);
+    }
     placed.left = placed.top = INT64_MAX;
     placed.right = placed.bottom = INT64_MIN;
     for (const DabCentre& dab : placed.dabs) {
@@ -93,10 +113,10 @@ PlacedStroke placedStroke(const Stroke& stroke, ImageSize raster) {
 }
 
 std::vector<PlacedStroke> placedStrokes(const StrokeList& strokes, ImageSize raster,
-                                        std::size_t first) {
+                                        std::size_t first, const LensCorrection* lens) {
     std::vector<PlacedStroke> placed;
     for (std::size_t i = first; i < strokes.size(); ++i) {
-        placed.push_back(placedStroke(strokes[i], raster));
+        placed.push_back(placedStroke(strokes[i], raster, lens));
     }
     return placed;
 }
@@ -203,7 +223,8 @@ void paintBucket(std::span<const PlacedStroke> placed, const DabBuckets& buckets
     }
 }
 
-CoveragePlane rasteriseBrush(const StrokeList& strokes, ImageSize raster) {
+CoveragePlane rasteriseBrush(const StrokeList& strokes, ImageSize raster,
+                             const LensCorrection* lens) {
     if (raster.empty()) {
         throw std::invalid_argument("a brush raster needs a size");
     }
@@ -212,7 +233,7 @@ CoveragePlane rasteriseBrush(const StrokeList& strokes, ImageSize raster) {
     }
     CoveragePlane plane{raster,
                         std::vector<float>(static_cast<std::size_t>(raster.width) * raster.height)};
-    const std::vector<PlacedStroke> placed = placedStrokes(strokes, raster);
+    const std::vector<PlacedStroke> placed = placedStrokes(strokes, raster, 0, lens);
     detail::forEachRowBand(
         raster.height, raster.width, [&](std::uint32_t first, std::uint32_t last) {
             paintRegion(placed, {0, first, raster.width, last - first},

@@ -16,8 +16,11 @@
 
 namespace arraw {
 
-/// @brief Namespace of the develop settings in an XMP sidecar; a placeholder until confirmed.
-inline constexpr std::string_view sidecarNamespace = "http://ns.arraw.org/develop/1.0/";
+/// @brief Namespace of the develop settings in an XMP sidecar.
+///
+/// Frozen: it carries no version, which `arraw:version` holds (ADR 051). Sidecars of the builds
+/// that spelled it `http://ns.arraw.org/develop/1.0/` are read as this and written back as this.
+inline constexpr std::string_view sidecarNamespace = "http://ns.arraw.org/develop/";
 
 /// @brief Prefix the develop settings get when a sidecar has to declare their namespace.
 inline constexpr std::string_view sidecarPrefix = "arraw";
@@ -51,11 +54,12 @@ struct SidecarContents {
     /// from what its kind does (::arraw::defaultStateFor), as with no sidecar.
     std::optional<DevelopState> state;
 
-    /// @brief Negative settings the sidecar records, or nothing when it has no `arraw:demosaic`.
+    /// @brief Negative settings the sidecar records, or nothing when it has none of their keys
+    /// (`arraw:demosaic` and the `arraw:lens...` ones).
     ///
-    /// Independent of ::arraw::SidecarContents::state: a sidecar with only `arraw:demosaic`
-    /// records a negative and no state. A token that is not known is reported and read as the
-    /// default.
+    /// Independent of ::arraw::SidecarContents::state: a sidecar with only `arraw:demosaic` or
+    /// `arraw:lensDistortion` records a negative and no state. A token that is not known is
+    /// reported and read as the default.
     std::optional<NegativeSettings> negative;
 
     /// @brief Culling marks, none for whatever the sidecar does not say.
@@ -129,7 +133,15 @@ inline constexpr auto xmpNamespaceOwners = std::to_array<XmpNamespaceOwner>({
 ///
 /// `arraw:demosaic` is the photograph's negative (ADR 049): one of
 /// ::arraw::demosaicTokens. An unknown token gives ::arraw::Notice::SettingMalformed and the
-/// default, AHD.
+/// default, AHD. The lens corrections are `arraw:lensDistortion`, `arraw:lensVignetting` and
+/// `arraw:lensLateralCa`. The first and last are `True` or `False`; `lensVignetting` is an amount
+/// in percent of the profile, a number from 0 to 150 (a number outside is clamped with
+/// ::arraw::Notice::SettingClamped), and the legacy `True` and `False` read as 100 and 0. Absent
+/// means off. The lens they were found for
+/// is `arraw:lensMaker`, `arraw:lensModel`, `arraw:lensCropFactor`, `arraw:lensOrigin`
+/// (`matched` or `chosen`) and `arraw:lensDatabase` together (ADR 050, section 8). A value that
+/// is none of these gives ::arraw::Notice::SettingMalformed and off; a record with no model or no
+/// positive crop factor gives it and no recorded lens; an unknown origin gives it and `matched`.
 ///
 /// Every `rdf:Description` is searched. The develop settings are the
 /// `arraw:` properties, as attributes or as simple child elements, applied onto
@@ -139,20 +151,20 @@ inline constexpr auto xmpNamespaceOwners = std::to_array<XmpNamespaceOwner>({
 /// (a whole number, `3.0` included, clamped to -1 to 5) and `xmp:Label`. A
 /// rating or label that does not fit is reported and read as no mark; the file
 /// keeps it (see ::arraw::writeSidecar). Whether the file records develop
-/// settings at all is ::arraw::SidecarContents::state. `arraw:version` above
-/// ::arraw::sidecarVersion gives ::arraw::Notice::NewerSettingsVersion.
+/// settings at all is ::arraw::SidecarContents::state. Arraw content without an `arraw:version`
+/// is version 1, with no warning. Every version up to
+/// ::arraw::sidecarVersion is read; an `arraw:version` above it gives
+/// ::arraw::Notice::NewerSettingsVersion and is read as far as it is understood (ADR 051).
 ///
-/// **Local adjustments** (ADR 044) are three more `arraw:` properties: `arraw:localAdjustments`,
+/// **Local adjustments** (ADR 044) are two more `arraw:` properties: `arraw:localAdjustments`,
 /// an `rdf:Seq` of structures (read in any of RDF's equivalent spellings:
-/// `rdf:parseType="Resource"`, a nested `rdf:Description`, fields as attributes),
-/// `arraw:localAdjustmentsVersion` and `arraw:nextLocalAdjustmentId`. Only the description's own
-/// properties are settings, so a mask's `arraw:exposure` is never the global one. A mask that
-/// cannot be used is dropped, with
+/// `rdf:parseType="Resource"`, a nested `rdf:Description`, fields as attributes), and
+/// `arraw:nextLocalAdjustmentId`. The `arraw:localAdjustmentsVersion` of earlier builds is ignored.
+/// Only the description's own properties are settings, so a mask's `arraw:exposure` is never the
+/// global one. A mask that cannot be used is dropped, with
 /// ::arraw::Notice::LocalAdjustmentDropped, and a field that is not known ignored, with
 /// ::arraw::Notice::LocalAdjustmentFieldIgnored; the counter is raised above every id kept. The
-/// rules are those of ::arraw::applyStateJson. A list of a version above
-/// ::arraw::localAdjustmentsVersion is read as far as it is understood, with
-/// ::arraw::Notice::NewerLocalAdjustmentsVersion. Any of the three properties records a state.
+/// rules are those of ::arraw::applyStateJson. Either property records a state.
 /// `crs:` and anything else is not read, but it is reported: `xmp:CreatorTool`
 /// and the other namespaces that hold properties (see ::arraw::SidecarContents).
 /// @param photo Path of the photograph, which is also the subject of every warning.
@@ -174,21 +186,22 @@ readSidecar(const std::filesystem::path& photo, DiagnosticLog& log = discardedDi
 /// thing once. `xmp:Rating` and `xmp:Label` are written only when the
 /// photograph's marks differ from what reading the file gives, so a rating or
 /// label arraw cannot represent (`9`, `Rot`) stays as another tool wrote it
-/// until the mark is changed; clearing the label removes it. `arraw:demosaic` follows the same
-/// rule: it is written only when the photograph's negative differs from what reading the file
-/// gives, so a token of a newer arraw survives, and AHD, the default, is written as no key.
-/// ::arraw::writeSidecarMarks leaves it alone. The local adjustments are
-/// rewritten whole: `arraw:localAdjustments`, `arraw:localAdjustmentsVersion` and
-/// `arraw:nextLocalAdjustmentId` are written when the list is not empty or the counter is above 1,
-/// and removed otherwise, so a state with no masks and a fresh counter leaves no trace and every
-/// state reads back equal. Without a sidecar, a new one is created. The
-/// file is replaced atomically. What is preserved is the meaning of the
-/// document, not its bytes: attributes may be reordered, the packet's padding
-/// and trailing newline are dropped, and the declaration is rewritten as UTF-8.
+/// until the mark is changed; clearing the label removes it. `arraw:demosaic` and the lens keys
+/// follow the same rule, key by key: each is written only when the photograph's negative differs
+/// from what reading the file gives, so a token of a newer arraw survives, and a default (AHD,
+/// a switch that is off, no recorded lens) is written as no key. The lens record is written and
+/// removed as a unit. No coefficient is written: the calibration stays the database's.
+/// ::arraw::writeSidecarMarks leaves the negative alone. The local adjustments are
+/// rewritten whole: `arraw:localAdjustments` and `arraw:nextLocalAdjustmentId` are written when
+/// the list is not empty or the counter is above 1, and removed otherwise, so a state with no
+/// masks and a fresh counter leaves no trace and every state reads back equal. A sidecar of an
+/// older version is overwritten as the current one; one of a newer version is refused. Without a
+/// sidecar, a new one is created. The file is replaced atomically. What is preserved is the meaning
+/// of the document, not its bytes: attributes may be reordered, the packet's padding and trailing
+/// newline are dropped, and the declaration is rewritten as UTF-8.
 /// @param photo Photograph whose settings and marks to write.
 /// @throws std::runtime_error if the existing sidecar is not XMP, or is of a
-/// newer ::arraw::sidecarVersion, or holds local adjustments of a newer
-/// ::arraw::localAdjustmentsVersion (writing would destroy what a newer arraw wrote), naming it,
+/// newer ::arraw::sidecarVersion (writing would destroy what a newer arraw wrote), naming it,
 /// in which case it is left alone, or if the file cannot be written.
 void writeSidecar(const Photo& photo);
 

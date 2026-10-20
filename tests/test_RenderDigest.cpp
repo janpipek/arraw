@@ -27,16 +27,19 @@ TEST_CASE("The CPU render digest", "[.digest]") {
                     const std::string base =
                         "cpu/" + source.name + "/" + state.name + "/" + request.name;
                     writer.render(base + "/develop", [&] {
-                        return develop(source.buffer, state.state, request.request);
+                        return develop(source.buffer, state.state, LensCorrection{},
+                                       request.request);
                     });
                     for (const Stage stop : digestStages) {
                         writer.render(base + "/until-" + digestStageName(stop), [&] {
-                            return developUntil(source.buffer, state.state, stop, request.request)
+                            return developUntil(source.buffer, state.state, LensCorrection{}, stop,
+                                                request.request)
                                 .readBack();
                         });
                     }
                     writer.render(base + "/sample", [&] {
-                        return sample(source.buffer, state.state, Tap::CurveInput, request.request);
+                        return sample(source.buffer, state.state, LensCorrection{}, Tap::CurveInput,
+                                      request.request);
                     });
                 }
             }

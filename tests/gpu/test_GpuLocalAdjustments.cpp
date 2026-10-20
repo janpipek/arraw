@@ -143,11 +143,12 @@ LinearMask everywhere() {
 double requirePointwiseMatches(const ImageBuffer& source, const DevelopState& state,
                                double tolerance = localRelativeTolerance) {
     REQUIRE_FALSE(state.localAdjustments.empty());
-    const ImageBuffer expected = developUntil(source, state, Stage::Pointwise).readBack();
+    const ImageBuffer expected =
+        developUntil(source, state, LensCorrection{}, Stage::Pointwise).readBack();
     const ImageBuffer unmasked =
-        developUntil(source, withoutMasks(state), Stage::Pointwise).readBack();
+        developUntil(source, withoutMasks(state), LensCorrection{}, Stage::Pointwise).readBack();
     const ImageBuffer actual =
-        developOnGpu(gpuContext(), source, state, Stage::Pointwise).readBack();
+        developOnGpu(gpuContext(), source, state, LensCorrection{}, Stage::Pointwise).readBack();
     REQUIRE(actual.size() == expected.size());
     const double effect = worstColourError(unmasked, expected);
     const double error = worstColourError(expected, actual);
@@ -281,7 +282,7 @@ TEST_CASE("Sixteen overlapping masks match the CPU, and the sum written as one",
     }
     const DevelopState state = stateOf(adjustments);
     REQUIRE(state.localAdjustments.size() == 16);
-    const ProcessingPlan plan = planFor(source, state);
+    const ProcessingPlan plan = planFor(source, state, LensCorrection{});
     REQUIRE(plan.pointwise.local.masks.size() == 16);
     requirePointwiseMatches(source, state);
 }
@@ -306,10 +307,12 @@ TEST_CASE("Masks that cancel exactly leave the global render, bit for bit", "[gp
         LocalAdjustment down = up;
         down.deltas = opposite;
         const DevelopState state = stateOf({up, down}, settings);
-        const ImageBuffer without =
-            developOnGpu(gpuContext(), source, withoutMasks(state), Stage::Pointwise).readBack();
+        const ImageBuffer without = developOnGpu(gpuContext(), source, withoutMasks(state),
+                                                 LensCorrection{}, Stage::Pointwise)
+                                        .readBack();
         const ImageBuffer masked =
-            developOnGpu(gpuContext(), source, state, Stage::Pointwise).readBack();
+            developOnGpu(gpuContext(), source, state, LensCorrection{}, Stage::Pointwise)
+                .readBack();
         // The plan's bases follow the reach, not the sums, so the Presence context may differ;
         // cancellation is exact in the chain's amounts, so the pixels are the global ones.
         requireBitIdentical(without, masked);
@@ -327,9 +330,10 @@ TEST_CASE("Pixels no mask reaches are the unmasked render, bit for bit", "[gpu][
         stateOf({adjustmentOf(mask, {{"exposure", 1.0}, {"saturation", 30.0}, {"blacks", 20.0}})},
                 settings);
     const ImageBuffer without =
-        developOnGpu(gpuContext(), source, withoutMasks(state), Stage::Pointwise).readBack();
+        developOnGpu(gpuContext(), source, withoutMasks(state), LensCorrection{}, Stage::Pointwise)
+            .readBack();
     const ImageBuffer masked =
-        developOnGpu(gpuContext(), source, state, Stage::Pointwise).readBack();
+        developOnGpu(gpuContext(), source, state, LensCorrection{}, Stage::Pointwise).readBack();
     const std::span<const float> want = without.samples<float>();
     const std::span<const float> got = masked.samples<float>();
     std::size_t outside = 0;
@@ -363,9 +367,11 @@ TEST_CASE("Masks that do nothing leave the render as the unmasked one", "[gpu][l
                  adjustmentOf(someRadial(), {{"exposure", 1.0}}), adjustmentOf(someRadial(), {})});
     state = withLocalAdjustmentEnabled(state, state.localAdjustments[1].id, false);
     const ImageBuffer without =
-        developOnGpu(gpuContext(), source, withoutMasks(state), Stage::Pointwise).readBack();
-    requireBitIdentical(without,
-                        developOnGpu(gpuContext(), source, state, Stage::Pointwise).readBack());
+        developOnGpu(gpuContext(), source, withoutMasks(state), LensCorrection{}, Stage::Pointwise)
+            .readBack();
+    requireBitIdentical(
+        without,
+        developOnGpu(gpuContext(), source, state, LensCorrection{}, Stage::Pointwise).readBack());
 }
 
 TEST_CASE("Local Temperature and Tint match the CPU, and the table of ADR 044", "[gpu][local]") {
@@ -395,7 +401,8 @@ TEST_CASE("Local Temperature and Tint match the CPU, and the table of ADR 044", 
                 stateOf({adjustmentOf(everywhere(), {{"relativeTemperature", row.temperature},
                                                      {"relativeTint", row.tint}})});
             const ImageBuffer actual =
-                developOnGpu(gpuContext(), grey, state, Stage::Pointwise).readBack();
+                developOnGpu(gpuContext(), grey, state, LensCorrection{}, Stage::Pointwise)
+                    .readBack();
             const std::span<const float> pixels = actual.samples<float>();
             for (std::size_t pixel = 0; pixel < 16; ++pixel) {
                 for (std::size_t channel = 0; channel < 3; ++channel) {
@@ -416,8 +423,10 @@ TEST_CASE("Local Temperature and Tint match the CPU, and the table of ADR 044", 
                      adjustmentOf(everywhere(), {{"relativeTemperature", 50.0}})});
         const DevelopState one =
             stateOf({adjustmentOf(everywhere(), {{"relativeTemperature", 100.0}})});
-        const ImageBuffer a = developOnGpu(gpuContext(), source, two, Stage::Pointwise).readBack();
-        const ImageBuffer b = developOnGpu(gpuContext(), source, one, Stage::Pointwise).readBack();
+        const ImageBuffer a =
+            developOnGpu(gpuContext(), source, two, LensCorrection{}, Stage::Pointwise).readBack();
+        const ImageBuffer b =
+            developOnGpu(gpuContext(), source, one, LensCorrection{}, Stage::Pointwise).readBack();
         REQUIRE(worstColourError(a, b) <= localRelativeTolerance);
     }
 }
@@ -428,7 +437,7 @@ TEST_CASE("The after-matrix probe applies the local Temperature and Tint", "[gpu
     const DevelopState state = stateOf(
         {adjustmentOf(someLinear(), {{"relativeTemperature", 80.0}, {"relativeTint", 30.0}}),
          adjustmentOf(someRadial(), {{"relativeTint", -50.0}})});
-    const ProcessingPlan plan = planFor(source, state);
+    const ProcessingPlan plan = planFor(source, state, LensCorrection{});
     REQUIRE_FALSE(plan.pointwise.local.empty());
 
     const DeviceImage input = context.upload(source);
@@ -501,7 +510,7 @@ TEST_CASE("Presence under masks matches the CPU", "[gpu][local][presence]") {
         settings.presence.dehaze = 50.0F;
         const DevelopState state =
             stateOf({adjustmentOf(someRadial(), {{"dehaze", -90.0}})}, settings);
-        const ProcessingPlan plan = planFor(source, state);
+        const ProcessingPlan plan = planFor(source, state, LensCorrection{});
         REQUIRE(plan.pointwise.presence.hazeFloor.active());
         REQUIRE(plan.pointwise.presence.hazeMean.active());
         requirePointwiseMatches(source, state);
@@ -512,10 +521,12 @@ TEST_CASE("Presence under masks matches the CPU", "[gpu][local][presence]") {
         LocalAdjustment up = adjustmentOf(someRadial(), {{"dehaze", 60.0}});
         LocalAdjustment down = adjustmentOf(someRadial(), {{"dehaze", -60.0}});
         const DevelopState state = stateOf({up, down}, settings);
-        const ImageBuffer without =
-            developOnGpu(gpuContext(), source, withoutMasks(state), Stage::Pointwise).readBack();
+        const ImageBuffer without = developOnGpu(gpuContext(), source, withoutMasks(state),
+                                                 LensCorrection{}, Stage::Pointwise)
+                                        .readBack();
         const ImageBuffer masked =
-            developOnGpu(gpuContext(), source, state, Stage::Pointwise).readBack();
+            developOnGpu(gpuContext(), source, state, LensCorrection{}, Stage::Pointwise)
+                .readBack();
         requireBitIdentical(without, masked);
     }
     SECTION("an interval that ends exactly at zero prepares and reads no floor") {
@@ -525,7 +536,7 @@ TEST_CASE("Presence under masks matches the CPU", "[gpu][local][presence]") {
         settings.presence.dehaze = -50.0F;
         const DevelopState state =
             stateOf({adjustmentOf(everywhere(), {{"dehaze", 50.0}})}, settings);
-        const ProcessingPlan plan = planFor(source, state);
+        const ProcessingPlan plan = planFor(source, state, LensCorrection{});
         REQUIRE_FALSE(plan.pointwise.presence.hazeFloor.active());
         REQUIRE(plan.pointwise.presence.hazeMean.active());
         requirePointwiseMatches(source, state);
@@ -554,10 +565,12 @@ TEST_CASE("A render with masks matches the CPU at a reduced level, in a region a
     const ImageBuffer full = sceneOf({203, 141});
 
     const auto requireRender = [&](const ImageBuffer& source, const RenderRequest& request) {
-        const ImageBuffer expected = develop(source, state, request);
-        const ImageBuffer unmasked = develop(source, withoutMasks(state), request);
+        const ImageBuffer expected = develop(source, state, LensCorrection{}, request);
+        const ImageBuffer unmasked =
+            develop(source, withoutMasks(state), LensCorrection{}, request);
         const ImageBuffer actual =
-            developOnGpu(context, source, state, Stage::Effects, request).readBack();
+            developOnGpu(context, source, state, LensCorrection{}, Stage::Effects, request)
+                .readBack();
         REQUIRE(actual.size() == expected.size());
         const double colour = worstColourError(expected, actual);
         if (printsMeasured()) {
@@ -592,8 +605,9 @@ TEST_CASE("The curve-input sample under masks matches the CPU", "[gpu][local]") 
     const DevelopState state =
         stateOf({adjustmentOf(someLinear(), {{"exposure", 1.0}, {"clarity", 40.0}}),
                  adjustmentOf(someRadial(), {{"relativeTint", 70.0}, {"vibrance", 50.0}})});
-    const ImageBuffer expected = sample(source, state, Tap::CurveInput);
-    const ImageBuffer actual = sampleOnGpu(context, source, state, Tap::CurveInput);
+    const ImageBuffer expected = sample(source, state, LensCorrection{}, Tap::CurveInput);
+    const ImageBuffer actual =
+        sampleOnGpu(context, source, state, LensCorrection{}, Tap::CurveInput);
     REQUIRE(actual.size() == expected.size());
     REQUIRE(actual.format() == expected.format());
     // Samples are encoded for display: the bound is on the encoded values.
@@ -610,7 +624,7 @@ TEST_CASE("The block packs the plan's masks and the bases that exist", "[gpu][lo
         {adjustmentOf(someLinear(), {{"exposure", 1.0}, {"dehaze", -60.0}, {"texture", 10.0}}),
          adjustmentOf(someRadial(), {{"saturation", 25.0}}, 0.5F, true)},
         settings);
-    const ProcessingPlan plan = planFor(source, state);
+    const ProcessingPlan plan = planFor(source, state, LensCorrection{});
     const GpuPointwiseBlock block =
         packPointwise(plan.pointwise, source.size(), PointwiseProbe::Developed);
     const LocalPlan& local = plan.pointwise.local;
@@ -634,8 +648,9 @@ TEST_CASE("The block packs the plan's masks and the bases that exist", "[gpu][lo
     REQUIRE(block.local[15].k[0] == 0.0F);
 
     // No masks: the header is zero except for the Presence flags, and the globals are zero.
-    const GpuPointwiseBlock plain = packPointwise(planFor(source, withoutMasks(state)).pointwise,
-                                                  source.size(), PointwiseProbe::Developed);
+    const GpuPointwiseBlock plain =
+        packPointwise(planFor(source, withoutMasks(state), LensCorrection{}).pointwise,
+                      source.size(), PointwiseProbe::Developed);
     REQUIRE(plain.localHeader[0] == 0);
     REQUIRE(plain.localHeader[1] == 0);
     REQUIRE(plain.localGlobal == std::array<float, 16>{});

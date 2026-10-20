@@ -115,14 +115,18 @@ public:
     /// Finds or makes the coverage of a list at a raster size. Safe to call from many threads.
     /// @param retain Whether to keep the result. A live stroke's updates are kept too: each
     /// replaces the entry it grew from, so a stroke leaves one entry. False for a one-off.
+    /// @param frame Map of the strokes into the raster's frame (a lens, ADR 050); coverage drawn
+    /// through another frame is another entry, so a distortion toggle never finds the old one.
     [[nodiscard]] Result coverage(const std::shared_ptr<const StrokeList>& strokes,
-                                  ImageSize raster, bool retain = true);
+                                  ImageSize raster, bool retain = true,
+                                  const BrushFrame& frame = nullptr);
 
     /// Finds the coverage of a list at a raster size only if it is held, whole or as an equal list
     /// behind other pointers: no insert, no extension, no drawing.
     /// @return The tiles of a `Hit` or `ContentHit`, empty otherwise. The LRU order is touched.
     [[nodiscard]] std::shared_ptr<const CoverageTiles>
-    find(const std::shared_ptr<const StrokeList>& strokes, ImageSize raster);
+    find(const std::shared_ptr<const StrokeList>& strokes, ImageSize raster,
+         const BrushFrame& frame = nullptr);
 
     /// What ::arraw::BrushCoverageCache::peek found.
     struct Peek {
@@ -137,8 +141,8 @@ public:
     /// or touching the LRU order: the entries, the bytes and their order stay as they are.
     /// @return `Hit`, `ContentHit`, `Grown`, `Extended` or `Miss` (also for a list the cache would
     /// refuse), with the strokes already drawn (all but the last for a `Grown`).
-    [[nodiscard]] Peek peek(const std::shared_ptr<const StrokeList>& strokes,
-                            ImageSize raster) const;
+    [[nodiscard]] Peek peek(const std::shared_ptr<const StrokeList>& strokes, ImageSize raster,
+                            const BrushFrame& frame = nullptr) const;
 
     /// Counts the answers of coverage() of one kind since the cache was made; `clear` keeps them.
     [[nodiscard]] std::uint64_t lookups(CoverageLookup kind) const noexcept;
@@ -170,7 +174,13 @@ private:
         std::size_t settledDabs = 0;
         /// Whether a longer list of the same size was built on it (an Extended); evicted first.
         bool superseded = false;
+        /// The map of the strokes into the raster's frame; null for the identity.
+        BrushFrame frame = nullptr;
     };
+
+    /// Tells whether an entry is for a raster size and frame.
+    [[nodiscard]] static bool matches(const Entry& entry, ImageSize raster,
+                                      const BrushFrame& frame) noexcept;
 
     /// A draw: the coverage, and the same without the last stroke's end dab.
     struct Drawn {
@@ -195,8 +205,8 @@ private:
 
     /// Finds the held entry a list grows from, the best one for `Grown`: its index among the
     /// entries, or nothing. Holds the lock.
-    [[nodiscard]] std::optional<std::size_t> growthBase(const StrokeList& wanted,
-                                                        ImageSize raster) const;
+    [[nodiscard]] std::optional<std::size_t> growthBase(const StrokeList& wanted, ImageSize raster,
+                                                        const BrushFrame& frame) const;
 
     /// Adds an entry, replacing one with the same key, and evicts what the budget does not
     /// allow. Holds the lock.

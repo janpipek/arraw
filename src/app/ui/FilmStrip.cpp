@@ -11,8 +11,10 @@
 #include <QHBoxLayout>
 #include <QItemSelection>
 #include <QItemSelectionModel>
+#include <QKeySequence>
 #include <QLabel>
 #include <QListView>
+#include <QLocale>
 #include <QMenu>
 #include <QMessageBox>
 #include <QMetaObject>
@@ -24,11 +26,13 @@
 #include <QStringList>
 #include <QStyle>
 #include <QStyledItemDelegate>
+#include <QTextDocument>
 #include <QToolButton>
 #include <QUrl>
 
 #include <algorithm>
 #include <exception>
+#include <utility>
 
 namespace arraw::app {
 
@@ -41,6 +45,25 @@ constexpr int borderWidth = 4;
 
 /// Below this content height the stars and the format chip are illegible, and left out.
 constexpr int marksMinHeight = 64;
+
+/// Time a listing runs before the folder label says so, and between two updates of the note;
+/// the anti-flicker rule of the render progress.
+constexpr int busyNoteMs = 250;
+
+/// Returns the font of the file name caption: the widget's, a little smaller.
+QFont captionFont(QFont font) {
+    if (font.pointSizeF() > 0) {
+        font.setPointSizeF(std::max(6.0, font.pointSizeF() * 0.85));
+    } else if (font.pixelSize() > 0) {
+        font.setPixelSize(std::max(7, static_cast<int>(font.pixelSize() * 0.85)));
+    }
+    return font;
+}
+
+/// Returns the height of the caption strip below a thumbnail, for the widget's font.
+int captionHeight(const QFont& widgetFont) {
+    return QFontMetrics(captionFont(widgetFont)).height() + cellPadding;
+}
 
 QString toQString(const fs::path& path) {
     return QString::fromStdU16String(path.u16string());
@@ -97,6 +120,33 @@ void paintFormatChip(QPainter* painter, const QRect& inner, const QString& text)
     painter->drawText(chip, Qt::AlignCenter, text);
 }
 
+/// @brief Paints the badge of a shot with a sidecar, bottom left of a cell: three sliders.
+///
+/// A dark chip with light strokes, so that it reads over any photograph and any palette.
+void paintSidecarBadge(QPainter* painter, const QRect& inner) {
+    const int size = std::max(12, inner.height() / 9);
+    // Above the stars bar when that is shown.
+    const int lift = inner.height() >= marksMinHeight ? std::max(14, inner.height() / 6) + 2 : 3;
+    const QRect badge(inner.left() + 3, inner.bottom() - lift - size + 1, size, size);
+    painter->setPen(Qt::NoPen);
+    painter->setBrush(QColor(0, 0, 0, 150));
+    painter->drawRoundedRect(badge, 3, 3);
+    const QColor ink(0xF0, 0xF0, 0xF0);
+    const double margin = size * 0.2;
+    const double left = badge.left() + margin;
+    const double right = badge.right() + 1 - margin;
+    const double knob = std::max(1.5, size * 0.11);
+    const double knobs[] = {0.35, 0.7, 0.45};
+    for (int i = 0; i < 3; ++i) {
+        const double y = badge.top() + size * (0.27 + 0.23 * i);
+        painter->setPen(QPen(ink, std::max(1.0, size / 14.0), Qt::SolidLine, Qt::RoundCap));
+        painter->drawLine(QPointF(left, y), QPointF(right, y));
+        painter->setPen(Qt::NoPen);
+        painter->setBrush(ink);
+        painter->drawEllipse(QPointF(left + (right - left) * knobs[i], y), knob, knob);
+    }
+}
+
 } // namespace
 
 /// @brief Paints a shot's cell: thumbnail or placeholder, marks, and the outline of the active
@@ -105,9 +155,16 @@ class FilmStripDelegate : public QStyledItemDelegate {
 public:
     using QStyledItemDelegate::QStyledItemDelegate;
 
-    /// @brief Sets the side of the square cells.
-    void setSide(int side) noexcept {
+    /// @brief Sets the side of the square thumbnail area of the cells and the height of the file
+    /// name caption below it (0 for none).
+    void setSide(int side, int caption) noexcept {
         side_ = side;
+        caption_ = caption;
+    }
+
+    /// @brief Returns the height of the caption strip below the thumbnail area, 0 if none.
+    [[nodiscard]] int caption() const noexcept {
+        return caption_;
     }
 
     /// @brief Returns the side of the cells.
@@ -121,7 +178,7 @@ public:
     }
 
     [[nodiscard]] QSize sizeHint(const QStyleOptionViewItem&, const QModelIndex&) const override {
-        return {side_, side_};
+        return {side_, side_ + caption_};
     }
 
     void paint(QPainter* painter, const QStyleOptionViewItem& option,
@@ -131,8 +188,9 @@ public:
         const bool selected = (option.state & QStyle::State_Selected) != 0;
         const bool active =
             !active_.isEmpty() && index.data(ShotModel::PathRole).toString() == active_;
+        const QRect thumbnailCell(option.rect.topLeft(), QSize(option.rect.width(), side_));
         const QRect inner =
-            option.rect.adjusted(cellPadding, cellPadding, -cellPadding, -cellPadding);
+            thumbnailCell.adjusted(cellPadding, cellPadding, -cellPadding, -cellPadding);
         const QString format = index.data(ShotModel::FormatLabelRole).toString();
 
         const auto thumbnail = index.data(ShotModel::ThumbnailRole).value<QImage>();
@@ -161,13 +219,33 @@ public:
 
         paintMarks(painter, inner, index.data(ShotModel::RatingRole).toInt(),
                    index.data(ShotModel::LabelRole).toInt());
+        if (index.data(ShotModel::HasSidecarRole).toBool()) {
+            paintSidecarBadge(painter, inner);
+        }
 
+        QColor colour = option.palette.highlight().color();
         if (active || selected) {
-            QColor colour = option.palette.highlight().color();
             if (!active) {
                 // Selected beside the active one: the same weight, dimmer.
                 colour.setAlphaF(0.6);
             }
+        }
+        if (caption_ > 0 && inner.height() >= marksMinHeight) {
+            const QRect strip(option.rect.left() + borderWidth, thumbnailCell.bottom() + 1,
+                              option.rect.width() - 2 * borderWidth,
+                              option.rect.bottom() - thumbnailCell.bottom() - borderWidth);
+            if (active || selected) {
+                painter->fillRect(strip, colour);
+            }
+            const QFont font = captionFont(option.font);
+            painter->setFont(font);
+            painter->setPen(active || selected ? option.palette.highlightedText().color()
+                                               : option.palette.text().color());
+            const QString name = QFontMetrics(font).elidedText(
+                index.data(Qt::DisplayRole).toString(), Qt::ElideMiddle, strip.width() - 2);
+            painter->drawText(strip, Qt::AlignCenter, name);
+        }
+        if (active || selected) {
             painter->setPen(QPen(colour, borderWidth));
             painter->setBrush(Qt::NoBrush);
             const int offset = borderWidth / 2;
@@ -178,18 +256,22 @@ public:
 
 private:
     int side_ = 132;
+    int caption_ = 0;
     QString active_;
 };
 
-FilmStrip::FilmStrip(QWidget* parent, ThumbnailCache cache)
+FilmStrip::FilmStrip(QWidget* parent, ThumbnailCache cache, LensDatabaseSource lensDatabase)
     : QWidget(parent), watcher_(model_),
-      thumbnails_(std::move(cache), [this](ThumbnailResult result) {
-          // On the worker thread. Dropped if the strip is gone by the time the GUI thread
-          // would run it.
-          QMetaObject::invokeMethod(
-              this, [this, result = std::move(result)] { receiveThumbnail(result); },
-              Qt::QueuedConnection);
-      }) {
+      thumbnails_(
+          std::move(cache),
+          [this](ThumbnailResult result) {
+              // On the worker thread. Dropped if the strip is gone by the time the GUI thread
+              // would run it.
+              QMetaObject::invokeMethod(
+                  this, [this, result = std::move(result)] { receiveThumbnail(result); },
+                  Qt::QueuedConnection);
+          },
+          true, std::move(lensDatabase)) {
     proxy_.setSourceModel(&model_);
 
     auto* layout = new QHBoxLayout(this);
@@ -217,6 +299,7 @@ FilmStrip::FilmStrip(QWidget* parent, ThumbnailCache cache)
     layout->addWidget(list_, 1);
 
     emptyHint_ = new QLabel(tr("No shots match the filter"), list_->viewport());
+    emptyHint_->setObjectName(QStringLiteral("filmStripEmptyHint"));
     emptyHint_->setAlignment(Qt::AlignCenter);
     emptyHint_->setAttribute(Qt::WA_TransparentForMouseEvents);
     emptyHint_->setStyleSheet(QStringLiteral("color: gray;"));
@@ -239,21 +322,57 @@ FilmStrip::FilmStrip(QWidget* parent, ThumbnailCache cache)
         updateEmptyHint();
         scheduleActiveCheck();
     });
+    connect(&watcher_, &FolderWatcher::watchStatusChanged, this, &FilmStrip::onWatchStatus);
     connect(&watcher_, &FolderWatcher::sidecarChangedExternally, this,
             [this](const QString& primary) {
                 thumbnails_.invalidate(toPath(primary));
                 emit sidecarChangedExternally(primary);
             });
 
-    // Shots appear by refresh (the watcher); a new folder is handled in setFolder.
+    // Shots appear as the walk brings them, and by refresh (the watcher). Connected after the
+    // proxy, which has taken the rows in by the time this runs.
     connect(&model_, &QAbstractItemModel::rowsInserted, this,
+            [this](const QModelIndex&, int first, int last) { takeInsertedRows(first, last); });
+    connect(&model_, &QAbstractItemModel::rowsAboutToBeRemoved, this,
             [this](const QModelIndex&, int first, int last) {
-                std::vector<fs::path> added;
-                for (int row = first; row <= last; ++row) {
-                    added.push_back(model_.shot(row).primary);
+                if (!droppingSubfolders_) {
+                    return;
                 }
-                thumbnails_.addShots(added);
+                std::vector<fs::path> leaving;
+                leaving.reserve(static_cast<std::size_t>(last - first + 1));
+                for (int row = first; row <= last; ++row) {
+                    leaving.push_back(model_.shot(row).primary);
+                }
+                thumbnails_.removeShots(leaving);
             });
+    connect(&model_, &ShotModel::listingChanged, this, &FilmStrip::onListingChanged);
+    connect(&model_, &ShotModel::refreshingChanged, this, &FilmStrip::onRefreshingChanged);
+    busyTimer_.setInterval(busyNoteMs);
+    connect(&busyTimer_, &QTimer::timeout, this, &FilmStrip::updateFolderLabel);
+    // A change too scattered to merge by runs resets the model (see ShotModel::applyFolders);
+    // the selection is carried over it. A new folder is not carried, and gets its thumbnails in
+    // setFolder.
+    connect(&proxy_, &QAbstractItemModel::modelAboutToBeReset, this, [this] {
+        if (!changingFolder_) {
+            stashSelection();
+        }
+    });
+    connect(&proxy_, &QAbstractItemModel::modelReset, this, [this] {
+        if (!changingFolder_) {
+            restoreSelection();
+        }
+    });
+    connect(&model_, &QAbstractItemModel::modelReset, this, [this] {
+        if (changingFolder_) {
+            return;
+        }
+        std::vector<fs::path> shots;
+        shots.reserve(static_cast<std::size_t>(model_.rowCount()));
+        for (int row = 0; row < model_.rowCount(); ++row) {
+            shots.push_back(model_.shot(row).primary);
+        }
+        thumbnails_.addShots(shots);
+    });
     // What is on screen changes with scrolling, size, filter and the shots themselves; one report
     // after the burst.
     visibleTimer_.setSingleShot(true);
@@ -270,7 +389,7 @@ FilmStrip::FilmStrip(QWidget* parent, ThumbnailCache cache)
 FilmStrip::~FilmStrip() = default;
 
 QSize FilmStrip::sizeHint() const {
-    return {600, 132};
+    return {600, 132 + captionHeight(font())};
 }
 
 void FilmStrip::buildTitleBar() {
@@ -287,11 +406,52 @@ void FilmStrip::buildTitleBar() {
     connect(folderButton, &QToolButton::clicked, this, &FilmStrip::folderRequested);
     layout->addWidget(folderButton);
 
+    subfoldersButton_ = new QToolButton(titleBar_);
+    subfoldersButton_->setIcon(style()->standardIcon(QStyle::SP_FileDialogDetailedView));
+    subfoldersButton_->setCheckable(true);
+    subfoldersButton_->setAutoRaise(true);
+    subfoldersButton_->setToolTip(tr("Include subfolders"));
+    subfoldersButton_->setFocusPolicy(Qt::NoFocus);
+    connect(subfoldersButton_, &QToolButton::toggled, this, [this](bool include) {
+        // A shot still waiting for its listing counts as the active one.
+        const fs::path active = active_.empty() ? pendingActive_.value_or(fs::path()) : active_;
+        const bool leaves =
+            !include && !active.empty() && !model_.folder().empty() &&
+            active.parent_path().lexically_normal() != model_.folder().lexically_normal();
+        if (leaves && subfoldersLeaveGuard_ && !subfoldersLeaveGuard_()) {
+            subfoldersButton_->blockSignals(true);
+            subfoldersButton_->setChecked(true);
+            subfoldersButton_->blockSignals(false);
+            return;
+        }
+        setIncludeSubfolders(include);
+    });
+    layout->addWidget(subfoldersButton_);
+
     folderLabel_ = new QLabel(tr("No folder"), titleBar_);
+    folderLabel_->setObjectName(QStringLiteral("filmStripFolderLabel"));
     folderLabel_->setTextInteractionFlags(Qt::TextSelectableByMouse);
     // Yields room to the filter controls when the window is narrow.
     folderLabel_->setMinimumWidth(0);
     layout->addWidget(folderLabel_, 1);
+
+    // Folders beyond the limit on watches are read only by a refresh; the button says so, and
+    // is that refresh.
+    noticeButton_ = new QToolButton(titleBar_);
+    noticeButton_->setObjectName(QStringLiteral("filmStripNotice"));
+    noticeButton_->setIcon(style()->standardIcon(QStyle::SP_MessageBoxWarning));
+    noticeButton_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    noticeButton_->setAutoRaise(true);
+    noticeButton_->setFocusPolicy(Qt::NoFocus);
+    noticeButton_->hide();
+    connect(noticeButton_, &QToolButton::clicked, this, &FilmStrip::refreshFolder);
+    layout->addWidget(noticeButton_);
+    // The large-folder note alone has nothing to click for: a plain label in the same place.
+    largeNote_ = new QLabel(titleBar_);
+    largeNote_->setObjectName(QStringLiteral("filmStripLargeNote"));
+    largeNote_->setTextFormat(Qt::PlainText);
+    largeNote_->hide();
+    layout->addWidget(largeNote_);
 
     buildFilterControls(titleBar_);
 }
@@ -364,24 +524,305 @@ void FilmStrip::clearFilter() {
     applyFilter();
 }
 
-void FilmStrip::setFolder(const fs::path& folder) {
-    model_.setFolder(folder);
-    live_.clear();
-    {
-        std::vector<fs::path> shots;
-        shots.reserve(static_cast<std::size_t>(model_.rowCount()));
-        for (int row = 0; row < model_.rowCount(); ++row) {
-            shots.push_back(model_.shot(row).primary);
-        }
-        thumbnails_.setShots(std::move(shots));
+void FilmStrip::stashSelection() {
+    ResetStash stash;
+    for (const QModelIndex& index : list_->selectionModel()->selectedIndexes()) {
+        stash.selected.push_back(primaryAt(index));
     }
+    if (const QModelIndex current = list_->selectionModel()->currentIndex(); current.isValid()) {
+        stash.current = primaryAt(current);
+    }
+    if (const QModelIndex first = list_->indexAt(QPoint(2, 2)); first.isValid()) {
+        stash.anchor = primaryAt(first);
+    }
+    stash_ = std::move(stash);
+}
+
+void FilmStrip::restoreSelection() {
+    if (!stash_) {
+        return;
+    }
+    const ResetStash stash = *std::exchange(stash_, std::nullopt);
+    QItemSelection selection;
+    for (const fs::path& primary : stash.selected) {
+        if (const QModelIndex index = proxyIndexOf(primary); index.isValid()) {
+            selection.select(index, index);
+        }
+    }
+    QItemSelectionModel* model = list_->selectionModel();
+    model->select(selection, QItemSelectionModel::ClearAndSelect);
+    // The shot that is open keeps the focus if nothing else had it.
+    const QModelIndex current = proxyIndexOf(stash.current.empty() ? active_ : stash.current);
+    if (current.isValid()) {
+        model->setCurrentIndex(current, QItemSelectionModel::NoUpdate);
+    }
+    if (const QModelIndex anchor = proxyIndexOf(stash.anchor); anchor.isValid()) {
+        list_->scrollTo(anchor, QAbstractItemView::PositionAtTop);
+    }
+}
+
+void FilmStrip::listFolder(const fs::path& folder, std::optional<fs::path> activate) {
+    changingFolder_ = true;
+    try {
+        model_.setFolder(folder, includeSubfolders_);
+    } catch (...) {
+        changingFolder_ = false;
+        throw;
+    }
+    changingFolder_ = false;
+    live_.clear();
+    // The rows come as the walk brings them; each insert hands its shots to the worker.
+    thumbnails_.setShots({});
     visibleTimer_.start();
     active_.clear();
+    pendingActive_ = std::move(activate);
+    firstShotSent_ = false;
+    ++listingNumber_;
+    // The new walk reports its own.
+    watchStatus_ = {};
+    largeNoted_ = false;
+    updateNotice();
     delegate_->setActive({});
-    folderLabel_->setText(toQString(folder.lexically_normal()));
-    folderLabel_->setToolTip(folderLabel_->text());
+    updateFolderLabel();
     updateEmptyHint();
+}
+
+void FilmStrip::setFolder(const fs::path& folder, std::optional<fs::path> activate) {
+    listFolder(folder, std::move(activate));
+    emit folderChanged();
     emit activeChanged();
+}
+
+QList<QKeySequence> refreshFolderKeys() {
+    // keyBindings, not QKeySequence(StandardKey), which keeps only the first binding: on GNOME
+    // that is Ctrl+R, and F5 would do nothing (review R1).
+    QList<QKeySequence> keys{QKeySequence(Qt::Key_F5)};
+    for (const QKeySequence& key : QKeySequence::keyBindings(QKeySequence::Refresh)) {
+        if (!keys.contains(key)) {
+            keys.append(key);
+        }
+    }
+    return keys;
+}
+
+void FilmStrip::setMaxWatchedFolders(int limit) {
+    watcher_.setMaxWatchedFolders(limit);
+}
+
+bool FilmStrip::hasWatchNotice() const {
+    return !noticeButton_->isHidden() || !largeNote_->isHidden();
+}
+
+void FilmStrip::refreshFolder() {
+    if (!model_.folder().empty()) {
+        watcher_.refreshAll();
+    }
+}
+
+void FilmStrip::onWatchStatus(const WatchStatus& status) {
+    watchStatus_ = status;
+    updateNotice();
+}
+
+void FilmStrip::updateNotice() {
+    const QString refreshKeys =
+        QKeySequence::listToString(refreshFolderKeys(), QKeySequence::NativeText)
+            .replace(QStringLiteral("; "), tr(" or "));
+    QStringList texts;
+    QStringList tips;
+    if (watchStatus_.rootUnavailable) {
+        texts << tr("Folder unavailable");
+        tips << tr("%1 cannot be read (%2). The strip shows what was last listed. Click, or "
+                   "press %3, to try again.")
+                    .arg(toQString(model_.folder().lexically_normal()),
+                         QString::fromStdString(watchStatus_.rootError), refreshKeys);
+    }
+    if (const int unreadable = watchStatus_.unreadable; unreadable > 0) {
+        texts << (unreadable == 1 ? tr("1 folder could not be read")
+                                  : tr("%n folders could not be read", nullptr, unreadable));
+        QStringList paths;
+        for (const fs::path& path : watchStatus_.unreadableFolders) {
+            paths << toQString(path.lexically_normal());
+        }
+        QString tip = tr("These folders cannot be read now, so their shots are not shown "
+                         "(or, after an I/O error, are shown as they were):\n%1")
+                          .arg(paths.join(QLatin1Char('\n')));
+        if (const int more = unreadable - static_cast<int>(paths.size()); more > 0) {
+            tip += tr("\n… and %n more", nullptr, more);
+        }
+        tips << tip + tr("\nClick, or press %1, to try again.").arg(refreshKeys);
+    }
+    if (const int unwatched = watchStatus_.unwatched(); unwatched > 0) {
+        texts << (unwatched == 1 ? tr("1 folder not watched")
+                                 : tr("%n folders not watched", nullptr, unwatched));
+        tips << tr("Arraw watches at most %1 folders, the shallowest first: the system limits "
+                   "the watches all programs share (inotify on Linux), and %2 of the %3 folders "
+                   "here have none.\nNew files in those folders appear after a refresh. Click, "
+                   "or press %4, to refresh now.")
+                    .arg(watchStatus_.limit)
+                    .arg(unwatched)
+                    .arg(watchStatus_.directories)
+                    .arg(refreshKeys);
+    }
+    // Something to try again or refresh for; the large-folder note alone is not (review N3).
+    const bool actionable = !texts.isEmpty();
+    if (largeNoted_ && model_.rowCount() >= largeFolderShots_) {
+        texts << tr("Large folder: %1 shots; the strip may be slow")
+                     .arg(QLocale().toString(model_.rowCount()));
+        tips << tr("Very large listings can make the strip slow. Nothing is limited: all the "
+                   "shots are listed.");
+    }
+    // As plain text, whatever the paths in it look like: a tooltip that looks like rich text is
+    // shown as such (review N1).
+    const QString text = texts.join(QStringLiteral(" · "));
+    const QString tip =
+        Qt::convertFromPlainText(tips.join(QStringLiteral("\n\n")), Qt::WhiteSpaceNormal);
+    noticeButton_->setVisible(actionable);
+    largeNote_->setVisible(!actionable && !texts.isEmpty());
+    if (actionable) {
+        noticeButton_->setText(text);
+        noticeButton_->setToolTip(tip);
+    } else if (!texts.isEmpty()) {
+        largeNote_->setText(text);
+        largeNote_->setToolTip(tip);
+    }
+}
+
+void FilmStrip::takeInsertedRows(int first, int last) {
+    std::vector<fs::path> added;
+    added.reserve(static_cast<std::size_t>(last - first + 1));
+    std::optional<fs::path> found;
+    for (int row = first; row <= last; ++row) {
+        const Shot& shot = model_.shot(row);
+        added.push_back(shot.primary);
+        if (pendingActive_ && !found &&
+            (shot.primary == *pendingActive_ ||
+             std::ranges::find(shot.companions, *pendingActive_) != shot.companions.end())) {
+            found = shot.primary;
+        }
+    }
+    thumbnails_.addShots(added);
+    if (!largeNoted_ && model_.rowCount() >= largeFolderShots_) {
+        // Once per listing, and never in the way (plan, answer 5).
+        largeNoted_ = true;
+        updateNotice();
+    }
+    if (found) {
+        pendingActive_.reset();
+        setActive(*found);
+    }
+    if (!firstShotSent_ && model_.isListing() && proxy_.rowCount() > 0) {
+        firstShotSent_ = true;
+        // Sent from the event loop, not from within the model's insert: the window may open the
+        // shot and ask about unsaved edits in a dialog, whose loop must not deliver the next
+        // batch into the middle of this one.
+        QMetaObject::invokeMethod(
+            this,
+            [this, listing = listingNumber_, primary = toQString(primaryAt(proxy_.index(0, 0)))] {
+                if (listing == listingNumber_) {
+                    emit firstShotListed(primary);
+                }
+            },
+            Qt::QueuedConnection);
+    }
+}
+
+void FilmStrip::onListingChanged(bool listing) {
+    if (listing) {
+        listingClock_.start();
+        busyTimer_.start();
+    } else {
+        busyTimer_.stop();
+        // The listing is complete without it: the photograph stays open, and no shot is active.
+        pendingActive_.reset();
+        // Queued as firstShotListed is, so that it comes after it.
+        QMetaObject::invokeMethod(
+            this,
+            [this, number = listingNumber_] {
+                if (number == listingNumber_) {
+                    emit listingEnded();
+                }
+            },
+            Qt::QueuedConnection);
+    }
+    updateFolderLabel();
+    updateEmptyHint();
+}
+
+void FilmStrip::onRefreshingChanged(bool refreshing) {
+    if (refreshing) {
+        listingClock_.start();
+        busyTimer_.start();
+    } else if (!model_.isListing()) {
+        busyTimer_.stop();
+    }
+    updateFolderLabel();
+}
+
+void FilmStrip::updateFolderLabel() {
+    QString text = toQString(model_.folder().lexically_normal());
+    folderLabel_->setToolTip(text);
+    if (includeSubfolders_ && !model_.folder().empty()) {
+        text += tr(" (+ subfolders)");
+    }
+    if (model_.isListing() && listingClock_.isValid() && listingClock_.elapsed() >= busyNoteMs) {
+        text += tr(" — listing… %1 shots").arg(QLocale().toString(model_.rowCount()));
+    } else if (model_.isRefreshing() && listingClock_.isValid() &&
+               listingClock_.elapsed() >= busyNoteMs) {
+        text += tr(" — refreshing… %1 shots").arg(QLocale().toString(model_.rowCount()));
+    }
+    folderLabel_->setText(text);
+}
+
+void FilmStrip::setIncludeSubfolders(bool include) {
+    if (include == includeSubfolders_) {
+        return;
+    }
+    includeSubfolders_ = include;
+    if (const fs::path folder = model_.folder().lexically_normal(); !folder.empty()) {
+        // Without a reset: the shots of the folder stay, selected and active as they were.
+        const auto inFolder = [&](const fs::path& file) {
+            return file.parent_path().lexically_normal() == folder;
+        };
+        const bool leaving = !include && !active_.empty() && !inFolder(active_);
+        if (leaving) {
+            clearActive();
+        } else if (!include && pendingActive_ && !inFolder(*pendingActive_)) {
+            pendingActive_.reset();
+        }
+        // What the listing announced is not announced again for the shots that come; a listing
+        // that has not brought its first shot yet still announces it (review B3).
+        firstShotSent_ = firstShotSent_ || proxy_.rowCount() > 0;
+        // The thumbnails still queued for the rows that go are dropped with them (review R4).
+        droppingSubfolders_ = !include;
+        model_.setRecursive(include);
+        droppingSubfolders_ = false;
+        if (!include) {
+            // The strip may have lost the open photograph: the window opens the first shot that
+            // is left, or none, as it does at the end of a listing. Queued, after the toggle
+            // has been announced. A first listing still under way says so itself when it ends.
+            QMetaObject::invokeMethod(
+                this,
+                [this, number = listingNumber_] {
+                    if (number != listingNumber_) {
+                        return;
+                    }
+                    if (proxy_.rowCount() > 0) {
+                        emit firstShotListed(toQString(primaryAt(proxy_.index(0, 0))));
+                    } else if (!model_.isListing()) {
+                        emit listingEnded();
+                    }
+                },
+                Qt::QueuedConnection);
+        }
+        updateFolderLabel();
+        updateEmptyHint();
+        updateNotice();
+    }
+    subfoldersButton_->blockSignals(true);
+    subfoldersButton_->setChecked(include);
+    subfoldersButton_->blockSignals(false);
+    emit includeSubfoldersToggled(include);
 }
 
 QModelIndex FilmStrip::proxyIndexOf(const fs::path& primary) const {
@@ -395,8 +836,15 @@ fs::path FilmStrip::primaryAt(const QModelIndex& index) {
 
 void FilmStrip::setActive(const fs::path& primary) {
     if (model_.rowOf(primary) < 0) {
+        if (model_.isListing()) {
+            // The shot active before is no longer the open one: marks must not go to it while
+            // this one is on its way.
+            clearActive();
+            pendingActive_ = primary;
+        }
         return;
     }
+    pendingActive_.reset();
     QModelIndex index = proxyIndexOf(primary);
     if (!index.isValid()) {
         // The photograph is open, so the strip has to show it.
@@ -414,6 +862,7 @@ void FilmStrip::setActive(const fs::path& primary) {
 
 void FilmStrip::clearActive() {
     active_.clear();
+    pendingActive_.reset();
     delegate_->setActive({});
     list_->selectionModel()->clear();
     list_->viewport()->update();
@@ -481,6 +930,7 @@ void FilmStrip::setMarksWriter(MarksWriter writer) {
 void FilmStrip::noteOwnWrite(const fs::path& photo) {
     try {
         watcher_.noteOwnWrite(sidecarPath(photo));
+        model_.noteSidecarWritten(photo);
     } catch (const std::exception&) {
         // A photograph with no sidecar name has none that could change.
     }
@@ -643,7 +1093,18 @@ void FilmStrip::ensureActiveShown() {
 }
 
 void FilmStrip::updateEmptyHint() {
-    const bool show = proxy_.filter().isActive() && proxy_.rowCount() == 0;
+    QString text;
+    if (proxy_.rowCount() == 0 && !model_.folder().empty()) {
+        if (model_.isListing()) {
+            text = tr("Listing folder…");
+        } else if (model_.rowCount() == 0) {
+            text = tr("No photographs in this folder");
+        } else if (proxy_.filter().isActive()) {
+            text = tr("No shots match the filter");
+        }
+    }
+    const bool show = !text.isEmpty();
+    emptyHint_->setText(text);
     if (show) {
         emptyHint_->setGeometry(list_->viewport()->rect());
         emptyHint_->raise();
@@ -659,12 +1120,18 @@ void FilmStrip::updateCellSide() {
     }
     const int available = list_->height() - 2 * list_->frameWidth() -
                           list_->horizontalScrollBar()->sizeHint().height();
-    const int side = cellSide(available);
-    if (side == delegate_->side()) {
+    // The caption takes its height from the thumbnail area, unless that gets too small to take it.
+    int caption = captionHeight(list_->font());
+    int side = cellSide(available - caption);
+    if (side - 2 * cellPadding < marksMinHeight) {
+        caption = 0;
+        side = cellSide(available);
+    }
+    if (side == delegate_->side() && caption == delegate_->caption()) {
         return;
     }
     updatingCells_ = true;
-    delegate_->setSide(side);
+    delegate_->setSide(side, caption);
     list_->doItemsLayout();
     updatingCells_ = false;
 }
@@ -695,6 +1162,11 @@ void FilmStrip::clickCell(const QModelIndex& index, Qt::KeyboardModifiers modifi
 void FilmStrip::showContextMenu(const QPoint& position) {
     const QModelIndex index = list_->indexAt(position);
     if (!index.isValid()) {
+        if (!model_.folder().empty()) {
+            QMenu menu(this);
+            addRefreshAction(menu);
+            menu.exec(list_->viewport()->mapToGlobal(position));
+        }
         return;
     }
     const fs::path clicked = primaryAt(index);
@@ -743,12 +1215,25 @@ void FilmStrip::showContextMenu(const QPoint& position) {
     connect(menu.addAction(tr("Show in File Manager")), &QAction::triggered, this, [clicked] {
         QDesktopServices::openUrl(QUrl::fromLocalFile(toQString(clicked.parent_path())));
     });
-    // Export belongs to the photograph in the develop view, so it is offered for that one only.
-    if (clicked == active_) {
-        connect(menu.addAction(tr("Export…")), &QAction::triggered, this,
-                &FilmStrip::exportRequested);
-    }
+    // The window runs the export; the strip only says which shots.
+    QAction* exportAction = menu.addAction(tr("Export…"));
+    exportAction->setObjectName(QStringLiteral("filmStripExportAction"));
+    connect(exportAction, &QAction::triggered, this, [this, shots] {
+        QStringList primaries;
+        for (const fs::path& shot : shots) {
+            primaries << toQString(shot);
+        }
+        emit exportRequested(primaries);
+    });
+    menu.addSeparator();
+    addRefreshAction(menu);
     menu.exec(list_->viewport()->mapToGlobal(position));
+}
+
+void FilmStrip::addRefreshAction(QMenu& menu) {
+    QAction* refresh = menu.addAction(tr("Refresh Folder"));
+    refresh->setObjectName(QStringLiteral("filmStripRefreshAction"));
+    connect(refresh, &QAction::triggered, this, &FilmStrip::refreshFolder);
 }
 
 bool FilmStrip::eventFilter(QObject* watched, QEvent* event) {

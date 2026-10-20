@@ -13,6 +13,7 @@
 
 #include <QAbstractButton>
 #include <QApplication>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDialog>
@@ -774,4 +775,137 @@ TEST_CASE("Closed groups do not narrow the dock", "[app][panel][sections]") {
         CHECK_FALSE(section->isOpen());
     }
     CHECK(closed.minimumDockWidth() == openWidth);
+}
+
+TEST_CASE("The lens rows report a switch as a negative choice and show what they are given",
+          "[app][panel][lens]") {
+    DevelopPanel panel;
+    auto* distortion = panel.findChild<QCheckBox*>("lensDistortionCheck");
+    auto* vignetting = rowOf(panel, "lensVignetting");
+    auto* aberration = panel.findChild<QCheckBox*>("lensCaCheck");
+    auto* status = panel.findChild<QLabel*>("lensStatus");
+    auto* choose = panel.findChild<QPushButton*>("lensChooseButton");
+    auto* reset = panel.findChild<QPushButton*>("lensResetButton");
+    REQUIRE((distortion && vignetting && aberration && status && choose && reset));
+
+    // A photograph that is not a RAW, or a database still loading: nothing can be set.
+    panel.showState(DevelopState{}, PanelContext{});
+    CHECK_FALSE(distortion->isEnabled());
+    CHECK_FALSE(vignetting->isEnabled());
+    LensStatus loading;
+    loading.applicable = true;
+    loading.loading = true;
+    loading.text = "Loading the lens database…";
+    panel.showState(DevelopState{}, PanelContext{.lens = loading});
+    CHECK_FALSE(distortion->isEnabled());
+    CHECK_FALSE(vignetting->isEnabled());
+    CHECK_FALSE(choose->isEnabled());
+    CHECK(status->text() == loading.text);
+
+    // Ready: the switches follow the negative, and the buttons the status.
+    LensStatus ready;
+    ready.applicable = true;
+    ready.found = true;
+    ready.canChoose = true;
+    ready.canReset = false;
+    ready.text = "lensfun: a lens (recorded)";
+    ready.note = "The database was updated.";
+    NegativeSettings negative;
+    negative.lens.vignettingAmount = profileVignettingAmount;
+    panel.showState(DevelopState{}, PanelContext{.negative = negative, .lens = ready});
+    CHECK(distortion->isEnabled());
+    CHECK_FALSE(distortion->isChecked());
+    CHECK(vignetting->isEnabled());
+    CHECK(vignetting->findChild<QDoubleSpinBox*>()->value() == profileVignettingAmount);
+    CHECK(choose->isEnabled());
+    CHECK_FALSE(reset->isEnabled());
+    CHECK_FALSE(panel.findChild<QLabel*>("lensNote")->isHidden());
+
+    std::optional<NegativeSettings> chosen;
+    QObject::connect(&panel, &DevelopPanel::negativeChosen,
+                     [&](const NegativeSettings& next) { chosen = next; });
+    distortion->click();
+    REQUIRE(chosen.has_value());
+    // The choice keeps the other values as last shown; the window shows the result.
+    CHECK(chosen->lens.distortion);
+    CHECK(chosen->lens.vignettingAmount == profileVignettingAmount);
+    CHECK_FALSE(chosen->lens.lateralCa);
+    // The panel holds no state of its own: until the window shows it, it is as it was.
+    CHECK_FALSE(distortion->isChecked());
+
+    bool chooseAsked = false;
+    bool resetAsked = false;
+    QObject::connect(&panel, &DevelopPanel::chooseLensRequested, [&] { chooseAsked = true; });
+    QObject::connect(&panel, &DevelopPanel::resetLensRequested, [&] { resetAsked = true; });
+    choose->click();
+    CHECK(chooseAsked);
+    ready.canReset = true;
+    panel.showState(DevelopState{}, PanelContext{.negative = negative, .lens = ready});
+    reset->click();
+    CHECK(resetAsked);
+}
+
+TEST_CASE("The vignetting row is a slider over the profile's amount, a drag being one edit",
+          "[app][panel][lens]") {
+    DevelopPanel panel;
+    SettingSlider* row = rowOf(panel, "lensVignetting");
+    REQUIRE(row != nullptr);
+    auto* slider = row->findChild<QSlider*>("slider");
+    auto* spin = row->findChild<QDoubleSpinBox*>();
+    REQUIRE((slider && spin));
+    CHECK(panel.findChild<QCheckBox*>("lensVignettingCheck") == nullptr);
+
+    // 0 to 150 in steps of 1, shown in percent, none by default.
+    CHECK(spin->minimum() == minimumVignettingAmount);
+    CHECK(spin->maximum() == maximumVignettingAmount);
+    CHECK(spin->singleStep() == 1.0);
+    CHECK(spin->decimals() == 0);
+    CHECK(spin->suffix().contains('%'));
+    CHECK(slider->minimum() == 0);
+    CHECK(slider->maximum() == 150);
+    CHECK(row->defaultValue() == minimumVignettingAmount);
+    CHECK(spin->value() == 0.0);
+    CHECK_FALSE(slider->toolTip().isEmpty());
+
+    LensStatus ready;
+    ready.applicable = true;
+    NegativeSettings negative;
+    negative.lens.distortion = true;
+    panel.showState(DevelopState{}, PanelContext{.negative = negative, .lens = ready});
+    REQUIRE(row->isEnabled());
+
+    int started = 0;
+    int finished = 0;
+    std::vector<NegativeSettings> moves;
+    int chosen = 0;
+    QObject::connect(&panel, &DevelopPanel::editStarted, [&] { ++started; });
+    QObject::connect(&panel, &DevelopPanel::editFinished, [&] { ++finished; });
+    QObject::connect(&panel, &DevelopPanel::negativeEdited,
+                     [&](const NegativeSettings& next) { moves.push_back(next); });
+    QObject::connect(&panel, &DevelopPanel::negativeChosen,
+                     [&](const NegativeSettings&) { ++chosen; });
+    QObject::connect(&panel, &DevelopPanel::stateEdited, [&](const DevelopState&) { FAIL(); });
+
+    drag(row, {30.0, 60.0});
+    CHECK(started == 1);
+    CHECK(finished == 1);
+    CHECK(chosen == 0);
+    REQUIRE(moves.size() == 2);
+    CHECK(moves[0].lens.vignettingAmount == 30.0F);
+    CHECK(moves[1].lens.vignettingAmount == 60.0F);
+    // The other settings are as last shown.
+    CHECK(moves[1].lens.distortion);
+
+    // The window shows the settings again; the slider follows without a signal.
+    negative.lens.vignettingAmount = 60.0F;
+    panel.showState(DevelopState{}, PanelContext{.negative = negative, .lens = ready});
+    CHECK(spin->value() == 60.0);
+    CHECK(moves.size() == 2);
+
+    // Not a RAW, or the database still loading: it cannot be set.
+    panel.showState(DevelopState{}, PanelContext{.negative = negative});
+    CHECK_FALSE(row->isEnabled());
+    ready.loading = true;
+    panel.showState(DevelopState{}, PanelContext{.negative = negative, .lens = ready});
+    CHECK_FALSE(row->isEnabled());
 }

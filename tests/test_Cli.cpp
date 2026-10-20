@@ -6,6 +6,8 @@
 #include "StreamDiagnostics.h"
 #include "TerminalStyle.h"
 #include "support/Fixtures.h"
+#include "support/LensFixtures.h"
+#include "support/Lensfun.h"
 #include "support/LocalAdjustmentStates.h"
 #include "support/TempDir.h"
 
@@ -17,6 +19,8 @@
 #include <ExifInfo.h>
 #include <ImageExport.h>
 #include <ImageImport.h>
+#include <LensDatabase.h>
+#include <LensResolution.h>
 #include <LocalAdjustmentEdits.h>
 #include <NegativeSettings.h>
 #include <NoiseReductionSettings.h>
@@ -363,6 +367,82 @@ TEST_CASE("The version carries the licence notice, on stdout", "[cli]") {
     REQUIRE_THAT(result.out, ContainsSubstring("GPL-3.0-or-later"));
     REQUIRE_THAT(result.out, ContainsSubstring("NO WARRANTY"));
     REQUIRE(result.err.empty());
+}
+
+TEST_CASE("The version names lensfun, or says it was not built", "[cli]") {
+    const auto result = invoke({"--version"});
+
+    REQUIRE(result.code == cli::Success);
+    if (lensfunAvailable()) {
+        REQUIRE_THAT(result.out,
+                     ContainsSubstring(std::string("\nlensfun ") + lensfunVersion() + "\n"));
+        REQUIRE_THAT(result.out, !ContainsSubstring("not built"));
+    } else {
+        REQUIRE_THAT(result.out, ContainsSubstring("\nlensfun: not built\n"));
+    }
+}
+
+TEST_CASE("lenses lists a database's lenses, filtered by words and by a camera", "[cli][lensfun]") {
+    ARRAW_REQUIRE_LENSFUN_OR_SKIP();
+    const auto database = test::fixture("lensfun").string();
+
+    SECTION("every lens, one per line") {
+        const auto result = invoke({"lenses", "--database", database});
+        REQUIRE(result.code == cli::Success);
+        REQUIRE_THAT(result.out, ContainsSubstring("Canon EF-S 18-135mm f/3.5-5.6 IS USM"));
+        REQUIRE_THAT(result.out, ContainsSubstring("[Canon EF-S; crop 1.6; 18-135 mm]"));
+        REQUIRE_THAT(result.out, ContainsSubstring("Tamron SP 24-70mm"));
+        REQUIRE(std::count(result.out.begin(), result.out.end(), '\n') == 8);
+    }
+    SECTION("words that must all occur") {
+        const auto result = invoke({"lenses", "--database", database, "--search", "17-50 hsm"});
+        REQUIRE(result.code == cli::Success);
+        REQUIRE(std::count(result.out.begin(), result.out.end(), '\n') == 2);
+    }
+    SECTION("a camera's mount, with its compatible ones") {
+        const auto result = invoke({"lenses", "--database", database, "--camera", "Canon EOS 80D"});
+        REQUIRE(result.code == cli::Success);
+        REQUIRE_THAT(result.out, StartsWith("Canon EOS 80D: mount Canon EF-S, crop 1.6\n"));
+        REQUIRE_THAT(result.out, ContainsSubstring("Canon EF 50mm f/1.8 STM"));
+        REQUIRE_THAT(result.out, !ContainsSubstring("Tamron"));
+    }
+    SECTION("a camera that is not listed") {
+        const auto result = invoke({"lenses", "--database", database, "--camera", "Canon EOS 5"});
+        REQUIRE(result.code == cli::Failed);
+        REQUIRE_THAT(result.err, ContainsSubstring("no camera \"Canon EOS 5\""));
+        REQUIRE(result.out.empty());
+    }
+    SECTION("the database itself") {
+        const auto result = invoke({"lenses", "--database", database, "--info"});
+        REQUIRE(result.code == cli::Success);
+        REQUIRE_THAT(result.out, ContainsSubstring("Database: " + database));
+        REQUIRE_THAT(result.out, ContainsSubstring("Stamp: 2023-11-14T22:13:20Z"));
+        REQUIRE_THAT(result.out, ContainsSubstring("Cameras: 4"));
+        REQUIRE_THAT(result.out, ContainsSubstring("Lenses: 8"));
+    }
+    SECTION("a directory without a database") {
+        const test::TempDir directory;
+        const auto result = invoke({"lenses", "--database", directory.path().string()});
+        REQUIRE(result.code == cli::Failed);
+        REQUIRE_THAT(result.err, ContainsSubstring("no lens database could be loaded"));
+        REQUIRE(result.out.empty());
+    }
+}
+
+TEST_CASE("lenses says plainly when the build has no lensfun", "[cli]") {
+    if (lensfunAvailable()) {
+        SUCCEED("this build has lensfun");
+        return;
+    }
+    const auto result = invoke({"lenses", "--info"});
+    REQUIRE(result.code == cli::Failed);
+    REQUIRE_THAT(result.err, ContainsSubstring("built without lensfun"));
+}
+
+TEST_CASE("lenses refuses arguments it does not take", "[cli]") {
+    const auto result = invoke({"lenses", "Canon"});
+    REQUIRE(result.code == cli::UsageError);
+    REQUIRE_THAT(result.err, ContainsSubstring("Try 'arraw-cli lenses --help'"));
 }
 
 TEST_CASE("A command line that is wrong exits 2 and says so on stderr", "[cli]") {
@@ -1781,7 +1861,7 @@ TEST_CASE("A sidecar value out of range is clamped and reported, in text and JSO
     std::ofstream(directory.file("frame.xmp"))
         << "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">"
            "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">"
-           "<rdf:Description rdf:about=\"\" xmlns:arraw=\"http://ns.arraw.org/develop/1.0/\" "
+           "<rdf:Description rdf:about=\"\" xmlns:arraw=\"http://ns.arraw.org/develop/\" "
            "arraw:exposure=\"99\" arraw:futureKnob=\"7\"/></rdf:RDF></x:xmpmeta>";
 
     int code = 0;
@@ -2533,6 +2613,384 @@ TEST_CASE("Info names the demosaic when it is not the default, and always with -
     }
 }
 
+namespace {
+
+constexpr std::string_view lensRaw = "lens-canon-32x24.dng";
+
+/// @brief Copies the RAW that names the reference body's kit lens into a directory.
+std::filesystem::path copyLensRaw(const test::TempDir& directory, const std::string& name) {
+    const auto path = directory.file(name);
+    std::filesystem::copy_file(test::fixture(lensRaw), path);
+    return path;
+}
+
+/// @brief Gives a photograph with the lens corrections set, as a sidecar would hold them.
+Photo withLensCorrections(const Photo& photo, bool distortion, float vignettingAmount,
+                          bool lateralCa) {
+    NegativeSettings negative = photo.negative();
+    negative.lens.distortion = distortion;
+    negative.lens.vignettingAmount = vignettingAmount;
+    negative.lens.lateralCa = lateralCa;
+    return photo.with(negative);
+}
+
+/// @brief Gives a photograph with lens switches set, as a sidecar would hold them.
+Photo withLensSwitches(const Photo& photo, bool distortion, bool vignetting, bool lateralCa) {
+    return withLensCorrections(photo, distortion,
+                               vignetting ? profileVignettingAmount : minimumVignettingAmount,
+                               lateralCa);
+}
+
+} // namespace
+
+TEST_CASE("Export applies the lens corrections the flags name, as the library does",
+          "[cli][export][lens][lensfun]") {
+    ARRAW_REQUIRE_LENSFUN_OR_SKIP();
+    const test::TempDir directory;
+    const auto raw = copyLensRaw(directory, "frame.dng");
+    const std::string database = test::fixture("lensfun").string();
+
+    const QImage plain = exportedPng(raw, {"--lens-database", database});
+    int code = -1;
+    std::string err;
+    const QImage corrected =
+        exportedPng(raw, {"--lens-corrections", "all", "--lens-database", database}, &code, &err);
+    REQUIRE(code == cli::Success);
+    REQUIRE_FALSE(corrected.isNull());
+    // The silent wrong pixels of a correction nobody applied: the picture is another.
+    REQUIRE(corrected != plain);
+    REQUIRE_THAT(err, !ContainsSubstring("warning"));
+
+    // It is the library's render: the photograph's correction, resolved, through develop.
+    const Photo photo = withLensSwitches(openPhoto(raw), true, true, true);
+    const LensCorrection lens = lensCorrectionFor(photo, test::fixtureDatabase());
+    REQUIRE(lens.active());
+    const test::TempDir output;
+    const auto library = output.file("library.png");
+    exportImage(develop(loadImage(raw), photo.state(), lens, {}), library, {});
+    REQUIRE(corrected == QImage(QString::fromStdString(library.string())));
+
+    // Each correction alone is another picture again.
+    const QImage distortion =
+        exportedPng(raw, {"--lens-corrections", "distortion", "--lens-database", database});
+    const QImage listed = exportedPng(
+        raw, {"--lens-corrections", "distortion,vignetting,ca", "--lens-database", database});
+    REQUIRE(listed == corrected);
+    REQUIRE(distortion != corrected);
+    REQUIRE(distortion != plain);
+}
+
+TEST_CASE("Export takes the vignetting amount the flag names", "[cli][export][lens][lensfun]") {
+    ARRAW_REQUIRE_LENSFUN_OR_SKIP();
+    const test::TempDir directory;
+    const auto raw = copyLensRaw(directory, "frame.dng");
+    const std::string database = test::fixture("lensfun").string();
+    const auto exportWith = [&](const std::string& list) {
+        return exportedPng(raw, {"--lens-corrections", list, "--lens-database", database});
+    };
+
+    const QImage plain = exportedPng(raw, {"--lens-database", database});
+    const QImage profile = exportWith("vignetting");
+    REQUIRE(profile != plain);
+    // Bare vignetting and all mean the profile as it is, and 0 means off.
+    REQUIRE(exportWith("vignetting=100") == profile);
+    REQUIRE(exportWith("vignetting=0") == plain);
+    REQUIRE(exportWith("all") == exportWith("distortion,vignetting=100,ca"));
+    REQUIRE(exportWith("DISTORTION,Vignetting=100,CA") == exportWith("all"));
+    REQUIRE(exportWith("distortion,vignetting=0") == exportWith("distortion"));
+    REQUIRE(exportWith("none") == plain);
+
+    // A halfway amount is its own picture, and is what a sidecar at the same amount renders.
+    const QImage half = exportWith("vignetting=50");
+    REQUIRE(half != plain);
+    REQUIRE(half != profile);
+    REQUIRE(exportWith("vignetting=150") != profile);
+    writeSidecar(withLensCorrections(openPhoto(raw), false, 50.0F, false));
+    REQUIRE(exportedPng(raw, {"--lens-database", database}) == half);
+}
+
+TEST_CASE("The lens flags override the sidecar's corrections and its lens",
+          "[cli][export][lens][lensfun]") {
+    ARRAW_REQUIRE_LENSFUN_OR_SKIP();
+    const test::TempDir directory;
+    const auto raw = copyLensRaw(directory, "frame.dng");
+    const std::string database = test::fixture("lensfun").string();
+    const QImage plain = exportedPng(raw, {"--no-sidecar", "--lens-database", database});
+
+    // The sidecar turns every correction on, and records the lens it matched.
+    writeSidecar(recordLensMatch(withLensSwitches(openPhoto(raw), true, true, true),
+                                 test::fixtureDatabase()));
+    const QImage fromSidecar = exportedPng(raw, {"--lens-database", database});
+    REQUIRE(fromSidecar != plain);
+    REQUIRE(fromSidecar ==
+            exportedPng(raw, {"--lens-corrections", "all", "--lens-database", database}));
+
+    // none undoes them; a list replaces them.
+    REQUIRE(exportedPng(raw, {"--lens-corrections", "none", "--lens-database", database}) == plain);
+    const QImage onlyDistortion =
+        exportedPng(raw, {"--lens-corrections", "distortion", "--lens-database", database});
+    REQUIRE(onlyDistortion != fromSidecar);
+    REQUIRE(onlyDistortion != plain);
+    // --no-sidecar leaves nothing to apply.
+    REQUIRE(exportedPng(raw, {"--no-sidecar", "--lens-database", database}) == plain);
+
+    // --lens takes the profile of another lens in place of the recorded one.
+    const QImage otherLens =
+        exportedPng(raw, {"--lens", "Canon|Canon EF 50mm f/1.8 STM", "--lens-database", database});
+    REQUIRE(otherLens != fromSidecar);
+    REQUIRE(otherLens != plain);
+}
+
+TEST_CASE("Export says why a correction was skipped, and goes ahead", "[cli][export][lens]") {
+    const test::TempDir directory;
+    const auto raw = copyLensRaw(directory, "frame.dng");
+    const test::TempDir empty;
+
+    SECTION("a directory with no lens database") {
+        int code = -1;
+        std::string err;
+        const QImage skipped = exportedPng(
+            raw, {"--lens-corrections", "distortion", "--lens-database", empty.path().string()},
+            &code, &err);
+        REQUIRE(code == cli::Success);
+        // lensfun being absent from the build is the other reason a database is not there.
+        REQUIRE_THAT(err, ContainsSubstring(lensfunAvailable() ? "no lens database was found"
+                                                               : "has no lensfun"));
+        REQUIRE(skipped == exportedPng(raw, {"--no-sidecar"}));
+    }
+    SECTION("a photograph that names no lens") {
+        ARRAW_REQUIRE_LENSFUN_OR_SKIP();
+        const auto nameless = directory.file("nameless.dng");
+        std::filesystem::copy_file(test::fixture(sidecarRaw), nameless);
+        int code = -1;
+        std::string err;
+        const QImage skipped = exportedPng(
+            nameless,
+            {"--lens-corrections", "all", "--lens-database", test::fixture("lensfun").string()},
+            &code, &err);
+        REQUIRE(code == cli::Success);
+        REQUIRE_THAT(err, ContainsSubstring("names no lens"));
+        REQUIRE(skipped == exportedPng(nameless, {"--no-sidecar"}));
+
+        // The notice is a log line of its own name, for a script.
+        const test::TempDir output;
+        const auto result =
+            invoke({"export", nameless.string(), "-o", output.path().string(), "--format", "png",
+                    "--device", "cpu", "--lens-corrections", "distortion", "--lens-database",
+                    test::fixture("lensfun").string(), "--log-format", "json"});
+        REQUIRE(result.code == cli::Success);
+        REQUIRE_THAT(result.err, ContainsSubstring("\"notice\":\"lens_unidentified\""));
+        REQUIRE_THAT(result.err, ContainsSubstring("\"severity\":\"warning\""));
+    }
+    SECTION("a PNG ignores the flags") {
+        const auto png = directory.file("card.png");
+        std::filesystem::copy_file(test::fixture(card), png);
+        int code = -1;
+        std::string err;
+        const QImage same = exportedPng(
+            png, {"--lens-corrections", "all", "--lens-database", empty.path().string()}, &code,
+            &err);
+        REQUIRE(code == cli::Success);
+        REQUIRE_THAT(err, !ContainsSubstring("lens"));
+        REQUIRE(same == exportedPng(png, {}));
+    }
+}
+
+TEST_CASE("The lens flags are checked", "[cli][export][lens]") {
+    const test::TempDir directory;
+    const auto raw = copyLensRaw(directory, "frame.dng");
+    const test::TempDir output;
+    const auto run = [&](std::vector<std::string> flags) {
+        std::vector<std::string> arguments{"export",   raw.string(), "-o", output.path().string(),
+                                           "--device", "cpu"};
+        arguments.insert(arguments.end(), flags.begin(), flags.end());
+        return invoke(arguments);
+    };
+
+    const auto list = run({"--lens-corrections", "distortion,sharpen"});
+    REQUIRE(list.code == cli::UsageError);
+    REQUIRE_THAT(list.err, ContainsSubstring("--lens-corrections takes all, none"));
+    REQUIRE(run({"--lens-corrections", ""}).code == cli::UsageError);
+
+    // Each usage error of the vignetting amount, the list and its repeats.
+    const auto usageError = [&](const std::string& value, const std::string& message) {
+        const auto result = run({"--lens-corrections", value});
+        INFO(value);
+        REQUIRE(result.code == cli::UsageError);
+        REQUIRE_THAT(result.err, ContainsSubstring(message));
+    };
+    const std::string amountHelp = "vignetting takes an amount from 0 to 150, as in vignetting=60";
+    usageError("distortion,,ca", "an item is empty");
+    usageError("distortion,", "an item is empty");
+    usageError("vignetting=", amountHelp);
+    usageError("vignetting=abc", amountHelp);
+    usageError("vignetting=60x", amountHelp);
+    usageError("vignetting=-1", amountHelp);
+    usageError("vignetting=150.5", amountHelp);
+    usageError("vignetting=nan", amountHelp);
+    usageError("vignetting=inf", amountHelp);
+    usageError("vignetting= 60", amountHelp);
+    usageError("vignetting,vignetting=60", "'vignetting' is given twice");
+    usageError("vignetting=60,vignetting=70", "'vignetting' is given twice");
+    usageError("ca,distortion,ca", "'ca' is given twice");
+    usageError("all,ca", "all and none stand alone");
+    usageError("distortion,all", "all and none stand alone");
+    usageError("none,vignetting=50", "all and none stand alone");
+    usageError("all,none", "all and none stand alone");
+    usageError("vigneting=50", "'vigneting=50' is not a correction");
+    REQUIRE(run({"--lens", "Canon EF 50mm"}).code == cli::UsageError);
+    REQUIRE(run({"--lens", "Canon|"}).code == cli::UsageError);
+    // Case does not matter for the list.
+    REQUIRE(run({"--lens-corrections", "ALL", "--lens-database", output.path().string()}).code ==
+            cli::Success);
+}
+
+TEST_CASE("A lens that is not in the database fails the photograph that names it",
+          "[cli][export][lens][lensfun]") {
+    ARRAW_REQUIRE_LENSFUN_OR_SKIP();
+    const test::TempDir directory;
+    const auto raw = copyLensRaw(directory, "frame.dng");
+    const test::TempDir output;
+    const auto result =
+        invoke({"export", raw.string(), "-o", output.path().string(), "--device", "cpu", "--lens",
+                "Canon|Canon EF 85mm f/1.2L II USM", "--lens-corrections", "all", "--lens-database",
+                test::fixture("lensfun").string()});
+    REQUIRE(result.code == cli::Failed);
+    REQUIRE_THAT(result.err, ContainsSubstring("is not in the lens database"));
+    REQUIRE_FALSE(std::filesystem::exists(output.file("frame.jpg")));
+}
+
+TEST_CASE("Info shows the recorded lens, what it was resolved for, and the stamp",
+          "[cli][info][lens][lensfun]") {
+    ARRAW_REQUIRE_LENSFUN_OR_SKIP();
+    const test::TempDir directory;
+    const auto raw = copyLensRaw(directory, "frame.dng");
+    const std::string database = test::fixture("lensfun").string();
+
+    SECTION("a lens matched now, with nothing on") {
+        const auto result = invoke({"info", raw.string(), "--lens-database", database});
+        REQUIRE(result.code == cli::Success);
+        REQUIRE_THAT(
+            result.out,
+            ContainsSubstring("  Lens: Canon EF-S 18-135mm f/3.5-5.6 IS USM (matched now)\n"));
+        REQUIRE_THAT(result.out, ContainsSubstring("  Lens crop factor: 1.6\n"));
+        REQUIRE_THAT(result.out, ContainsSubstring("  Lens database: 2023-11-14T22:13:20Z\n"));
+        REQUIRE_THAT(result.out, ContainsSubstring("  Lens corrections: off\n"));
+        REQUIRE_THAT(result.out, !ContainsSubstring("focal length"));
+        const auto json =
+            firstFile(invoke({"info", "--json", raw.string(), "--lens-database", database}).out);
+        const QJsonObject lens = json.value("lensCorrection").toObject();
+        REQUIRE(lens.value("source").toString() == "matched");
+        REQUIRE(lens.value("lens").toObject().value("maker").toString() == "Canon");
+        REQUIRE(lens.value("distortion").isNull());
+        REQUIRE(json.value("negative").toObject().value("lens").isUndefined());
+    }
+    SECTION("a recorded lens with corrections on") {
+        writeSidecar(recordLensMatch(withLensSwitches(openPhoto(raw), true, false, true),
+                                     test::fixtureDatabase()));
+        const auto result = invoke({"info", raw.string(), "--lens-database", database});
+        REQUIRE(result.code == cli::Success);
+        REQUIRE_THAT(result.out, ContainsSubstring("  Lens: Canon EF-S 18-135mm f/3.5-5.6 IS USM "
+                                                   "(recorded, matched)\n"));
+        REQUIRE_THAT(result.out,
+                     ContainsSubstring("  Lens corrections: distortion, chromatic aberration\n"));
+        // What the file recorded, and so what the profile was resolved for.
+        REQUIRE_THAT(result.out, ContainsSubstring("    distortion: focal length 50 mm (read), "
+                                                   "aperture f/5.6 (read), distance 3 m "
+                                                   "(read)\n"));
+        REQUIRE_THAT(result.out, ContainsSubstring("    chromatic aberration: "));
+        REQUIRE_THAT(result.out, !ContainsSubstring("    vignetting: "));
+
+        const auto json =
+            firstFile(invoke({"info", "--json", raw.string(), "--lens-database", database}).out);
+        const QJsonObject lens = json.value("lensCorrection").toObject();
+        REQUIRE(lens.value("source").toString() == "recorded");
+        REQUIRE(lens.value("cropFactor").toDouble() == 1.6);
+        REQUIRE(lens.value("database").toString() == "2023-11-14T22:13:20Z");
+        const QJsonObject distortion = lens.value("distortion").toObject();
+        REQUIRE(distortion.value("focalLength").toDouble() == 50.0);
+        REQUIRE(distortion.value("focalLengthRead").toBool());
+        REQUIRE(distortion.value("aperture").toDouble() == Catch::Approx(5.6));
+        REQUIRE(distortion.value("distanceRead").toBool());
+        REQUIRE(distortion.value("distance").toDouble() == Catch::Approx(3.0));
+        REQUIRE(lens.value("vignetting").isNull());
+        const QJsonObject negative = json.value("negative").toObject().value("lens").toObject();
+        REQUIRE(negative.value("distortion").toBool());
+        REQUIRE(negative.value("recorded").toObject().value("model").toString() ==
+                "Canon EF-S 18-135mm f/3.5-5.6 IS USM");
+        REQUIRE(negative.value("recorded").toObject().value("origin").toString() == "matched");
+    }
+    SECTION("a vignetting amount below the profile's") {
+        writeSidecar(recordLensMatch(withLensCorrections(openPhoto(raw), false, 60.0F, false),
+                                     test::fixtureDatabase()));
+        const auto result = invoke({"info", raw.string(), "--lens-database", database});
+        REQUIRE(result.code == cli::Success);
+        REQUIRE_THAT(result.out, ContainsSubstring("  Lens corrections: vignetting 60%\n"));
+        const auto json =
+            firstFile(invoke({"info", "--json", raw.string(), "--lens-database", database}).out);
+        REQUIRE(json.value("negative")
+                    .toObject()
+                    .value("lens")
+                    .toObject()
+                    .value("vignetting")
+                    .toDouble() == 60.0);
+    }
+    SECTION("the profile's vignetting, beside another correction") {
+        writeSidecar(recordLensMatch(withLensCorrections(openPhoto(raw), true, 100.0F, false),
+                                     test::fixtureDatabase()));
+        const auto result = invoke({"info", raw.string(), "--lens-database", database});
+        REQUIRE_THAT(result.out, ContainsSubstring("  Lens corrections: distortion, vignetting\n"));
+    }
+    SECTION("a recorded lens the database no longer lists, and a corrections diagnostic") {
+        NegativeSettings negative = openPhoto(raw).negative();
+        negative.lens = {.distortion = true,
+                         .vignettingAmount = minimumVignettingAmount,
+                         .lateralCa = false,
+                         .lens = RecordedLens{.maker = "Canon",
+                                              .model = "Canon EF 85mm f/1.2L II USM",
+                                              .cropFactor = 1.6,
+                                              .origin = LensOrigin::Chosen,
+                                              .database = "2020-01-01T00:00:00Z"}};
+        writeSidecar(openPhoto(raw).with(negative));
+        const auto result = invoke({"info", raw.string(), "--lens-database", database});
+        REQUIRE(result.code == cli::Success);
+        REQUIRE_THAT(result.out, ContainsSubstring("Lens: Canon EF 85mm f/1.2L II USM "
+                                                   "(recorded, chosen)"));
+        REQUIRE_THAT(result.out, ContainsSubstring("is not in the lens database"));
+        REQUIRE_THAT(result.out, ContainsSubstring("(recorded against 2020-01-01T00:00:00Z)"));
+        // The notice a render would give.
+        REQUIRE_THAT(result.err, ContainsSubstring("is not in the lens database"));
+    }
+}
+
+TEST_CASE("Info says nothing of a lens for a photograph that names none", "[cli][info][lens]") {
+    const test::TempDir directory;
+    const auto raw = copyRaw(directory, "frame.dng");
+    REQUIRE_THAT(invoke({"info", raw.string()}).out, !ContainsSubstring("Lens"));
+    const auto json = firstFile(invoke({"info", "--json", raw.string()}).out);
+    REQUIRE(json.value("lensCorrection").isNull());
+    const test::TempDir pngs;
+    const auto png = pngs.file("card.png");
+    std::filesystem::copy_file(test::fixture(card), png);
+    REQUIRE_THAT(invoke({"info", "--all", png.string()}).out, !ContainsSubstring("Lens"));
+}
+
+TEST_CASE("Info says a correction cannot be applied when the build has no lensfun",
+          "[cli][info][lens]") {
+    if (lensfunAvailable()) {
+        SUCCEED("this build has lensfun");
+        return;
+    }
+    const test::TempDir directory;
+    const auto raw = copyLensRaw(directory, "frame.dng");
+    writeSidecar(withLensSwitches(openPhoto(raw), true, false, false));
+    const auto result = invoke({"info", raw.string()});
+    REQUIRE(result.code == cli::Success);
+    REQUIRE_THAT(result.err, ContainsSubstring("has no lensfun"));
+    REQUIRE_THAT(result.out, ContainsSubstring("  Lens: none ("));
+    REQUIRE_THAT(result.out, ContainsSubstring("  Lens corrections: distortion\n"));
+}
+
 TEST_CASE("Info lists a crop aspect in each of its forms", "[cli][info]") {
     const test::TempDir directory;
     const auto raw = copyRaw(directory, "frame.dng");
@@ -2638,7 +3096,6 @@ TEST_CASE("Info --json gives the masks with their geometry, as the state documen
 
     const auto file = firstFile(invoke({"info", "--json", raw.string()}).out);
     const auto list = file.value("localAdjustments").toObject();
-    REQUIRE(list.value("version").toInt() == 1);
     REQUIRE(list.value("nextId").toInt() == 4);
     const auto masks = list.value("masks").toArray();
     REQUIRE(masks.size() == 3);
@@ -2781,7 +3238,7 @@ TEST_CASE("An export of a sidecar with brushes equals the library's render",
     // The same render by the library.
     const test::TempDir output;
     const auto library = output.file("library.png");
-    exportImage(develop(loadImage(raw), state, {}), library, {});
+    exportImage(develop(loadImage(raw), state, LensCorrection{}, {}), library, {});
     REQUIRE(exported == QImage(QString::fromStdString(library.string())));
     // The brushes did something.
     REQUIRE(exported != exportedPng(raw, {"--no-sidecar"}));

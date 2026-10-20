@@ -1,5 +1,7 @@
 #include "ShotModel.h"
 
+#include "FolderDiff.h"
+
 #include <Sidecar.h>
 
 #include <QByteArray>
@@ -8,17 +10,20 @@
 #include <QVariant>
 
 #include <algorithm>
+#include <cassert>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
 #include <deque>
 #include <exception>
 #include <functional>
+#include <iterator>
 #include <mutex>
+#include <span>
 #include <stdexcept>
 #include <system_error>
 #include <thread>
-#include <unordered_set>
+#include <unordered_map>
 #include <utility>
 
 namespace arraw::app {
@@ -37,18 +42,6 @@ enum class JobKind {
     Marks,   ///< The sidecar's marks, for the first time.
     Exif,    ///< The EXIF of the primary.
     Recheck, ///< The sidecar's marks, only if its file changed since a stamp.
-};
-
-/// @brief One read for the loader thread.
-struct Job {
-    /// What to read.
-    JobKind kind = JobKind::Marks;
-    /// Folder generation it was queued in.
-    std::uint64_t generation = 0;
-    /// Primary file of the shot.
-    fs::path primary;
-    /// For a recheck, the stamp of the sidecar when it was last read.
-    std::int64_t knownStamp = 0;
 };
 
 /// @brief Stamps the sidecar of a photograph; 0 when there is none.
@@ -89,6 +82,18 @@ QString dateText(const std::string& exifDate) {
 
 } // namespace
 
+/// @brief One read for the loader thread.
+struct ShotModel::Job {
+    /// What to read.
+    JobKind kind = JobKind::Marks;
+    /// Folder generation it was queued in.
+    std::uint64_t generation = 0;
+    /// Primary file of the shot.
+    fs::path primary;
+    /// For a recheck, the stamp of the sidecar when it was last read.
+    std::int64_t knownStamp = 0;
+};
+
 std::optional<std::int64_t> fileStamp(const std::filesystem::path& path) {
     std::error_code error;
     const auto time = fs::last_write_time(path, error);
@@ -98,10 +103,14 @@ std::optional<std::int64_t> fileStamp(const std::filesystem::path& path) {
     return static_cast<std::int64_t>(time.time_since_epoch().count());
 }
 
-QString shotTooltip(const Shot& shot, const std::optional<ExifInfo>& exif) {
+QString shotTooltip(const Shot& shot, const std::optional<ExifInfo>& exif, bool hasSidecar,
+                    const std::filesystem::path& shownName) {
     QStringList lines;
-    lines << qtString(shot.primary.filename());
+    lines << qtString(shownName.empty() ? shot.primary.filename() : shownName);
     lines << QString::fromStdString(formatLabel(shot));
+    if (hasSidecar) {
+        lines << QObject::tr("Has an XMP sidecar");
+    }
     if (!exif) {
         return lines.join('\n');
     }
@@ -204,6 +213,25 @@ public:
         background_.clear();
     }
 
+    /// @brief Drops the jobs not yet started for some shots; the running one finishes.
+    /// @param primaries Primary files of the shots.
+    /// @param generation Folder generation whose jobs are counted.
+    /// @return Number of jobs of that generation dropped.
+    int drop(const std::unordered_set<fs::path>& primaries, std::uint64_t generation) {
+        int dropped = 0;
+        const auto unwanted = [&](const Job& job) {
+            if (!primaries.contains(job.primary)) {
+                return false;
+            }
+            dropped += job.generation == generation ? 1 : 0;
+            return true;
+        };
+        const std::scoped_lock lock(mutex_);
+        std::erase_if(urgent_, unwanted);
+        std::erase_if(background_, unwanted);
+        return dropped;
+    }
+
 private:
     /// @brief Serves jobs until asked to stop.
     void run(const std::stop_token& stop) {
@@ -277,79 +305,501 @@ ShotModel::ShotModel(QObject* parent)
           // Called on the loader thread. The queued call is dropped if the model is gone.
           QMetaObject::invokeMethod(
               this, [this, result = std::move(result)] { receive(result); }, Qt::QueuedConnection);
-      })) {}
+      })) {
+    // A timer, not a queued call: it waits for its turn after the posted events, the input and
+    // the painting, so a backlog of batches cannot become one long stall.
+    applyTimer_.setSingleShot(true);
+    applyTimer_.setInterval(0);
+    connect(&applyTimer_, &QTimer::timeout, this,
+            [this] { applyQueued(std::chrono::steady_clock::now() + applyBudget); });
+}
 
 ShotModel::~ShotModel() {
     // Joins the thread before the members the callback touches go.
     loader_.reset();
 }
 
-void ShotModel::setFolder(const std::filesystem::path& folder) {
-    std::vector<Shot> shots = listShots(folder);
+void ShotModel::setFolder(const std::filesystem::path& folder, bool recursive) {
+    // Only opened, not read: a folder that cannot be opened is refused at once, and the reading
+    // is the walk's (plan, answer 4).
+    {
+        const fs::directory_iterator probe(folder);
+    }
+    const bool wasRefreshing = walking_ == Walking::Refresh;
     beginResetModel();
     loader_->clear();
     ++generation_;
+    ++walk_;
     pending_ = 0;
     folder_ = folder;
+    recursive_ = recursive;
     rows_.clear();
-    rows_.reserve(shots.size());
-    std::vector<fs::path> primaries;
-    primaries.reserve(shots.size());
-    for (Shot& shot : shots) {
-        primaries.push_back(shot.primary);
-        rows_.push_back(Row{.shot = std::move(shot)});
-    }
-    reindex();
+    spans_.clear();
+    index_.clear();
+    seen_.clear();
+    incoming_.clear();
+    nextFolder_ = 0;
+    nextShot_ = 0;
+    applyTimer_.stop();
+    walking_ = Walking::Listing;
     endResetModel();
-    queueLoads(primaries);
+    if (wasRefreshing) {
+        emit refreshingChanged(false);
+    }
+    emit listingChanged(true);
+    emit walkRequested();
 }
 
-void ShotModel::refresh() {
+void ShotModel::setRecursive(bool recursive) {
+    if (recursive == recursive_) {
+        return;
+    }
+    recursive_ = recursive;
     if (folder_.empty()) {
         return;
     }
-    std::vector<Shot> listing;
-    try {
-        listing = listShots(folder_);
-    } catch (const std::runtime_error&) {
-        // The folder went away: it has no shots now.
-    }
-    std::unordered_set<fs::path> wanted;
-    for (const Shot& shot : listing) {
-        wanted.insert(shot.primary);
-    }
-    for (int row = static_cast<int>(rows_.size()) - 1; row >= 0; --row) {
-        if (!wanted.contains(rows_[row].shot.primary)) {
-            beginRemoveRows({}, row, row);
-            rows_.erase(rows_.begin() + row);
-            endRemoveRows();
+    // A number of its own: batches of the walk under way are stale, and so is what is queued. The
+    // loader's generation stays, so the marks and EXIF owed to the rows that stay still land.
+    ++walk_;
+    seen_.clear();
+    incoming_.clear();
+    nextFolder_ = 0;
+    nextShot_ = 0;
+    applyTimer_.stop();
+    const Walking was = walking_;
+    if (recursive) {
+        // The silent walk of a switch off that has not ended yet is replaced by a listing, which
+        // says so (review B2).
+        if (was == Walking::None || was == Walking::Toggle) {
+            walking_ = Walking::Listing;
+            emit listingChanged(true);
+        }
+    } else {
+        // Every row after the root's own goes, with one signal; the walk only has to drop the
+        // subfolders' watches, and read the root again. The marks and EXIF still queued for
+        // those rows go too (review R4); switching on again queues them anew.
+        const auto first = spans_.upper_bound(withoutTrailingSeparator(folder_));
+        if (first != spans_.end()) {
+            std::unordered_set<fs::path> leaving;
+            for (auto row = rows_.begin() + first->second.first; row != rows_.end(); ++row) {
+                leaving.insert(row->shot.primary);
+            }
+            pending_ -= loader_->drop(leaving, generation_);
+        }
+        removeRange(first, spans_.end());
+        if (was == Walking::None) {
+            walking_ = Walking::Toggle;
         }
     }
-    // What is left is a subsequence of the listing, in the same order.
+    emit walkRequested();
+}
+
+std::filesystem::path ShotModel::shownName(const Shot& shot) const {
+    if (!recursive_) {
+        return {};
+    }
+    std::filesystem::path relative = shot.primary.lexically_relative(folder_);
+    if (!relative.has_parent_path() || *relative.begin() == "..") {
+        return {};
+    }
+    // Shown with the separator of the platform.
+    return relative.make_preferred();
+}
+
+void ShotModel::refresh() {
+    // A first listing reads everything, and a refresh under way is what was asked for: either
+    // takes the call in, rather than a second walk of the whole tree after it (review R6).
+    if (folder_.empty() || walking_ != Walking::None) {
+        return;
+    }
+    ++walk_;
+    seen_.clear();
+    walking_ = Walking::Refresh;
+    emit refreshingChanged(true);
+    emit walkRequested();
+}
+
+void ShotModel::queueFolders(std::uint64_t walk, std::vector<FolderResult> batch) {
+    incoming_.push_back({.walk = walk, .batch = std::move(batch), .end = std::nullopt});
+    if (!applyTimer_.isActive()) {
+        applyTimer_.start();
+    }
+}
+
+void ShotModel::queueFinish(std::uint64_t walk, ListingSummary summary) {
+    incoming_.push_back({.walk = walk, .batch = {}, .end = std::move(summary)});
+    if (!applyTimer_.isActive()) {
+        applyTimer_.start();
+    }
+}
+
+void ShotModel::applyFolders(std::uint64_t walk, const std::vector<FolderResult>& batch) {
+    queueFolders(walk, batch);
+    applyQueued(std::nullopt);
+}
+
+void ShotModel::removeSubtree(std::uint64_t walk, const std::filesystem::path& folder) {
+    queueFolders(walk, {{.folder = folder, .shots = {}, .gone = true, .recheck = false}});
+    applyQueued(std::nullopt);
+}
+
+void ShotModel::finishListing(std::uint64_t walk, const ListingSummary& summary) {
+    queueFinish(walk, summary);
+    applyQueued(std::nullopt);
+}
+
+void ShotModel::applyQueued(std::optional<Deadline> deadline) {
+    const std::uint64_t generation = generation_;
     std::vector<fs::path> added;
-    for (int i = 0; i < static_cast<int>(listing.size()); ++i) {
-        if (i < static_cast<int>(rows_.size()) && rows_[i].shot.primary == listing[i].primary) {
-            if (rows_[i].shot != listing[i]) {
-                rows_[i].shot = listing[i];
-                changed(i, {CompanionsRole, FormatLabelRole, Qt::ToolTipRole});
+    std::vector<Job> rechecks;
+    // Hands the reads of what was applied to the loader, unless a new folder came in between
+    // (from a view's handler): those rows are gone.
+    const auto handOver = [&] {
+        if (generation_ == generation) {
+            pending_ += static_cast<int>(rechecks.size());
+            loader_->enqueue(std::exchange(rechecks, {}));
+            queueLoads(std::exchange(added, {}));
+        }
+        added.clear();
+        rechecks.clear();
+    };
+    bool worked = false;
+    while (!incoming_.empty() &&
+           !(deadline && worked && std::chrono::steady_clock::now() >= *deadline)) {
+        worked = true;
+        Incoming& next = incoming_.front();
+        // A batch of the last walk counts after its end too: the directories read again after a
+        // change. An end counts once.
+        if (next.walk != walk_ || (next.end && walking_ == Walking::None)) {
+            dropIncoming(); // Stale.
+        } else if (next.end) {
+            const ListingSummary summary = std::move(*next.end);
+            dropIncoming();
+            // The reads of the last rows count before the end may report the loading finished.
+            handOver();
+            endWalk(summary);
+        } else if (nextFolder_ >= next.batch.size()) {
+            dropIncoming();
+        } else {
+            applyStep(added, rechecks);
+        }
+    }
+    handOver();
+    checkSpans();
+    if (!incoming_.empty() && !applyTimer_.isActive()) {
+        applyTimer_.start();
+    }
+}
+
+void ShotModel::dropIncoming() {
+    incoming_.pop_front();
+    nextFolder_ = 0;
+    nextShot_ = 0;
+}
+
+void ShotModel::applyStep(std::vector<fs::path>& added, std::vector<Job>& rechecks) {
+    std::vector<FolderResult>& batch = incoming_.front().batch;
+    const fs::path folder = withoutTrailingSeparator(batch[nextFolder_].folder);
+    if (nextShot_ == 0 && batch[nextFolder_].gone) {
+        ++nextFolder_;
+        removeTree(folder);
+        return;
+    }
+    if (nextShot_ > 0 || !spans_.contains(folder)) {
+        insertRun(added);
+        return;
+    }
+    // Taken out of the queue before any signal: a view's handler may change the folder, which
+    // empties the queue.
+    const std::vector<Shot> fresh = std::move(batch[nextFolder_].shots);
+    const bool recheck = batch[nextFolder_].recheck;
+    ++nextFolder_;
+    mergeFolder(folder, fresh, recheck, added, rechecks);
+}
+
+void ShotModel::endWalk(const ListingSummary& summary) {
+    // What the walk did not read is gone: it has no shots now. What it could not read (a folder
+    // that is unavailable for now, and everything below it) is kept as it was. Each run of
+    // adjacent folders goes with one remove, from the last run back, so that each removal moves
+    // the fewest spans. A first listing made every span from what it read, so it has none to
+    // look for.
+    /// @brief Folders of adjacent spans that go, the first and the last.
+    struct Run {
+        fs::path first;
+        fs::path last;
+    };
+    std::vector<Run> unseen;
+    if (walking_ != Walking::Listing) {
+        // The outermost stale folders, in folder order: each one's subtree is a range of the
+        // spans, and the ranges follow one another, so one pass over both tells what is kept
+        // (review R5: thousands of stale folders after a share failed part-way).
+        std::vector<fs::path> stale = summary.stale;
+        std::ranges::sort(stale, FolderOrder{});
+        std::vector<fs::path> kept;
+        for (fs::path& folder : stale) {
+            if (kept.empty() || !isWithin(folder, kept.back())) {
+                kept.push_back(std::move(folder));
             }
+        }
+        const FolderOrder precedes;
+        auto next = kept.begin();
+        bool extends = false; // Whether the span before went too.
+        for (const auto& [folder, span] : spans_) {
+            while (next != kept.end() && precedes(*next, folder) && !isWithin(folder, *next)) {
+                ++next;
+            }
+            const bool goes =
+                !(next != kept.end() && isWithin(folder, *next)) && !seen_.contains(folder);
+            if (goes && extends) {
+                unseen.back().last = folder;
+            } else if (goes) {
+                unseen.push_back({folder, folder});
+            }
+            extends = goes;
+        }
+    }
+    for (auto run = unseen.rbegin(); run != unseen.rend(); ++run) {
+        const auto first = spans_.find(run->first);
+        const auto last = spans_.find(run->last);
+        if (first == spans_.end() || last == spans_.end()) {
+            break; // A view's handler changed the folder.
+        }
+        removeRange(first, std::next(last));
+    }
+    seen_.clear();
+    const Walking was = walking_;
+    walking_ = Walking::None;
+    if (was == Walking::Listing) {
+        emit listingChanged(false);
+    } else if (was == Walking::Refresh) {
+        emit refreshingChanged(false);
+    }
+    reportIfLoaded();
+}
+
+void ShotModel::checkSpans() const {
+#ifndef NDEBUG
+    // The one comparator must agree with the walk (plan, Risks): spans tile the rows in order.
+    int next = 0;
+    for (const auto& [folder, span] : spans_) {
+        assert(span.first == next && span.count > 0);
+        next = span.first + span.count;
+    }
+    assert(next == static_cast<int>(rows_.size()));
+#endif
+}
+
+void ShotModel::mergeFolder(const fs::path& folder, std::span<const Shot> fresh, bool recheck,
+                            std::vector<fs::path>& added, std::vector<Job>& rechecks) {
+    seen_.insert(folder);
+    const auto found = spans_.find(folder);
+    const Span span = found->second;
+    const FolderDiff diff = diffFolder(
+        static_cast<std::size_t>(span.count),
+        [&](std::size_t i) -> const Shot& { return rows_[span.first + i].shot; }, fresh);
+    if (!diff.changed()) {
+        // Unchanged rows; only their sidecars may be due for a look.
+    } else if (diff.needsReset) {
+        resetFolder(span, fresh, added);
+    } else {
+        applyDiff(span.first, diff, fresh, added);
+    }
+    const int count = static_cast<int>(fresh.size());
+    shiftSpans(std::next(found), count - span.count);
+    if (count == 0) {
+        spans_.erase(found);
+        return;
+    }
+    found->second.count = count;
+    // A refresh of all checks every row; otherwise only the folders that changed (plan, 2.4).
+    if (recheck || walking_ == Walking::Refresh || diff.changed()) {
+        for (int row = span.first; row < span.first + count; ++row) {
+            const Row& entry = rows_[row];
+            if (entry.marksLoaded) {
+                rechecks.push_back(
+                    {JobKind::Recheck, generation_, entry.shot.primary, entry.sidecarStamp});
+            }
+        }
+    }
+}
+
+void ShotModel::insertRun(std::vector<fs::path>& added) {
+    std::vector<FolderResult>& batch = incoming_.front().batch;
+    /// @brief Rows of one directory in the run.
+    struct Piece {
+        fs::path folder;
+        int count = 0;
+        bool extends = false; ///< Whether its span exists, from the part inserted before.
+    };
+    std::vector<Piece> pieces;
+    std::vector<Row> fresh;
+    std::optional<Spans::iterator> place; // The span the run goes before.
+    std::optional<fs::path> previous;     // The folder before in the run, with shots or not.
+    const FolderOrder precedes;
+    while (nextFolder_ < batch.size() && fresh.size() < maxInsertRows) {
+        std::vector<Shot>& shots = batch[nextFolder_].shots;
+        fs::path folder = withoutTrailingSeparator(batch[nextFolder_].folder);
+        // The spans are made after the loop, so a run holds only folders in strict folder
+        // order: one read twice (a change re-read during a walk) or one that sorts before the
+        // last (a new folder found by a parent's re-read) is the next step's, which sees the
+        // spans of this one.
+        if (previous && !precedes(*previous, folder)) {
+            break;
+        }
+        previous = folder;
+        const bool extends = nextShot_ > 0;
+        const auto found = spans_.find(folder);
+        if (!extends && (found != spans_.end() || batch[nextFolder_].gone)) {
+            break; // Rows to merge with, or to remove: the next step's.
+        }
+        if (shots.empty()) {
+            seen_.insert(std::move(folder));
+            ++nextFolder_;
             continue;
         }
-        added.push_back(listing[i].primary);
-        beginInsertRows({}, i, i);
-        rows_.insert(rows_.begin() + i, Row{.shot = listing[i]});
-        endInsertRows();
-    }
-    reindex();
-    std::vector<Job> rechecks;
-    for (const Row& row : rows_) {
-        if (row.marksLoaded && std::ranges::find(added, row.shot.primary) == added.end()) {
-            rechecks.push_back({JobKind::Recheck, generation_, row.shot.primary, row.sidecarStamp});
+        const auto next = extends ? std::next(found) : spans_.lower_bound(folder);
+        if (place && next != *place) {
+            break; // Goes elsewhere: the next insert.
+        }
+        place = next;
+        const std::size_t take = std::min(shots.size() - nextShot_, maxInsertRows - fresh.size());
+        for (std::size_t k = nextShot_; k < nextShot_ + take; ++k) {
+            added.push_back(shots[k].primary);
+            fresh.push_back(Row{.shot = std::move(shots[k])});
+        }
+        seen_.insert(folder);
+        pieces.push_back({std::move(folder), static_cast<int>(take), extends});
+        nextShot_ += take;
+        if (nextShot_ == shots.size()) {
+            ++nextFolder_;
+            nextShot_ = 0;
         }
     }
-    pending_ += static_cast<int>(rechecks.size());
-    loader_->enqueue(std::move(rechecks));
-    queueLoads(added);
+    if (fresh.empty()) {
+        return;
+    }
+    const auto next = *place;
+    const int first = next == spans_.end() ? static_cast<int>(rows_.size()) : next->second.first;
+    const int count = static_cast<int>(fresh.size());
+    beginInsertRows({}, first, first + count - 1);
+    rows_.insert(rows_.begin() + first, std::make_move_iterator(fresh.begin()),
+                 std::make_move_iterator(fresh.end()));
+    // The model is whole again before views hear of the rows: they may look a shot up.
+    shiftSpans(next, count);
+    int row = first;
+    for (Piece& piece : pieces) {
+        if (piece.extends) {
+            spans_.find(piece.folder)->second.count += piece.count;
+        } else {
+            spans_.emplace_hint(next, std::move(piece.folder), Span{row, piece.count});
+        }
+        row += piece.count;
+    }
+    reindexFrom(first);
+    endInsertRows();
+}
+
+void ShotModel::applyDiff(int first, const FolderDiff& diff, std::span<const Shot> fresh,
+                          std::vector<fs::path>& added) {
+    for (const RowRun& run : diff.removes) {
+        const int from = first + run.first;
+        beginRemoveRows({}, from, from + run.count - 1);
+        for (int row = from; row < from + run.count; ++row) {
+            index_.erase(rows_[row].shot.primary);
+        }
+        rows_.erase(rows_.begin() + from, rows_.begin() + from + run.count);
+        reindexFrom(from);
+        endRemoveRows();
+    }
+    for (const RowRun& run : diff.inserts) {
+        const int from = first + run.first;
+        std::vector<Row> rows;
+        rows.reserve(static_cast<std::size_t>(run.count));
+        for (int k = 0; k < run.count; ++k) {
+            const Shot& shot = fresh[static_cast<std::size_t>(run.first + k)];
+            rows.push_back(Row{.shot = shot});
+            added.push_back(shot.primary);
+        }
+        beginInsertRows({}, from, from + run.count - 1);
+        rows_.insert(rows_.begin() + from, std::make_move_iterator(rows.begin()),
+                     std::make_move_iterator(rows.end()));
+        reindexFrom(from);
+        endInsertRows();
+    }
+    for (const int k : diff.updates) {
+        const int row = first + k;
+        rows_[row].shot = fresh[static_cast<std::size_t>(k)];
+        changed(row, {CompanionsRole, FormatLabelRole, Qt::ToolTipRole});
+    }
+}
+
+void ShotModel::resetFolder(Span span, std::span<const Shot> fresh, std::vector<fs::path>& added) {
+    beginResetModel();
+    std::unordered_map<fs::path, int> old;
+    old.reserve(static_cast<std::size_t>(span.count));
+    for (int row = span.first; row < span.first + span.count; ++row) {
+        old.emplace(rows_[row].shot.primary, row);
+        index_.erase(rows_[row].shot.primary);
+    }
+    std::vector<Row> next;
+    next.reserve(fresh.size());
+    for (const Shot& shot : fresh) {
+        if (const auto found = old.find(shot.primary); found != old.end()) {
+            Row row = std::move(rows_[static_cast<std::size_t>(found->second)]);
+            row.shot = shot;
+            next.push_back(std::move(row));
+        } else {
+            next.push_back(Row{.shot = shot});
+            added.push_back(shot.primary);
+        }
+    }
+    rows_.erase(rows_.begin() + span.first, rows_.begin() + span.first + span.count);
+    rows_.insert(rows_.begin() + span.first, std::make_move_iterator(next.begin()),
+                 std::make_move_iterator(next.end()));
+    reindexFrom(span.first);
+    endResetModel();
+}
+
+void ShotModel::removeTree(const fs::path& folder) {
+    // A subtree is one run of spans, so one run of rows (plan, section 2).
+    const auto first = spans_.lower_bound(folder);
+    auto last = first;
+    while (last != spans_.end() && isWithin(last->first, folder)) {
+        ++last;
+    }
+    removeRange(first, last);
+}
+
+void ShotModel::removeRange(Spans::iterator first, Spans::iterator last) {
+    if (first == last) {
+        return;
+    }
+    const int from = first->second.first;
+    const int count = std::prev(last)->second.first + std::prev(last)->second.count - from;
+    beginRemoveRows({}, from, from + count - 1);
+    for (int row = from; row < from + count; ++row) {
+        index_.erase(rows_[row].shot.primary);
+    }
+    rows_.erase(rows_.begin() + from, rows_.begin() + from + count);
+    shiftSpans(last, -count);
+    spans_.erase(first, last);
+    reindexFrom(from);
+    endRemoveRows();
+}
+
+void ShotModel::shiftSpans(Spans::iterator from, int delta) {
+    if (delta == 0) {
+        return;
+    }
+    for (; from != spans_.end(); ++from) {
+        from->second.first += delta;
+    }
+}
+
+void ShotModel::reportIfLoaded() {
+    if (pending_ == 0 && walking_ == Walking::None) {
+        emit loadingFinished();
+    }
 }
 
 int ShotModel::rowCount(const QModelIndex& parent) const {
@@ -365,7 +815,7 @@ QVariant ShotModel::data(const QModelIndex& index, int role) const {
     case Qt::DisplayRole:
         return qtString(row.shot.primary.filename());
     case Qt::ToolTipRole:
-        return shotTooltip(row.shot, row.exif);
+        return shotTooltip(row.shot, row.exif, row.hasSidecar(), shownName(row.shot));
     case PathRole:
         return qtString(row.shot.primary);
     case CompanionsRole: {
@@ -383,6 +833,8 @@ QVariant ShotModel::data(const QModelIndex& index, int role) const {
         return row.marks.label ? static_cast<int>(*row.marks.label) : -1;
     case MarksLoadedRole:
         return row.marksLoaded;
+    case HasSidecarRole:
+        return row.hasSidecar();
     case ThumbnailRole:
         return row.thumbnail;
     default:
@@ -417,6 +869,20 @@ void ShotModel::setMarks(const std::filesystem::path& primary, const PhotoMarks&
     row.marksLoaded = true;
     row.marksSet = true;
     changed(index, {RatingRole, LabelRole, MarksLoadedRole});
+    noteSidecarWritten(primary);
+}
+
+void ShotModel::noteSidecarWritten(const std::filesystem::path& primary) {
+    const int index = rowOf(primary);
+    if (index < 0) {
+        return;
+    }
+    Row& row = rows_[index];
+    const bool had = row.hasSidecar();
+    row.sidecarExists = sidecarStampOf(primary) != 0;
+    if (had != row.hasSidecar()) {
+        changed(index, {HasSidecarRole, Qt::ToolTipRole});
+    }
 }
 
 void ShotModel::setThumbnail(const std::filesystem::path& primary, QImage thumbnail) {
@@ -435,6 +901,7 @@ void ShotModel::receive(const Loaded& result) {
     --pending_;
     if (const int index = rowOf(result.primary); index >= 0) {
         Row& row = rows_[index];
+        const bool hadSidecar = row.hasSidecar();
         switch (result.kind) {
         case JobKind::Exif:
             row.exif = result.exif;
@@ -442,6 +909,9 @@ void ShotModel::receive(const Loaded& result) {
             break;
         case JobKind::Marks:
             row.sidecarStamp = result.stamp;
+            if (!row.marksSet) {
+                row.sidecarExists = result.stamp != 0;
+            }
             // Marks set by hand since the job was queued are newer than this reading.
             if (!row.marksSet && result.marks) {
                 row.marks = *result.marks;
@@ -453,6 +923,7 @@ void ShotModel::receive(const Loaded& result) {
             if (result.changed && result.marks) {
                 const bool differs = row.marks != *result.marks || !row.marksLoaded;
                 row.sidecarStamp = result.stamp;
+                row.sidecarExists = result.stamp != 0;
                 row.marks = *result.marks;
                 row.marksLoaded = true;
                 row.marksSet = false;
@@ -463,16 +934,16 @@ void ShotModel::receive(const Loaded& result) {
             }
             break;
         }
+        if (hadSidecar != row.hasSidecar()) {
+            changed(index, {HasSidecarRole, Qt::ToolTipRole});
+        }
     }
-    if (pending_ == 0) {
-        emit loadingFinished();
-    }
+    reportIfLoaded();
 }
 
-void ShotModel::reindex() {
-    index_.clear();
-    for (int i = 0; i < static_cast<int>(rows_.size()); ++i) {
-        index_.emplace(rows_[i].shot.primary, i);
+void ShotModel::reindexFrom(int from) {
+    for (int i = from; i < static_cast<int>(rows_.size()); ++i) {
+        index_.insert_or_assign(rows_[i].shot.primary, i);
     }
 }
 

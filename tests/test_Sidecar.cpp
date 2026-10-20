@@ -39,7 +39,7 @@ namespace {
 namespace fs = std::filesystem;
 
 constexpr std::string_view rawFixture = "linear-32x24-neutral.dng";
-constexpr std::string_view arrawNs = "http://ns.arraw.org/develop/1.0/";
+constexpr std::string_view arrawNs = "http://ns.arraw.org/develop/";
 constexpr std::string_view xmpNs = "http://ns.adobe.com/xap/1.0/";
 
 std::string slurp(const fs::path& path) {
@@ -270,7 +270,7 @@ TEST_CASE("Writing over a foreign sidecar keeps everything it does not own", "[s
     };
     REQUIRE(valueOf(after, "@{http://ns.adobe.com/camera-raw-settings/1.0/}Exposure2012") ==
             "+0.50");
-    REQUIRE(valueOf(after, "@{http://ns.arraw.org/develop/1.0/}futureKnob") == "7");
+    REQUIRE(valueOf(after, "@{http://ns.arraw.org/develop/}futureKnob") == "7");
     REQUIRE(valueOf(after,
                     "{http://purl.org/dc/elements/1.1/}creator#0/{http://www.w3.org/1999/02/"
                     "22-rdf-syntax-ns#}Seq#0/{http://www.w3.org/1999/02/22-rdf-syntax-ns#}li#0") ==
@@ -306,9 +306,8 @@ TEST_CASE("A child-element key is read, then replaced by an attribute", "[sideca
     const auto after = meaning(sidecar);
     bool asAttribute = false;
     for (const auto& [key, value] : after) {
-        asAttribute =
-            asAttribute ||
-            (key.ends_with("@{http://ns.arraw.org/develop/1.0/}contrast") && value == "0.5");
+        asAttribute = asAttribute ||
+                      (key.ends_with("@{http://ns.arraw.org/develop/}contrast") && value == "0.5");
     }
     REQUIRE(asAttribute);
     REQUIRE(readSidecar(path)->state->settings == contents->state->settings);
@@ -392,7 +391,7 @@ TEST_CASE("Opening a photograph picks up its sidecar", "[sidecar][photo]") {
     const fs::path sidecar = directory.file("IMG_1.xmp");
     spit(sidecar, R"(<x:xmpmeta xmlns:x="adobe:ns:meta/">
  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-  <rdf:Description rdf:about="" xmlns:arraw="http://ns.arraw.org/develop/1.0/"
+  <rdf:Description rdf:about="" xmlns:arraw="http://ns.arraw.org/develop/"
     xmlns:xmp="http://ns.adobe.com/xap/1.0/" arraw:exposure="9" arraw:flipHorizontal="True"
     xmp:Rating="-1" xmp:Label="Yellow"/>
  </rdf:RDF>
@@ -437,7 +436,7 @@ TEST_CASE("A sidecar written before a setting existed keeps the neutral default"
     const fs::path path = copyRaw(directory, "IMG_1.dng");
     spit(directory.file("IMG_1.xmp"), R"(<x:xmpmeta xmlns:x="adobe:ns:meta/">
  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-  <rdf:Description rdf:about="" xmlns:arraw="http://ns.arraw.org/develop/1.0/"
+  <rdf:Description rdf:about="" xmlns:arraw="http://ns.arraw.org/develop/"
     arraw:version="1" arraw:exposure="0.5" arraw:contrast="0"/>
  </rdf:RDF>
 </x:xmpmeta>)");
@@ -451,7 +450,7 @@ TEST_CASE("A sidecar written before a setting existed keeps the neutral default"
     SECTION("a version alone records the neutral state too") {
         spit(directory.file("IMG_1.xmp"), R"(<x:xmpmeta xmlns:x="adobe:ns:meta/">
  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-  <rdf:Description rdf:about="" xmlns:arraw="http://ns.arraw.org/develop/1.0/" arraw:version="1"/>
+  <rdf:Description rdf:about="" xmlns:arraw="http://ns.arraw.org/develop/" arraw:version="1"/>
  </rdf:RDF>
 </x:xmpmeta>)");
         REQUIRE(readSidecar(path)->state == DevelopState{});
@@ -487,7 +486,7 @@ TEST_CASE("Values a sidecar gets wrong are reported and repaired", "[sidecar][di
     const auto with = [&](const std::string& attributes) {
         spit(sidecar, R"(<x:xmpmeta xmlns:x="adobe:ns:meta/">
  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-  <rdf:Description rdf:about="" xmlns:arraw="http://ns.arraw.org/develop/1.0/"
+  <rdf:Description rdf:about="" xmlns:arraw="http://ns.arraw.org/develop/"
     xmlns:xmp="http://ns.adobe.com/xap/1.0/" )" +
                           attributes + "/></rdf:RDF></x:xmpmeta>");
     };
@@ -590,7 +589,7 @@ namespace {
 
 constexpr std::string_view packetHead = R"(<x:xmpmeta xmlns:x="adobe:ns:meta/">
  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-  <rdf:Description rdf:about="" xmlns:arraw="http://ns.arraw.org/develop/1.0/"
+  <rdf:Description rdf:about="" xmlns:arraw="http://ns.arraw.org/develop/"
     xmlns:xmp="http://ns.adobe.com/xap/1.0/" )";
 
 /// A sidecar holding one description with the given attributes.
@@ -779,7 +778,7 @@ TEST_CASE("A prefix already bound to the namespace is reused", "[sidecar]") {
     const fs::path sidecar = directory.file("IMG_1.xmp");
     spit(sidecar, R"(<x:xmpmeta xmlns:x="adobe:ns:meta/">
  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-  <rdf:Description rdf:about="" xmlns:a="http://ns.arraw.org/develop/1.0/"
+  <rdf:Description rdf:about="" xmlns:a="http://ns.arraw.org/develop/"
     xmlns:xmp="http://ns.adobe.com/xap/1.0/" a:contrast="0.25"/>
  </rdf:RDF>
 </x:xmpmeta>)");
@@ -959,4 +958,120 @@ TEST_CASE("Writing only marks leaves the demosaic alone", "[sidecar][negative]")
     writeSidecar(openPhoto(path).with(NegativeSettings{Demosaic::Vng}));
     writeSidecarMarks(path, {.rating = 4});
     REQUIRE(readSidecar(path)->negative == NegativeSettings{Demosaic::Vng});
+}
+
+namespace {
+
+/// What every stored sidecar of version 1 says, whichever build wrote it.
+void requireVersionOneContents(const SidecarContents& contents) {
+    REQUIRE(contents.state);
+    CHECK(contents.state->settings.tone.exposure == 1.25F);
+    CHECK(contents.state->settings.tone.contrast == 0.5F);
+    REQUIRE(contents.state->localAdjustments.size() == 1);
+    CHECK(contents.state->localAdjustments[0].id == LocalAdjustmentId{1});
+    CHECK(contents.state->localAdjustments[0].name == "Sky");
+    CHECK(contents.state->localAdjustments[0].deltas.exposure == 0.5F);
+    CHECK(contents.state->nextLocalAdjustmentId == LocalAdjustmentId{2});
+
+    REQUIRE(contents.negative);
+    CHECK(contents.negative->demosaic == Demosaic::Dcb);
+    CHECK(contents.negative->lens.distortion);
+    CHECK(contents.negative->lens.vignettingAmount == 80.0F);
+    CHECK_FALSE(contents.negative->lens.lateralCa);
+    REQUIRE(contents.negative->lens.lens);
+    CHECK(contents.negative->lens.lens->model == "Canon EF-S 18-55mm f/3.5-5.6 IS II");
+    CHECK(contents.negative->lens.lens->cropFactor == 1.6);
+    CHECK(contents.negative->lens.lens->origin == LensOrigin::Matched);
+
+    CHECK(contents.marks == PhotoMarks{.rating = 4, .label = ColorLabel::Blue});
+}
+
+} // namespace
+
+TEST_CASE("Every stored version of the sidecar is still read, and written as the current one",
+          "[sidecar][versions]") {
+    // Fixtures of a version are frozen: a change that breaks reading one is a breaking change, so
+    // the version is raised and a directory for it added (ADR 051), never a fixture edited.
+    const fs::path root = test::fixture("sidecars");
+    REQUIRE(fs::is_directory(root / ("v" + std::to_string(sidecarVersion))));
+
+    std::size_t files = 0;
+    for (const auto& versionDirectory : fs::directory_iterator(root)) {
+        const std::string name = versionDirectory.path().filename().string();
+        if (!versionDirectory.is_directory() || !name.starts_with('v')) {
+            continue;
+        }
+        REQUIRE(std::stoi(name.substr(1)) <= sidecarVersion);
+        for (const auto& stored : fs::directory_iterator(versionDirectory.path())) {
+            if (stored.path().extension() != ".xmp") {
+                continue;
+            }
+            ++files;
+            INFO(stored.path().string());
+            const test::TempDir directory;
+            const fs::path path = copyRaw(directory, "IMG_1.dng");
+            fs::copy_file(stored.path(), directory.file("IMG_1.xmp"));
+
+            CollectedDiagnostics log;
+            const auto contents = readSidecar(path, log);
+            REQUIRE(contents);
+            CHECK(log.entries().empty());
+            requireVersionOneContents(*contents);
+            CHECK(contents->others.size() == 1);
+
+            // A newer arraw overwrites it as its own version, in the current namespace, and
+            // says the same.
+            writeSidecar(openPhoto(path));
+            const std::string rewritten = slurp(directory.file("IMG_1.xmp"));
+            CHECK_THAT(rewritten, Catch::Matchers::ContainsSubstring(
+                                      "arraw:version=\"" + std::to_string(sidecarVersion) + "\""));
+            CHECK_THAT(rewritten,
+                       !Catch::Matchers::ContainsSubstring("develop/1.0/") &&
+                           !Catch::Matchers::ContainsSubstring("localAdjustmentsVersion"));
+            CollectedDiagnostics again;
+            const auto reread = readSidecar(path, again);
+            REQUIRE(reread);
+            CHECK(again.entries().empty());
+            requireVersionOneContents(*reread);
+        }
+    }
+    CHECK(files >= 2);
+}
+
+TEST_CASE("A sidecar of a newer version is read with a warning, and refused for marks too",
+          "[sidecar][versions]") {
+    const test::TempDir directory;
+    const fs::path path = copyRaw(directory, "IMG_1.dng");
+    const fs::path sidecar = directory.file("IMG_1.xmp");
+    fs::copy_file(test::fixture("sidecars/v1/complete.xmp"), sidecar);
+    std::string text = slurp(sidecar);
+    text.replace(text.find("arraw:version=\"1\""), 17, "arraw:version=\"99\"");
+    spit(sidecar, text);
+
+    CollectedDiagnostics log;
+    const auto contents = readSidecar(path, log);
+    REQUIRE(contents);
+    CHECK(count(log, Notice::NewerSettingsVersion) == 1);
+    CHECK(contents->state->settings.tone.exposure == 1.25F);
+
+    CHECK_THROWS_AS(writeSidecar(openPhoto(path)), std::runtime_error);
+    CHECK_THROWS_AS(writeSidecarMarks(path, {.rating = 1}), std::runtime_error);
+    CHECK(slurp(sidecar) == text);
+}
+
+TEST_CASE("Arraw content with no version is version 1", "[sidecar][versions]") {
+    const test::TempDir directory;
+    const fs::path path = copyRaw(directory, "IMG_1.dng");
+    const fs::path sidecar = directory.file("IMG_1.xmp");
+    spit(sidecar, sidecarWith(R"(arraw:exposure="1.25")"));
+
+    CollectedDiagnostics log;
+    const auto contents = readSidecar(path, log);
+    REQUIRE(contents);
+    CHECK(log.entries().empty());
+    CHECK(contents->state->settings.tone.exposure == 1.25F);
+
+    writeSidecar(openPhoto(path));
+    CHECK_THAT(slurp(sidecar), Catch::Matchers::ContainsSubstring(
+                                   "arraw:version=\"" + std::to_string(sidecarVersion) + "\""));
 }

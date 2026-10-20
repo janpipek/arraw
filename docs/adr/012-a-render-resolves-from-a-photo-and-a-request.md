@@ -121,3 +121,12 @@ source. `ImageBuffer::decodedWith()` records how a buffer was decoded, and
 stage, and `staleReason` reports "decoded differently". The file stamp and the
 highlight and white-balance parameters are not in the block yet, so ADR 005's
 migration has one step fewer to go: the demosaic.
+
+## Amendment, 2026-10-18: the Lens block
+
+[ADR 050](050-lens-corrections-are-a-stage-between-noise-reduction-and-the-chain.md): the plan gains `ProcessingPlan::lens`, a `LensPlan` in `stagesOf` between
+Denoise and Pointwise. It holds the resolved tables (not the decode block, so a
+database change makes the Lens rung stale by value and the Denoise rung survives)
+and is inactive, and collapses onto Denoise, when no correction is on, so default
+render digests are unchanged. Every render function takes the `LensCorrection`
+explicitly; `planFor(photo, ...)` resolves it itself.

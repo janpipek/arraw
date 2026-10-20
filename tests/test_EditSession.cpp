@@ -801,3 +801,112 @@ TEST_CASE("describeChange between steps names the negative", "[session][negative
     // The overload over states never sees a negative.
     REQUIRE(describeChange(before.state, after.state).negative.empty());
 }
+
+namespace {
+
+/// @brief Builds negative settings with a vignetting amount.
+NegativeSettings vignetted(float amount) {
+    NegativeSettings negative;
+    negative.lens.vignettingAmount = amount;
+    return negative;
+}
+
+} // namespace
+
+TEST_CASE("A dragged negative is one history step", "[session][negative]") {
+    EditSession session(testPhoto());
+
+    session.begin();
+    for (const float amount : {30.0F, 60.0F}) {
+        session.updateNegative(vignetted(amount));
+        REQUIRE(session.photo().negative() == vignetted(amount));
+    }
+    session.commit();
+
+    REQUIRE(session.history().size() == 2);
+    REQUIRE(session.history()[1].negative == vignetted(60.0F));
+    session.undo();
+    REQUIRE(session.photo().negative() == vignetted(0.0F));
+    REQUIRE_FALSE(session.canUndo());
+    REQUIRE(session.canRedo());
+}
+
+TEST_CASE("Cancelling an edit restores the negative", "[session][negative]") {
+    EditSession session(testPhoto());
+    session.setNegative(vignetted(40.0F));
+
+    session.begin();
+    session.updateNegative(vignetted(90.0F));
+    session.update(exposed(1.0F));
+    session.cancel();
+
+    REQUIRE(session.photo().negative() == vignetted(40.0F));
+    REQUIRE(session.photo().state() == DevelopState{});
+    REQUIRE(session.history().size() == 2);
+}
+
+TEST_CASE("A negative drag that ends where it began leaves no step", "[session][negative]") {
+    EditSession session(testPhoto());
+
+    session.begin();
+    session.updateNegative(vignetted(50.0F));
+    session.updateNegative(vignetted(0.0F));
+    session.commit();
+
+    REQUIRE(session.history().size() == 1);
+    REQUIRE_FALSE(session.canUndo());
+}
+
+TEST_CASE("An open negative drag can be undone, and redo is lost when it commits",
+          "[session][negative]") {
+    EditSession session(testPhoto());
+    session.setState(exposed(1.0F));
+    session.undo();
+
+    session.begin();
+    REQUIRE_FALSE(session.canUndo());
+    REQUIRE(session.canRedo());
+    session.updateNegative(vignetted(20.0F));
+    REQUIRE(session.canUndo());
+    REQUIRE_FALSE(session.canRedo());
+    session.commit();
+    REQUIRE(session.history().size() == 2);
+    REQUIRE(session.history()[1].state == DevelopState{});
+}
+
+TEST_CASE("State and negative changed in one edit make one step", "[session][negative]") {
+    EditSession session(testPhoto());
+
+    session.begin();
+    session.update(exposed(1.0F));
+    session.updateNegative(vignetted(60.0F));
+    session.commit();
+
+    REQUIRE(session.history().size() == 2);
+    REQUIRE(session.history()[1].state == exposed(1.0F));
+    REQUIRE(session.history()[1].negative == vignetted(60.0F));
+}
+
+TEST_CASE("An invalid or unopened negative update changes nothing", "[session][negative]") {
+    EditSession session(testPhoto());
+    REQUIRE_THROWS_AS(session.updateNegative(vignetted(10.0F)), std::logic_error);
+
+    session.begin();
+    session.updateNegative(vignetted(10.0F));
+    REQUIRE_THROWS_AS(session.updateNegative(vignetted(200.0F)), std::invalid_argument);
+    REQUIRE(session.editing());
+    REQUIRE(session.photo().negative() == vignetted(10.0F));
+}
+
+TEST_CASE("Setting a negative commits an open negative drag first", "[session][negative]") {
+    EditSession session(testPhoto());
+
+    session.begin();
+    session.updateNegative(vignetted(30.0F));
+    session.setNegative(vng);
+
+    REQUIRE_FALSE(session.editing());
+    REQUIRE(session.history().size() == 3);
+    REQUIRE(session.history()[1].negative == vignetted(30.0F));
+    REQUIRE(session.history()[2].negative == vng);
+}

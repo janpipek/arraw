@@ -4,6 +4,7 @@
 #include "ExportCommand.h"
 #include "GpuTestCommand.h"
 #include "InfoCommand.h"
+#include "LensesCommand.h"
 #include "TerminalStyle.h"
 
 #include <QCommandLineParser>
@@ -25,11 +26,12 @@ namespace {
 /// prints an apology. Listing them means someone who types what the
 /// documentation promised is told the feature is coming, not that they
 /// mistyped -- and the names stay visibly taken.
-constexpr std::array<Command, 4> table = {{
+constexpr std::array<Command, 5> table = {{
     {"export", "Render images through their develop settings and write them out.",
      &runExportCommand},
     {"gpu-test", "Check that the GPU backend works on this machine.", &runGpuTestCommand},
     {"info", "Show camera metadata and edit state, read-only.", &runInfoCommand},
+    {"lenses", "List the lenses of the lens database.", &runLensesCommand},
     {"preset", "List, show, and apply saved presets.", nullptr},
 }};
 

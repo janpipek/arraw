@@ -1,0 +1,44 @@
+#pragma once
+
+#include "FolderResult.h"
+#include "ShotModel.h"
+
+#include <Shot.h>
+
+#include <cstdint>
+#include <exception>
+#include <filesystem>
+#include <utility>
+#include <vector>
+
+namespace arraw::test {
+
+/// @brief Answers the walk a model last asked for at once, on this thread, as the lister would.
+///
+/// For the model's tests, which need neither a thread nor a watcher: the folder is read in the
+/// lister's order (pre-order over ::arraw::listFolder), handed over as one batch, and the walk
+/// is finished. A folder that cannot be read is skipped with its subtree, as the lister does.
+/// @param model Model whose ::arraw::app::ShotModel::walk is answered.
+inline void listNow(app::ShotModel& model) {
+    std::vector<app::FolderResult> batch;
+    app::ListingSummary summary;
+    std::vector<std::filesystem::path> pending{app::withoutTrailingSeparator(model.folder())};
+    while (!pending.empty()) {
+        const std::filesystem::path directory = std::move(pending.back());
+        pending.pop_back();
+        try {
+            FolderListing listing = listFolder(directory);
+            if (model.recursive()) {
+                pending.insert(pending.end(), listing.folders.rbegin(), listing.folders.rend());
+            }
+            batch.push_back({directory, std::move(listing.shots)});
+        } catch (const std::exception&) {
+            // Skipped with its subtree.
+        }
+    }
+    const std::uint64_t walk = model.walk();
+    model.applyFolders(walk, batch);
+    model.finishListing(walk, summary);
+}
+
+} // namespace arraw::test

@@ -7,7 +7,9 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <span>
 #include <string_view>
+#include <vector>
 
 namespace arraw::app {
 
@@ -66,17 +68,36 @@ struct ExportSettings {
 [[nodiscard]] std::filesystem::path suggestedPath(const std::filesystem::path& source,
                                                   ImageFileFormat format);
 
-/// @brief Stores settings for the next time, except the size.
+/// @brief Names the files of an export of several photographs into one folder.
 ///
-/// The size is not stored: it defaults to the photograph's own each time.
+/// Each file is `<stem of its source>.<suffix>`; a stem met again, in any letter case, gets `_2`,
+/// `_3`, … so that two photographs from different folders never write the same file, and no name
+/// is a path in sources (the export never replaces a photograph). Deterministic: the first
+/// photograph of a stem keeps the plain name.
+/// @param sources Files the photographs were read from, in the order to name them.
+/// @param folder Folder to write to.
+/// @param format Format being written.
+/// @return One path per source, in the same order; empty for no sources.
+[[nodiscard]] std::vector<std::filesystem::path>
+targetPaths(std::span<const std::filesystem::path> sources, const std::filesystem::path& folder,
+            ImageFileFormat format);
+
+/// @brief Lists the long edges, in pixels, the export dialog offers besides the original size.
+[[nodiscard]] std::span<const std::uint32_t> presetLongEdges();
+
+/// @brief Stores settings for the next time.
+///
+/// The size choice is kept as the settings carry it: resizing off is the
+/// original size; a square box of a preset long edge is that preset; any other
+/// box is the custom one. The box is stored only while resizing.
 /// @param settings What the user chose.
 /// @param store Where to keep them.
 void saveSettings(const ExportSettings& settings, QSettings& store);
 
 /// @brief Reads the settings stored last time.
 ///
-/// A value that is missing or not one the dialog offers is the default. The
-/// size is left at zero, resizing off.
+/// A value that is missing or not one the dialog offers is the default. Resizing
+/// is off (the original size) unless a stored box is valid: both sides from 1 to 99999.
 /// @param store Where they were kept.
 [[nodiscard]] ExportSettings restoreSettings(QSettings& store);
 

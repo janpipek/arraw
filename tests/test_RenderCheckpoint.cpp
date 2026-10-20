@@ -128,7 +128,7 @@ TEST_CASE("Plan prefixes tell requests apart at the resize and no earlier", "[pl
     ImageBuffer source({60, 40}, workingFormat, workingEncoding);
     const DevelopSettings settings;
     const auto planned = [&](const RenderRequest& request) {
-        return planFor(source, DevelopState{settings}, request);
+        return planFor(source, DevelopState{settings}, LensCorrection{}, request);
     };
     const auto request = [](RenderRequest::Scale scale, ResizeFilter filter) {
         return RenderRequest{.size = scale, .filter = filter};
@@ -162,8 +162,8 @@ TEST_CASE("Plan prefixes tell requests apart at the resize and no earlier", "[pl
     // The pointwise settings still decide first.
     DevelopSettings brighter;
     brighter.tone.exposure = 1.0F;
-    const auto other =
-        planFor(source, DevelopState{brighter}, request({0.5}, ResizeFilter::Lanczos3));
+    const auto other = planFor(source, DevelopState{brighter}, LensCorrection{},
+                               request({0.5}, ResizeFilter::Lanczos3));
     REQUIRE_FALSE(prefixMatches(half, other, Stage::Pointwise));
 }
 
@@ -209,55 +209,59 @@ TEST_CASE("Developing until each boundary gives host checkpoints that read back 
     const DevelopState state = resumeState();
     const RenderRequest request = requestOf(20);
 
-    const auto pointwise = developUntil(source, state, Stage::Pointwise, request);
+    const auto pointwise = developUntil(source, state, LensCorrection{}, Stage::Pointwise, request);
     REQUIRE(pointwise.boundary() == Stage::Pointwise);
     REQUIRE_FALSE(pointwise.isResident());
     REQUIRE(pointwise.size() == source.size());
 
-    const auto geometry = developUntil(source, state, Stage::Geometry, request);
+    const auto geometry = developUntil(source, state, LensCorrection{}, Stage::Geometry, request);
     REQUIRE(geometry.boundary() == Stage::Geometry);
     REQUIRE(geometry.size() != source.size());
 
-    const auto resized = developUntil(source, state, Stage::Resize, request);
+    const auto resized = developUntil(source, state, LensCorrection{}, Stage::Resize, request);
     REQUIRE(resized.boundary() == Stage::Resize);
     REQUIRE(resized.size().width <= 20);
-    requireIdentical(develop(source, state, request), resized.readBack());
+    requireIdentical(develop(source, state, LensCorrection{}, request), resized.readBack());
 
-    const auto effects = developUntil(source, state, Stage::Effects, request);
+    const auto effects = developUntil(source, state, LensCorrection{}, Stage::Effects, request);
     REQUIRE(effects.boundary() == Stage::Effects);
-    requireIdentical(develop(source, state, request), effects.readBack());
+    requireIdentical(develop(source, state, LensCorrection{}, request), effects.readBack());
 
-    REQUIRE_THROWS_AS(developUntil(source, state, static_cast<Stage>(stageCount)),
+    REQUIRE_THROWS_AS(developUntil(source, state, LensCorrection{}, static_cast<Stage>(stageCount)),
                       std::invalid_argument);
 }
 
 TEST_CASE("Resuming from a pointwise checkpoint equals a full develop", "[checkpoint][develop]") {
     const ImageBuffer source = resumeSource();
-    const auto checkpoint = developUntil(source, resumeState(), Stage::Pointwise);
+    const auto checkpoint = developUntil(source, resumeState(), LensCorrection{}, Stage::Pointwise);
 
     // A different geometry and a different request, the same pointwise result.
     const DevelopState straighter = resumeState(0.5F, -9.0);
     for (const RenderRequest& request : {RenderRequest{}, requestOf(17)}) {
-        const auto resumed = resumeFrom(checkpoint, source, straighter, Stage::Resize, request);
+        const auto resumed =
+            resumeFrom(checkpoint, source, straighter, LensCorrection{}, Stage::Resize, request);
         REQUIRE(resumed.boundary() == Stage::Resize);
-        requireIdentical(develop(source, straighter, request), resumed.readBack());
+        requireIdentical(develop(source, straighter, LensCorrection{}, request),
+                         resumed.readBack());
     }
 
-    const auto toGeometry = resumeFrom(checkpoint, source, straighter, Stage::Geometry);
-    requireIdentical(developUntil(source, straighter, Stage::Geometry).readBack(),
+    const auto toGeometry =
+        resumeFrom(checkpoint, source, straighter, LensCorrection{}, Stage::Geometry);
+    requireIdentical(developUntil(source, straighter, LensCorrection{}, Stage::Geometry).readBack(),
                      toGeometry.readBack());
 }
 
 TEST_CASE("Resuming from a geometry checkpoint equals a full develop", "[checkpoint][develop]") {
     const ImageBuffer source = resumeSource();
     const DevelopState state = resumeState();
-    const auto checkpoint = developUntil(source, state, Stage::Geometry);
+    const auto checkpoint = developUntil(source, state, LensCorrection{}, Stage::Geometry);
 
     for (const RenderRequest& request :
          {requestOf(31), requestOf(9),
           RenderRequest{.size = RenderRequest::Scale{0.5}, .filter = ResizeFilter::Bilinear}}) {
-        const auto resumed = resumeFrom(checkpoint, source, state, Stage::Resize, request);
-        requireIdentical(develop(source, state, request), resumed.readBack());
+        const auto resumed =
+            resumeFrom(checkpoint, source, state, LensCorrection{}, Stage::Resize, request);
+        requireIdentical(develop(source, state, LensCorrection{}, request), resumed.readBack());
     }
 }
 
@@ -265,34 +269,38 @@ TEST_CASE("Resuming at the checkpoint's own boundary returns an equivalent check
           "[checkpoint][develop]") {
     const ImageBuffer source = resumeSource();
     const DevelopState state = resumeState();
-    const auto checkpoint = developUntil(source, state, Stage::Geometry);
-    const auto again = resumeFrom(checkpoint, source, state, Stage::Geometry);
+    const auto checkpoint = developUntil(source, state, LensCorrection{}, Stage::Geometry);
+    const auto again = resumeFrom(checkpoint, source, state, LensCorrection{}, Stage::Geometry);
     REQUIRE(again.boundary() == Stage::Geometry);
     requireIdentical(checkpoint.readBack(), again.readBack());
 }
 
 TEST_CASE("A checkpoint refuses a render its plan prefix does not match", "[checkpoint][develop]") {
     const ImageBuffer source = resumeSource();
-    const auto pointwise = developUntil(source, resumeState(), Stage::Pointwise);
-    const auto geometry = developUntil(source, resumeState(), Stage::Geometry);
+    const auto pointwise = developUntil(source, resumeState(), LensCorrection{}, Stage::Pointwise);
+    const auto geometry = developUntil(source, resumeState(), LensCorrection{}, Stage::Geometry);
 
     // A changed tone setting is a different pointwise result, for both.
     const DevelopState brighter = resumeState(1.5F);
-    REQUIRE_THROWS_AS(resumeFrom(pointwise, source, brighter, Stage::Resize),
+    REQUIRE_THROWS_AS(resumeFrom(pointwise, source, brighter, LensCorrection{}, Stage::Resize),
                       std::invalid_argument);
-    REQUIRE_THROWS_AS(resumeFrom(geometry, source, brighter, Stage::Resize), std::invalid_argument);
+    REQUIRE_THROWS_AS(resumeFrom(geometry, source, brighter, LensCorrection{}, Stage::Resize),
+                      std::invalid_argument);
 
     // A changed geometry is a different geometry result, but the same pointwise one.
     const DevelopState straighter = resumeState(0.5F, 8.0);
-    REQUIRE_THROWS_AS(resumeFrom(geometry, source, straighter, Stage::Resize),
+    REQUIRE_THROWS_AS(resumeFrom(geometry, source, straighter, LensCorrection{}, Stage::Resize),
                       std::invalid_argument);
-    REQUIRE_NOTHROW(resumeFrom(pointwise, source, straighter, Stage::Resize));
+    REQUIRE_NOTHROW(resumeFrom(pointwise, source, straighter, LensCorrection{}, Stage::Resize));
 
     // A resize checkpoint is for its own size and filter only.
-    const auto resized = developUntil(source, resumeState(), Stage::Resize, requestOf(20));
-    REQUIRE_NOTHROW(resumeFrom(resized, source, resumeState(), Stage::Resize, requestOf(20)));
-    REQUIRE_THROWS_AS(resumeFrom(resized, source, resumeState(), Stage::Resize, requestOf(21)),
-                      std::invalid_argument);
+    const auto resized =
+        developUntil(source, resumeState(), LensCorrection{}, Stage::Resize, requestOf(20));
+    REQUIRE_NOTHROW(
+        resumeFrom(resized, source, resumeState(), LensCorrection{}, Stage::Resize, requestOf(20)));
+    REQUIRE_THROWS_AS(
+        resumeFrom(resized, source, resumeState(), LensCorrection{}, Stage::Resize, requestOf(21)),
+        std::invalid_argument);
 }
 
 TEST_CASE("A checkpoint refuses another source or another pyramid level", "[checkpoint][develop]") {
@@ -302,24 +310,26 @@ TEST_CASE("A checkpoint refuses another source or another pyramid level", "[chec
     const ImageBuffer other = test::rainbow({40, 30}, PixelFormat::RgbaF32, workingEncoding);
 
     for (const Stage boundary : {Stage::Pointwise, Stage::Geometry}) {
-        const auto checkpoint = developUntil(source, state, boundary);
-        REQUIRE_THROWS_AS(resumeFrom(checkpoint, reduced, state, Stage::Resize),
+        const auto checkpoint = developUntil(source, state, LensCorrection{}, boundary);
+        REQUIRE_THROWS_AS(resumeFrom(checkpoint, reduced, state, LensCorrection{}, Stage::Resize),
                           std::invalid_argument);
-        REQUIRE_THROWS_AS(resumeFrom(checkpoint, other, state, Stage::Resize),
+        REQUIRE_THROWS_AS(resumeFrom(checkpoint, other, state, LensCorrection{}, Stage::Resize),
                           std::invalid_argument);
     }
     // And the same level is fine.
-    REQUIRE_NOTHROW(
-        resumeFrom(developUntil(reduced, state, Stage::Pointwise), reduced, state, Stage::Resize));
+    REQUIRE_NOTHROW(resumeFrom(developUntil(reduced, state, LensCorrection{}, Stage::Pointwise),
+                               reduced, state, LensCorrection{}, Stage::Resize));
 }
 
 TEST_CASE("A render cannot stop before its checkpoint", "[checkpoint][develop]") {
     const ImageBuffer source = resumeSource();
     const DevelopState state = resumeState();
-    const auto geometry = developUntil(source, state, Stage::Geometry);
-    REQUIRE_THROWS_AS(resumeFrom(geometry, source, state, Stage::Pointwise), std::invalid_argument);
-    REQUIRE_THROWS_AS(resumeFrom(geometry, source, state, static_cast<Stage>(stageCount)),
+    const auto geometry = developUntil(source, state, LensCorrection{}, Stage::Geometry);
+    REQUIRE_THROWS_AS(resumeFrom(geometry, source, state, LensCorrection{}, Stage::Pointwise),
                       std::invalid_argument);
+    REQUIRE_THROWS_AS(
+        resumeFrom(geometry, source, state, LensCorrection{}, static_cast<Stage>(stageCount)),
+        std::invalid_argument);
 }
 
 TEST_CASE("Asking whether a checkpoint can be resumed gives the answer the resume would",
@@ -329,9 +339,10 @@ TEST_CASE("Asking whether a checkpoint can be resumed gives the answer the resum
     const DevelopState state = resumeState();
     const DevelopState brighter = resumeState(1.5F);
     const DevelopState straighter = resumeState(0.5F, 8.0);
-    const auto pointwise = developUntil(source, state, Stage::Pointwise);
-    const auto geometry = developUntil(source, state, Stage::Geometry);
-    const auto resized = developUntil(source, state, Stage::Resize, requestOf(20));
+    const auto pointwise = developUntil(source, state, LensCorrection{}, Stage::Pointwise);
+    const auto geometry = developUntil(source, state, LensCorrection{}, Stage::Geometry);
+    const auto resized =
+        developUntil(source, state, LensCorrection{}, Stage::Resize, requestOf(20));
 
     struct Case {
         const RenderCheckpoint* from;
@@ -354,15 +365,15 @@ TEST_CASE("Asking whether a checkpoint can be resumed gives the answer the resum
     };
     for (const Case& item : cases) {
         CAPTURE(item.from->boundary(), item.valid);
-        REQUIRE(canResumeFrom(*item.from, *item.source, *item.state, Stage::Resize, item.request) ==
-                item.valid);
+        REQUIRE(canResumeFrom(*item.from, *item.source, *item.state, LensCorrection{},
+                              Stage::Resize, item.request) == item.valid);
         if (item.valid) {
-            REQUIRE_NOTHROW(
-                resumeFrom(*item.from, *item.source, *item.state, Stage::Resize, item.request));
+            REQUIRE_NOTHROW(resumeFrom(*item.from, *item.source, *item.state, LensCorrection{},
+                                       Stage::Resize, item.request));
         } else {
-            REQUIRE_THROWS_AS(
-                resumeFrom(*item.from, *item.source, *item.state, Stage::Resize, item.request),
-                std::invalid_argument);
+            REQUIRE_THROWS_AS(resumeFrom(*item.from, *item.source, *item.state, LensCorrection{},
+                                         Stage::Resize, item.request),
+                              std::invalid_argument);
         }
     }
 }
@@ -371,24 +382,26 @@ TEST_CASE("Asking whether a checkpoint can be resumed still refuses a bad reques
           "[checkpoint][develop]") {
     const ImageBuffer source = resumeSource();
     const DevelopState state = resumeState();
-    const auto geometry = developUntil(source, state, Stage::Geometry);
+    const auto geometry = developUntil(source, state, LensCorrection{}, Stage::Geometry);
 
     // A bad request is the caller's mistake, not a stale checkpoint.
     const RenderRequest backwards{.region = RenderRequest::Region{.left = 0.6, .right = 0.2}};
-    REQUIRE_THROWS_AS(canResumeFrom(geometry, source, state, Stage::Resize, backwards),
-                      std::invalid_argument);
+    REQUIRE_THROWS_AS(
+        canResumeFrom(geometry, source, state, LensCorrection{}, Stage::Resize, backwards),
+        std::invalid_argument);
     // As for the resume, a stop before the resize does not read the request.
-    REQUIRE(canResumeFrom(geometry, source, state, Stage::Geometry, backwards));
+    REQUIRE(canResumeFrom(geometry, source, state, LensCorrection{}, Stage::Geometry, backwards));
 
     // So is a stop that is no boundary, or comes before the checkpoint's.
-    REQUIRE_THROWS_AS(canResumeFrom(geometry, source, state, Stage::Pointwise),
+    REQUIRE_THROWS_AS(canResumeFrom(geometry, source, state, LensCorrection{}, Stage::Pointwise),
                       std::invalid_argument);
-    REQUIRE_THROWS_AS(canResumeFrom(geometry, source, state, static_cast<Stage>(stageCount)),
-                      std::invalid_argument);
+    REQUIRE_THROWS_AS(
+        canResumeFrom(geometry, source, state, LensCorrection{}, static_cast<Stage>(stageCount)),
+        std::invalid_argument);
 
     // And a state that cannot be developed.
     DevelopState broken = state;
     broken.settings.tone.exposure = std::numeric_limits<float>::quiet_NaN();
-    REQUIRE_THROWS_AS(canResumeFrom(geometry, source, broken, Stage::Resize),
+    REQUIRE_THROWS_AS(canResumeFrom(geometry, source, broken, LensCorrection{}, Stage::Resize),
                       std::invalid_argument);
 }

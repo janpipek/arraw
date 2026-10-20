@@ -243,9 +243,8 @@ std::string maskToJson(const LocalAdjustment& adjustment, StrokeDetail detail) {
 
 /// @brief Spells the list object; one mask a line, indented, or all on one line.
 std::string listJson(const DevelopState& state, bool lines, StrokeDetail detail) {
-    std::string text = "{\"version\": " + std::to_string(localAdjustmentsVersion) +
-                       ", \"nextId\": " + std::to_string(state.nextLocalAdjustmentId.value) +
-                       ", \"masks\": [";
+    std::string text =
+        "{\"nextId\": " + std::to_string(state.nextLocalAdjustmentId.value) + ", \"masks\": [";
     for (std::size_t i = 0; i < state.localAdjustments.size(); ++i) {
         text += lines ? "\n    " : (i > 0 ? ", " : "");
         text += maskToJson(state.localAdjustments[i], detail);
@@ -455,18 +454,6 @@ DevelopState arraw::applyStateJson(std::string_view json, DevelopState base, Dia
         reportMalformedList("localAdjustments.masks", "a list", log);
         return base;
     }
-    if (list.contains("version")) {
-        const QJsonValue version = list.value("version");
-        if (!version.isDouble() || version.toDouble() < 1 ||
-            version.toDouble() != std::floor(version.toDouble())) {
-            reportMalformedList("localAdjustments.version", "a whole number of at least 1", log);
-        } else if (version.toDouble() > localAdjustmentsVersion) {
-            log.record(
-                {.notice = Notice::NewerLocalAdjustmentsVersion,
-                 .severity = Severity::Warning,
-                 .values = {version.toDouble(), static_cast<double>(localAdjustmentsVersion)}});
-        }
-    }
     std::vector<MaskFields> entries;
     for (const QJsonValue& entry : list.value("masks").toArray()) {
         entries.push_back(maskFieldsOf(entry));
@@ -485,8 +472,137 @@ DevelopState arraw::applyStateJson(std::string_view json, DevelopState base, Dia
 
 std::string arraw::negativeToJson(const NegativeSettings& negative) {
     validate(negative);
-    return "{\"demosaic\": " + jsonString(tokenOf(negative.demosaic)) + "}";
+    std::string text = "{\"demosaic\": " + jsonString(tokenOf(negative.demosaic));
+    // Written only when it says something, so that a negative without lens corrections is the
+    // text it was before they existed, and the thumbnails keyed on it stay valid.
+    if (negative.lens != LensSettings{}) {
+        const LensSettings& lens = negative.lens;
+        const auto flag = [](bool on) { return on ? "true" : "false"; };
+        text += ", \"lens\": {\"distortion\": " + std::string(flag(lens.distortion)) +
+                ", \"vignetting\": " + number(shortestDouble(lens.vignettingAmount)) +
+                ", \"lateralCa\": " + flag(lens.lateralCa);
+        if (lens.lens) {
+            text += ", \"recorded\": {\"maker\": " + jsonString(lens.lens->maker) +
+                    ", \"model\": " + jsonString(lens.lens->model) +
+                    ", \"cropFactor\": " + number(lens.lens->cropFactor) +
+                    ", \"origin\": " + jsonString(tokenOf(lens.lens->origin)) +
+                    ", \"database\": " + jsonString(lens.lens->database) + "}";
+        }
+        text += "}";
+    }
+    return text + "}";
 }
+
+namespace {
+
+/// @brief Applies the `recorded` object of the lens settings onto a base.
+///
+/// A field of the wrong shape is reported and leaves the whole record as it was; `null` clears it.
+void applyRecordedJson(const QJsonValue& value, std::optional<RecordedLens>& lens,
+                       DiagnosticLog& log) {
+    if (value.isNull()) {
+        lens.reset();
+        return;
+    }
+    if (!value.isObject()) {
+        reportMalformedList("lens.recorded", "an object or null", log);
+        return;
+    }
+    const QJsonObject object = value.toObject();
+    RecordedLens read = lens.value_or(RecordedLens{});
+    bool usable = true;
+    for (auto it = object.begin(); it != object.end(); ++it) {
+        const std::string key = it.key().toStdString();
+        const QJsonValue field = it.value();
+        if (key == "maker" || key == "model" || key == "database") {
+            if (!field.isString()) {
+                reportMalformedList("lens.recorded." + key, "a string", log);
+                usable = false;
+                continue;
+            }
+            (key == "maker"   ? read.maker
+             : key == "model" ? read.model
+                              : read.database) = field.toString().toStdString();
+        } else if (key == "cropFactor") {
+            if (!field.isDouble() || !std::isfinite(field.toDouble()) || field.toDouble() <= 0.0) {
+                reportMalformedList("lens.recorded.cropFactor", "a positive number", log);
+                usable = false;
+                continue;
+            }
+            read.cropFactor = field.toDouble();
+        } else if (key == "origin") {
+            const auto token =
+                field.isString() ? parseLensOrigin(field.toString().toStdString()) : std::nullopt;
+            if (!token) {
+                reportMalformedList("lens.recorded.origin", "one of matched chosen", log);
+                usable = false;
+                continue;
+            }
+            read.origin = *token;
+        } else {
+            log.record({.notice = Notice::SettingUnknown,
+                        .severity = Severity::Warning,
+                        .values = {"lens.recorded." + key}});
+        }
+    }
+    if (usable && read.model.empty()) {
+        reportMalformedList("lens.recorded.model", "the model of the lens", log);
+        usable = false;
+    }
+    if (usable) {
+        lens = std::move(read);
+    }
+}
+
+/// @brief Applies the `lens` object of the negative settings onto a base.
+void applyLensJson(const QJsonValue& value, LensSettings& lens, DiagnosticLog& log) {
+    if (!value.isObject()) {
+        reportMalformedList("lens", "an object", log);
+        return;
+    }
+    const QJsonObject object = value.toObject();
+    for (auto it = object.begin(); it != object.end(); ++it) {
+        const std::string key = it.key().toStdString();
+        if (key == "vignetting") {
+            if (it.value().isBool()) {
+                lens.vignettingAmount =
+                    it.value().toBool() ? profileVignettingAmount : minimumVignettingAmount;
+            } else if (it.value().isDouble() && std::isfinite(it.value().toDouble())) {
+                const double read = it.value().toDouble();
+                const double clamped = std::clamp(read, double(minimumVignettingAmount),
+                                                  double(maximumVignettingAmount));
+                lens.vignettingAmount = shortestFloat(clamped);
+                if (clamped != read) {
+                    log.record({.notice = Notice::SettingClamped,
+                                .severity = Severity::Warning,
+                                .values = {std::string("lens.vignetting"), read, clamped}});
+                }
+            } else {
+                reportMalformedList("lens.vignetting", "a number from 0 to 150, or true or false",
+                                    log);
+            }
+            continue;
+        }
+        bool* flag = key == "distortion"  ? &lens.distortion
+                     : key == "lateralCa" ? &lens.lateralCa
+                                          : nullptr;
+        if (flag != nullptr) {
+            if (it.value().isBool()) {
+                *flag = it.value().toBool();
+            } else {
+                reportMalformedList("lens." + key, "true or false", log);
+            }
+        } else if (key == "recorded") {
+            applyRecordedJson(it.value(), lens.lens, log);
+        } else {
+            log.record({.notice = Notice::SettingUnknown,
+                        .severity = Severity::Warning,
+                        .values = {"lens." + key}});
+        }
+    }
+}
+
+} // namespace
 
 NegativeSettings arraw::applyNegativeJson(std::string_view json, NegativeSettings base,
                                           DiagnosticLog& log) {
@@ -499,6 +615,10 @@ NegativeSettings arraw::applyNegativeJson(std::string_view json, NegativeSetting
     const QJsonObject root = document.object();
     for (auto it = root.begin(); it != root.end(); ++it) {
         const std::string key = it.key().toStdString();
+        if (key == "lens") {
+            applyLensJson(it.value(), base.lens, log);
+            continue;
+        }
         if (key != "demosaic") {
             log.record(
                 {.notice = Notice::SettingUnknown, .severity = Severity::Warning, .values = {key}});

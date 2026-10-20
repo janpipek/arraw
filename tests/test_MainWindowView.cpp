@@ -9,12 +9,14 @@
 #include <QAction>
 #include <QDockWidget>
 #include <QMenuBar>
+#include <QSettings>
 #include <QStatusBar>
 #include <QTest>
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <filesystem>
+#include <fstream>
 #include <functional>
 
 using namespace arraw;
@@ -39,6 +41,9 @@ struct Window {
         REQUIRE(QTest::qWaitForWindowExposed(&window));
         REQUIRE(QTest::qWaitFor(
             [this] { return !window.findChild<PhotoView*>()->wholeFrameImage().isNull(); }, 20000));
+        // The strip's folder is listed in the background; its shots are what the keys step through.
+        REQUIRE(QTest::qWaitFor([this] { return !window.findChild<FilmStrip*>()->isListing(); },
+                                10000));
     }
 
     [[nodiscard]] QDockWidget& dock(const char* name) const {
@@ -265,4 +270,51 @@ TEST_CASE("A coarser stand-in is shown, keeps the busy period, and gives no thum
     CHECK(view.wholeFrameImage() == *own.image);
     w.window.showResult(own);
     CHECK(view.wholeFrameImage() == *own.image);
+}
+
+TEST_CASE("F5 refreshes the folder, with the menu bar shown or hidden", "[app][window][view]") {
+    Window w;
+    QAction& refresh = w.action("refreshFolderAction");
+    CHECK(refresh.text() == "&Refresh Folder");
+    // F5 first and on every platform, then every one of the platform's Refresh keys, not only the
+    // first (review R1: on GNOME that is Ctrl+R).
+    const QList<QKeySequence> keys = refresh.shortcuts();
+    REQUIRE_FALSE(keys.isEmpty());
+    CHECK(keys.front() == QKeySequence(Qt::Key_F5));
+    for (const QKeySequence& key : QKeySequence::keyBindings(QKeySequence::Refresh)) {
+        CHECK(keys.contains(key));
+    }
+    CHECK(keys.count(QKeySequence(Qt::Key_F5)) == 1);
+    CHECK(refresh.isEnabled());
+    CHECK(w.window.actions().contains(&refresh));
+    CHECK(w.window.menuBar()->actions().size() > 0);
+    bool inViewMenu = false;
+    for (QAction* menu : w.window.menuBar()->actions()) {
+        if (menu->menu() != nullptr && menu->menu()->actions().contains(&refresh)) {
+            inViewMenu = true;
+            CHECK(menu->text() == "&View");
+        }
+    }
+    CHECK(inViewMenu);
+
+    // One watch only: a file in the subfolder shows after the refresh, not before.
+    struct Restore {
+        ~Restore() {
+            QSettings().remove("filmStrip/includeSubfolders");
+        }
+    } restore;
+    auto& strip = *w.window.findChild<FilmStrip*>();
+    strip.setMaxWatchedFolders(1);
+    std::filesystem::create_directories(w.folder.file("sub"));
+    std::ofstream(w.folder.file("sub/c.jpg")) << "x";
+    strip.setIncludeSubfolders(true);
+    REQUIRE(QTest::qWaitFor([&] { return !strip.isListing(); }, 10000));
+    REQUIRE(strip.shotContaining(w.folder.file("sub/c.jpg")));
+
+    std::ofstream(w.folder.file("sub/d.jpg")) << "x";
+    w.window.menuBar()->hide();
+    w.press(Qt::Key_F5);
+    REQUIRE(QTest::qWaitFor(
+        [&] { return strip.shotContaining(w.folder.file("sub/d.jpg")).has_value(); }, 10000));
+    w.window.menuBar()->show();
 }

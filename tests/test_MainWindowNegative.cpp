@@ -316,6 +316,40 @@ TEST_CASE("A paste carries the demosaic in one step, and one without it does not
     CHECK(w.shown() == Demosaic::Ahd);
 }
 
+TEST_CASE("A paste of the lens switches decodes nothing, and undo and redo decode nothing",
+          "[app][window][negative][copy][lens]") {
+    Window w(Demosaic::Ahd, false);
+    {
+        // The photograph being copied from has a correction on.
+        const Photo bare = openPhoto(w.folder.file("a.dng"));
+        NegativeSettings negative = bare.negative();
+        negative.lens.distortion = true;
+        writeSidecar(bare.with(negative));
+    }
+    w.open("a.dng");
+    REQUIRE(w.settled(1));
+    w.copy();
+
+    w.open("b.dng");
+    REQUIRE(w.settled(2));
+    const int before = w.counter.started;
+    const int rows = w.historyRows();
+    w.action("pasteSettingsAction").trigger();
+    QTest::qWait(150);
+    // One step, and a lens edit is not a decode (ADR 050).
+    CHECK(w.historyRows() == rows + 1);
+    CHECK(w.counter.started == before);
+    CHECK(w.status().message().isEmpty());
+
+    w.action("undoAction").trigger();
+    QTest::qWait(100);
+    CHECK(w.historyRows() == rows + 1);
+    CHECK(w.counter.started == before);
+    w.action("redoAction").trigger();
+    QTest::qWait(100);
+    CHECK(w.counter.started == before);
+}
+
 TEST_CASE("The Negative group is off for a file with nothing to demosaic",
           "[app][window][negative]") {
     Window w(Demosaic::Ahd, false);

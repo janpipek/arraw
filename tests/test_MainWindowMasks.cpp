@@ -866,27 +866,52 @@ TEST_CASE("In the window a stroke repaints only where it painted", "[app][window
     w.drag(w.at(0.2, 0.5), w.at(0.22, 0.5));
     QTest::qWait(50);
 
+    // Measuring is made deterministic in two ways. First, the overlay is let to settle: a render
+    // landing (or a scheduled update) repaints the view whole and, arriving before the dab's
+    // paint or merged with it, would hide what is measured, so the press and the first stroke
+    // are waited out until the overlay has been quiet. Second, the recorder takes the first
+    // paint that is smaller than the overlay and ignores whole-overlay ones (a render landing,
+    // not the dab); a regression that repaints the whole overlay for every dab then never
+    // yields a partial paint and fails on the timeout.
     struct Recorder : QObject {
-        QRect painted;
-        bool eventFilter(QObject*, QEvent* event) override {
-            // The first repaint only: a render that lands later repaints the view whole.
-            if (event->type() == QEvent::Paint && painted.isNull()) {
-                painted = static_cast<QPaintEvent*>(event)->rect();
+        QRect partial;
+        qint64 lastPaint = 0;
+        QElapsedTimer clock;
+        Recorder() {
+            clock.start();
+        }
+        bool eventFilter(QObject* watched, QEvent* event) override {
+            if (event->type() == QEvent::Paint) {
+                lastPaint = clock.elapsed();
+                const QRect rect = static_cast<QPaintEvent*>(event)->rect();
+                const auto* overlay = static_cast<QWidget*>(watched);
+                const bool whole =
+                    rect.width() >= overlay->width() && rect.height() >= overlay->height();
+                if (!whole && partial.isNull()) {
+                    partial = rect;
+                }
             }
             return false;
         }
+        void settle() {
+            lastPaint = clock.elapsed();
+            while (clock.elapsed() - lastPaint < 300) {
+                QTest::qWait(25);
+            }
+            partial = {};
+        }
     } recorder;
     w.overlay().installEventFilter(&recorder);
+    recorder.settle();
     w.mouse(QEvent::MouseButtonPress, w.at(0.2, 0.5));
-    recorder.painted = {};
+    recorder.settle();
     w.mouse(QEvent::MouseMove, w.at(0.22, 0.5));
     w.mouse(QEvent::MouseMove, w.at(0.24, 0.5));
-    REQUIRE(QTest::qWaitFor([&] { return !recorder.painted.isNull(); }, 5000));
-    REQUIRE_FALSE(recorder.painted.isNull());
-    CHECK(recorder.painted.right() < w.overlay().width() / 2);
-    CHECK(recorder.painted.height() < w.overlay().height());
+    REQUIRE(QTest::qWaitFor([&] { return !recorder.partial.isNull(); }, 5000));
+    CHECK(recorder.partial.right() < w.overlay().width() / 2);
+    CHECK(recorder.partial.height() < w.overlay().height());
     // What was painted covers the dab.
-    CHECK(recorder.painted.contains(w.at(0.24, 0.5).toPoint()));
+    CHECK(recorder.partial.contains(w.at(0.24, 0.5).toPoint()));
     w.mouse(QEvent::MouseButtonRelease, w.at(0.24, 0.5), Qt::NoButton);
 }
 

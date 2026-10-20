@@ -5,6 +5,7 @@
 #include <CurveHistogram.h>
 #include <DevelopState.h>
 #include <ImageBuffer.h>
+#include <LensCorrection.h>
 #include <Progress.h>
 #include <RenderCheckpoint.h>
 
@@ -258,11 +259,15 @@ public:
     /// A request made while no source is set is not ignored: it yields a result
     /// with an error.
     /// @param state How to develop the photograph.
+    /// @param lens Lens corrections to apply, as ::arraw::lensCorrectionFor resolved them (ADR
+    /// 050); empty for none. The Lens pass runs on the worker with the rest, with progress and
+    /// cancellation, on the GPU when it renders the photograph (the device has a Lens pass), else
+    /// on the CPU, which says why (PreviewResult::fallbackReason).
     /// @param view Part of the frame to show, and the size to show it at.
     /// @param supersede Whether the render of an earlier request in flight is cancelled; a
     /// fallback refresh or histogram count in flight is cancelled whatever it says.
     /// @return Identifier of the request, increasing with each call.
-    std::uint64_t request(DevelopState state, PreviewView view,
+    std::uint64_t request(DevelopState state, LensCorrection lens, PreviewView view,
                           Supersede supersede = Supersede::Cancel);
 
     /// @brief Says whether the curve histogram is shown, so whether it is worth counting.
@@ -285,6 +290,7 @@ private:
     struct Pending {
         std::uint64_t id;
         DevelopState state;
+        LensCorrection lens;
         PreviewView view;
     };
 

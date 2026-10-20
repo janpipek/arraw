@@ -119,9 +119,10 @@ TEST_CASE("Sampling the curve input on the GPU matches the CPU", "[gpu][sample]"
                 DYNAMIC_SECTION(name << ", " << label << ", request " << r) {
                     const DevelopState state{busy(geometry)};
                     const ImageBuffer expected =
-                        sample(source, state, Tap::CurveInput, requests[r]);
+                        sample(source, state, LensCorrection{}, Tap::CurveInput, requests[r]);
                     const ImageBuffer actual =
-                        sampleOnGpu(context, source, uploaded, state, Tap::CurveInput, requests[r]);
+                        sampleOnGpu(context, source, uploaded, state, LensCorrection{},
+                                    Tap::CurveInput, requests[r]);
                     REQUIRE(actual.format() == workingFormat);
                     REQUIRE(actual.size() == expected.size());
                     REQUIRE(std::get<NamedEncoding>(actual.encoding()) == perceptualEncoding);
@@ -160,9 +161,10 @@ TEST_CASE("Sampling from the host equals sampling from an uploaded source", "[gp
     const ImageBuffer source = fixtureImage("linear-32x24-rotated.dng");
     const DevelopState state{busy({.straighten = 4.0})};
     const RenderRequest request{.size = RenderRequest::FitInside{12, 12}};
-    const ImageBuffer fromHost = sampleOnGpu(context, source, state, Tap::CurveInput, request);
+    const ImageBuffer fromHost =
+        sampleOnGpu(context, source, state, LensCorrection{}, Tap::CurveInput, request);
     const ImageBuffer fromDevice = sampleOnGpu(context, source, uploadSource(context, source),
-                                               state, Tap::CurveInput, request);
+                                               state, LensCorrection{}, Tap::CurveInput, request);
     REQUIRE(compareFloat(fromHost, fromDevice).bitExact);
 }
 
@@ -174,13 +176,16 @@ TEST_CASE("Sampling on the GPU ignores the curves and refuses what it cannot do"
     DevelopSettings curved = plain;
     curved.toneCurve.luma.points = {{0.0F, 0.3F}, {1.0F, 0.6F}};
     curved.tone.filmicHighlights = 90.0F;
-    const ImageBuffer first = sampleOnGpu(context, source, DevelopState{plain}, Tap::CurveInput);
-    const ImageBuffer second = sampleOnGpu(context, source, DevelopState{curved}, Tap::CurveInput);
+    const ImageBuffer first =
+        sampleOnGpu(context, source, DevelopState{plain}, LensCorrection{}, Tap::CurveInput);
+    const ImageBuffer second =
+        sampleOnGpu(context, source, DevelopState{curved}, LensCorrection{}, Tap::CurveInput);
     REQUIRE(compareFloat(first, second).bitExact);
 
-    REQUIRE_THROWS_AS(sampleOnGpu(context, source, {}, static_cast<Tap>(7)), std::invalid_argument);
+    REQUIRE_THROWS_AS(sampleOnGpu(context, source, {}, LensCorrection{}, static_cast<Tap>(7)),
+                      std::invalid_argument);
     const ImageBuffer other = fixtureImage("linear-32x24-neutral.dng");
-    REQUIRE_THROWS_AS(
-        sampleOnGpu(context, source, uploadSource(context, other), {}, Tap::CurveInput),
-        std::invalid_argument);
+    REQUIRE_THROWS_AS(sampleOnGpu(context, source, uploadSource(context, other), {},
+                                  LensCorrection{}, Tap::CurveInput),
+                      std::invalid_argument);
 }

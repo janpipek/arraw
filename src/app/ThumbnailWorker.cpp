@@ -6,6 +6,8 @@
 #include <ImageBuffer.h>
 #include <ImageImport.h>
 #include <ImagePyramid.h>
+#include <LensResolution.h>
+#include <Photo.h>
 #include <Sidecar.h>
 
 #include <algorithm>
@@ -89,8 +91,38 @@ DevelopState thumbnailState(const fs::path& primary) {
     return defaultStateFor(readImageMetadata(primary).encoding);
 }
 
+/// @brief Reads the negative settings a photograph's sidecar records, if it records any.
+///
+/// The default when there is no sidecar, it records none or it cannot be read, as opening the
+/// photograph would give.
+NegativeSettings savedNegative(const fs::path& primary) {
+    try {
+        if (const auto contents = readSidecar(primary); contents && contents->negative) {
+            return *contents->negative;
+        }
+    } catch (const std::exception&) {
+        // An unreadable sidecar develops as defaults, as opening the photograph would say.
+    }
+    return {};
+}
+
+/// @brief Resolves the lens corrections a photograph's saved settings ask for.
+///
+/// Only a shot whose sidecar turns a correction on pays for the metadata and the database; every
+/// other shot costs what it did. A correction that cannot be resolved (the lens is not in the
+/// database) leaves the thumbnail uncorrected, as the preview and an export are.
+LensCorrection savedLensCorrection(const fs::path& primary, const NegativeSettings& negative,
+                                   const LensDatabaseSource& lensDatabase) {
+    if (!negative.lens.any()) {
+        return {};
+    }
+    const Photo photo = openPhoto(primary);
+    return lensCorrectionFor(photo, lensDatabase());
+}
+
 /// @brief Develops the thumbnail of a photograph: half-size decode, pyramid, develop.
-QImage developThumbnail(const fs::path& primary, const DevelopState& state) {
+QImage developThumbnail(const fs::path& primary, const DevelopState& state,
+                        const LensCorrection& lens) {
     ImageBuffer source = loadImage(primary, discardedDiagnostics(), {.halfSize = true});
     RenderRequest request;
     request.size = RenderRequest::FitInside{ThumbnailCache::maxEdge, ThumbnailCache::maxEdge};
@@ -101,15 +133,19 @@ QImage developThumbnail(const fs::path& primary, const DevelopState& state) {
     }
     // Radii in sensor pixels shrink with the reduction: the half-size decode
     // and every halving say so on the pixels (ADR 039).
-    return toDisplayImage(develop(source, state, request));
+    // The correction is resolved for the photograph's own size and applies to any level of it
+    // (ADR 050, section 3).
+    return toDisplayImage(develop(source, state, lens, request));
 }
 
 } // namespace
 
 ThumbnailWorker::ThumbnailWorker(ThumbnailCache cache,
-                                 std::function<void(ThumbnailResult)> onResult, bool pruneAtStart)
-    : cache_(std::move(cache)), onResult_(std::move(onResult)),
-      pruner_([this, pruneAtStart](const std::stop_token&) {
+                                 std::function<void(ThumbnailResult)> onResult, bool pruneAtStart,
+                                 LensDatabaseSource lensDatabase)
+    : cache_(std::move(cache)),
+      lensDatabase_(lensDatabase ? std::move(lensDatabase) : systemLensDatabase()),
+      onResult_(std::move(onResult)), pruner_([this, pruneAtStart](const std::stop_token&) {
           if (pruneAtStart) {
               lowerThreadPriority();
               try {
@@ -157,6 +193,18 @@ void ThumbnailWorker::addShots(const std::vector<fs::path>& primaries) {
         }
     }
     wake_.notify_one();
+}
+
+void ThumbnailWorker::removeShots(const std::vector<fs::path>& primaries) {
+    const std::unordered_set<fs::path> gone(primaries.begin(), primaries.end());
+    const auto isGone = [&](const fs::path& primary) { return gone.contains(primary); };
+    const std::scoped_lock lock(mutex_);
+    std::erase_if(urgent_, isGone);
+    std::erase_if(embedded_, isGone);
+    std::erase_if(developed_, isGone);
+    for (const fs::path& primary : primaries) {
+        known_.erase(primary);
+    }
 }
 
 void ThumbnailWorker::setVisible(std::vector<fs::path> primaries) {
@@ -255,7 +303,9 @@ void ThumbnailWorker::execute(const Job& job, std::uint64_t generation) {
             }
         } else {
             const DevelopState state = thumbnailState(job.primary);
-            const auto key = ThumbnailCache::developedKey(job.primary, state);
+            const NegativeSettings negative = savedNegative(job.primary);
+            const LensCorrection lens = savedLensCorrection(job.primary, negative, lensDatabase_);
+            const auto key = ThumbnailCache::developedKey(job.primary, state, negative, lens);
             if (!key) {
                 return;
             }
@@ -264,7 +314,7 @@ void ThumbnailWorker::execute(const Job& job, std::uint64_t generation) {
                 if (generation != generation_.load()) {
                     return; // Nobody wants it any more; a decode is not worth it.
                 }
-                image = developThumbnail(job.primary, state);
+                image = developThumbnail(job.primary, state, lens);
                 cache_.store(*key, image);
             }
         }

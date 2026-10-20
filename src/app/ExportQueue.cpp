@@ -6,6 +6,7 @@
 
 #include <Diagnostics.h>
 #include <ImageImport.h>
+#include <LensResolution.h>
 #include <RenderCheckpoint.h>
 
 #include <exception>
@@ -40,8 +41,10 @@ public:
     /// @param source Decoded photograph to develop.
     /// @param failure Receives why the GPU did not develop; left alone on success.
     /// @return The developed photograph, or nothing if the CPU must.
-    [[nodiscard]] std::optional<ImageBuffer>
-    develop(const ExportJob& job, const ImageBuffer& source, std::string& failure) {
+    [[nodiscard]] std::optional<ImageBuffer> develop(const ExportJob& job,
+                                                     const ImageBuffer& source,
+                                                     const LensCorrection& lens,
+                                                     std::string& failure) {
         if (!tried_) {
             tried_ = true;
             context_ = createAppGpuContext(settings_, reason_);
@@ -52,7 +55,7 @@ public:
         }
         try {
             const RenderCheckpoint checkpoint =
-                developOnGpu(*context_, source, job.state, Stage::Effects, job.request);
+                developOnGpu(*context_, source, job.state, lens, Stage::Effects, job.request);
             return checkpoint.readBack();
         } catch (const std::exception& error) {
             failure = error.what();
@@ -80,12 +83,37 @@ private:
 };
 
 /// @brief Runs one job, turning a failure into a result.
-ExportResult execute(std::uint64_t id, const ExportJob& job, GpuExport* gpu) {
+ExportResult execute(std::uint64_t id, const ExportJob& queued, GpuExport* gpu,
+                     const LensDatabaseSource& lensDatabase) {
+    // The job as it runs; a copy only when it has to be completed from the sidecar.
+    std::optional<ExportJob> resolved;
+    const ExportJob* effective = &queued;
     const detail::TimingSpan timing("export", id);
-    ExportResult result{.id = id, .path = job.path};
+    ExportResult result{.id = id,
+                        .path = queued.path,
+                        .error = {},
+                        .warnings = {},
+                        .onGpu = false,
+                        .fallbackReason = {},
+                        .lensNotices = {}};
     // Nothing may escape the thread, or the process terminates.
     try {
         CollectedDiagnostics log;
+        if (queued.fromSaved) {
+            if (queued.input.empty()) {
+                throw std::invalid_argument("No photograph to export");
+            }
+            const Photo photo = openPhoto(queued.input, log);
+            resolved = queued;
+            resolved->state = photo.state();
+            resolved->decode = decodeOptionsFor(photo, false);
+            resolved->document = photo;
+            if (resolved->metadata) {
+                resolved->metadata->marks = photo.marks();
+            }
+            effective = &*resolved;
+        }
+        const ExportJob& job = *effective;
         std::shared_ptr<const ImageBuffer> source = job.source;
         if (!source) {
             if (job.input.empty()) {
@@ -94,16 +122,28 @@ ExportResult execute(std::uint64_t id, const ExportJob& job, GpuExport* gpu) {
             // The window's pixels were made with other options: decode as the job says.
             source = std::make_shared<const ImageBuffer>(loadImage(job.input, log, job.decode));
         }
+        // The corrections the photograph asks for, resolved here: loading the database may take a
+        // second, and this is not the interface thread. The notices say what was left out.
+        LensCorrection lens;
+        if (job.document && job.document->negative().lens.any()) {
+            CollectedDiagnostics lensLog;
+            lens = lensCorrectionFor(*job.document, lensDatabase(), lensLog);
+            for (const auto& entry : lensLog.entries()) {
+                if (entry.severity != Severity::Info) {
+                    result.lensNotices.push_back(describe(entry));
+                }
+            }
+        }
         std::optional<ImageBuffer> developed;
         if (gpu != nullptr) {
-            developed = gpu->develop(job, *source, result.fallbackReason);
+            developed = gpu->develop(job, *source, lens, result.fallbackReason);
             result.onGpu = developed.has_value();
             if (result.onGpu) {
                 result.fallbackReason.clear();
             }
         }
         if (!developed) {
-            developed = develop(*source, job.state, job.request);
+            developed = develop(*source, job.state, lens, job.request);
         }
         exportImage(*developed, job.path, job.options, job.metadata, log);
         for (const auto& entry : log.entries()) {
@@ -120,9 +160,11 @@ ExportResult execute(std::uint64_t id, const ExportJob& job, GpuExport* gpu) {
 } // namespace
 
 ExportQueue::ExportQueue(std::function<void(ExportResult)> onResult, Device device,
-                         AppSettings settings)
+                         AppSettings settings, LensDatabaseSource lensDatabase)
     : onResult_(std::move(onResult)), device_(settings.cpuOnly ? Device::Cpu : device),
-      settings_(std::move(settings)), worker_([this](const std::stop_token& stop) { run(stop); }) {}
+      settings_(std::move(settings)),
+      lensDatabase_(lensDatabase ? std::move(lensDatabase) : systemLensDatabase()),
+      worker_([this](const std::stop_token& stop) { run(stop); }) {}
 
 ExportQueue::~ExportQueue() {
     worker_.request_stop();
@@ -165,7 +207,7 @@ void ExportQueue::run(std::stop_token stop) {
             next = std::move(queue_.front());
             queue_.pop_front();
         }
-        ExportResult result = execute(next->id, next->job, gpu ? &*gpu : nullptr);
+        ExportResult result = execute(next->id, next->job, gpu ? &*gpu : nullptr, lensDatabase_);
         // The job's photograph is released with it, before the next wait.
         next.reset();
         try {

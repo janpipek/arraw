@@ -4,7 +4,7 @@
   <rdf:Description rdf:about=""
     xmlns:xmp="http://ns.adobe.com/xap/1.0/"
     xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
-    xmlns:arraw="http://ns.arraw.org/develop/1.0/"
+    xmlns:arraw="http://ns.arraw.org/develop/"
     xmlns:acme="http://ns.example.com/acme/1.0/"
     xmp:Rating="3"
     xmp:Label="Blue"

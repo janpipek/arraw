@@ -1,10 +1,12 @@
 #include "AppSettings.h"
 
 #include "TimingTrace.h"
+#include "WatchBudget.h"
 
 #include <QString>
 #include <QVariant>
 
+#include <algorithm>
 #include <exception>
 #include <system_error>
 
@@ -14,14 +16,47 @@ std::optional<std::filesystem::path> restoreOpenPath(QSettings& store) {
     const std::filesystem::path file(store.value("lastFile").toString().toStdU16String());
     const std::filesystem::path folder(store.value("lastFolder").toString().toStdU16String());
     std::error_code error;
-    if (!file.empty() && std::filesystem::is_regular_file(file, error) &&
-        (folder.empty() || file.parent_path().lexically_normal() == folder.lexically_normal())) {
+    // With subfolders listed the remembered folder is the strip's, and may hold the file below.
+    const auto holds = [&] {
+        if (folder.empty()) {
+            return true;
+        }
+        const auto parent = file.parent_path().lexically_normal();
+        if (parent == folder.lexically_normal()) {
+            return true;
+        }
+        const auto relative = parent.lexically_relative(folder.lexically_normal());
+        return restoreIncludeSubfolders(store) && !relative.empty() && *relative.begin() != "..";
+    };
+    if (!file.empty() && std::filesystem::is_regular_file(file, error) && holds()) {
         return file;
     }
     if (!folder.empty() && std::filesystem::is_directory(folder, error)) {
         return folder;
     }
     return std::nullopt;
+}
+
+bool restoreIncludeSubfolders(QSettings& store) {
+    return store.value("filmStrip/includeSubfolders", false).toBool();
+}
+
+void saveIncludeSubfolders(bool include, QSettings& store) {
+    store.setValue("filmStrip/includeSubfolders", include);
+}
+
+int restoreMaxWatchedFolders(QSettings& store) {
+    bool valid = false;
+    const qlonglong value = store.value("filmStrip/maxWatchedFolders").toLongLong(&valid);
+    if (!valid) {
+        return defaultMaxWatchedFolders;
+    }
+    return static_cast<int>(
+        std::clamp<qlonglong>(value, minWatchedFolders, maxWatchedFoldersLimit));
+}
+
+void saveMaxWatchedFolders(int limit, QSettings& store) {
+    store.setValue("filmStrip/maxWatchedFolders", limit);
 }
 
 AppSettings restoreAppSettings(QSettings& store) {

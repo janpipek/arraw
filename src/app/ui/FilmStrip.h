@@ -1,6 +1,7 @@
 #pragma once
 
 #include "FilmStripRules.h"
+#include "FolderLister.h"
 #include "FolderWatcher.h"
 #include "ShotFilterModel.h"
 #include "ShotModel.h"
@@ -9,11 +10,16 @@
 
 #include <PhotoMarks.h>
 
+#include <QElapsedTimer>
 #include <QImage>
+#include <QKeySequence>
+#include <QList>
 #include <QString>
+#include <QStringList>
 #include <QTimer>
 #include <QWidget>
 
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <optional>
@@ -24,11 +30,17 @@ class QComboBox;
 class QEvent;
 class QLabel;
 class QListView;
+class QMenu;
 class QToolButton;
 
 namespace arraw::app {
 
 class FilmStripDelegate;
+
+/// @brief Lists the keys of Refresh Folder: F5 on every platform and desktop, then the
+/// platform's own `QKeySequence::Refresh` bindings (such as Ctrl+R or the keyboard's Refresh key).
+/// @return The keys, F5 first, without repeats.
+[[nodiscard]] QList<QKeySequence> refreshFolderKeys();
 
 /// @brief Strip of the shots of a folder, to cull and to pick the photograph to develop.
 ///
@@ -53,25 +65,83 @@ public:
     /// @brief Builds an empty strip with its title bar, and starts its thumbnail worker.
     /// @param parent Owning widget.
     /// @param cache Where thumbnails are kept; the application's cache directory by default.
+    /// @param lensDatabase Gives the lens database for thumbnails of photographs with lens
+    /// corrections on, called on the thumbnail thread; empty for the process's own.
     explicit FilmStrip(QWidget* parent = nullptr,
-                       ThumbnailCache cache = ThumbnailCache(ThumbnailCache::defaultRoot()));
+                       ThumbnailCache cache = ThumbnailCache(ThumbnailCache::defaultRoot()),
+                       LensDatabaseSource lensDatabase = {});
 
     /// @brief Stops watching the folder.
     ~FilmStrip() override;
 
     /// @brief Returns the title bar, to give to the dock that holds the strip.
     ///
-    /// The folder button, the folder's name, and the filter controls. Owned by the strip
-    /// until a dock takes it.
+    /// The folder button, the "Include subfolders" toggle, the folder's name, and the filter
+    /// controls. Owned by the strip until a dock takes it.
     /// @return The widget.
     [[nodiscard]] QWidget* titleBar() const noexcept {
         return titleBar_;
     }
 
     /// @brief Shows the shots of a folder, with none of them active.
+    ///
+    /// The folder is only checked here; its shots arrive as a walk on another thread reads them
+    /// (see ::arraw::app::FilmStrip::isListing).
     /// @param folder Folder to list.
-    /// @throws std::runtime_error if the folder cannot be read; the strip is left as it was.
-    void setFolder(const std::filesystem::path& folder);
+    /// @param activate A file (a primary or a companion) whose shot becomes active when the
+    /// listing brings it, without ::arraw::app::FilmStrip::activationRequested: the photograph
+    /// is open already. Nothing becomes active if the listing ends without it.
+    /// @throws std::runtime_error if the folder cannot be opened; the strip is left as it was.
+    void setFolder(const std::filesystem::path& folder,
+                   std::optional<std::filesystem::path> activate = std::nullopt);
+
+    /// @brief Tells whether the first listing of the folder is under way.
+    /// @return True from ::arraw::app::FilmStrip::setFolder until the walk has read everything.
+    [[nodiscard]] bool isListing() const noexcept {
+        return model_.isListing();
+    }
+
+    /// @brief Tells whether a refresh of the folder is under way.
+    /// @return True from ::arraw::app::FilmStrip::refreshFolder until its walk has ended.
+    [[nodiscard]] bool isRefreshing() const noexcept {
+        return model_.isRefreshing();
+    }
+
+    /// @brief Sets a function the lister calls on its thread before it reads each directory.
+    ///
+    /// A seam for tests, which block in it to hold a listing at a known point.
+    /// @param hook Function, or an empty one for none.
+    void setListingHook(FolderLister::ReadHook hook) {
+        watcher_.setReadHook(std::move(hook));
+    }
+
+    /// @brief Sets whether the strip lists the subfolders of its folder.
+    ///
+    /// Updates the "Include subfolders" button and announces
+    /// ::arraw::app::FilmStrip::includeSubfoldersToggled. For a folder that is shown this does
+    /// not list it again (see ::arraw::app::ShotModel::setRecursive): switching on reads the
+    /// subfolders in the background and adds their shots, switching off removes them at once, and
+    /// the shots of the folder itself stay with their selection, marks and thumbnails. The active
+    /// shot stays unless it lay in a subfolder that goes, which leaves the strip without one. The
+    /// flag applies to every folder set afterwards.
+    /// @param include Whether to include the subfolders.
+    void setIncludeSubfolders(bool include);
+
+    /// @brief Sets the question asked before the button drops the subfolders.
+    ///
+    /// Asked when the user switches "Include subfolders" off while the active shot lies in a
+    /// subfolder, which would leave the strip. Answering false cancels the switch: the button
+    /// is checked again and the strip stays as it is. Without a guard the switch goes ahead.
+    /// @param guard Returns whether to go ahead.
+    void setSubfoldersLeaveGuard(std::function<bool()> guard) {
+        subfoldersLeaveGuard_ = std::move(guard);
+    }
+
+    /// @brief Tells whether the strip lists the subfolders.
+    /// @return The flag; off by default.
+    [[nodiscard]] bool includeSubfolders() const noexcept {
+        return includeSubfolders_;
+    }
 
     /// @brief Names the folder shown.
     /// @return The folder, empty before ::arraw::app::FilmStrip::setFolder.
@@ -83,10 +153,13 @@ public:
     ///
     /// Scrolls it into the middle of the strip. A shot the filter hides clears the
     /// filter first: the photograph is open, so it must be seen.
-    /// @param primary Primary file of a shot of this folder; an unknown one is ignored.
+    /// @param primary Primary file of a shot of this folder. An unknown one is ignored, unless
+    /// the folder is still being listed: then no shot is active or selected until the shot that
+    /// holds it, as its primary or a companion, arrives and becomes active (as with
+    /// ::arraw::app::FilmStrip::setFolder's file to activate, which this replaces).
     void setActive(const std::filesystem::path& primary);
 
-    /// @brief Leaves no shot active, and none selected.
+    /// @brief Leaves no shot active, and none selected, and none waiting to be.
     void clearActive();
 
     /// @brief Names the active shot.
@@ -172,20 +245,59 @@ public:
     /// @brief Switches the filter off and resets its controls.
     void clearFilter();
 
+    /// @brief Sets the most folders watched for changes at once, from the next listing on.
+    /// @param limit Cap; see ::arraw::app::restoreMaxWatchedFolders.
+    void setMaxWatchedFolders(int limit);
+
+    /// @brief Walks the folder again in the background and merges what it finds, for the changes
+    /// no watch reported (a folder beyond the limit on watches, a sidecar rewritten in place).
+    ///
+    /// The selection and the active shot stay, and every sidecar is checked. The folder label
+    /// says so while it runs. Does nothing before a folder is shown, and while a listing or a
+    /// refresh is under way (that walk takes the request in).
+    void refreshFolder();
+
+    /// @brief Sets the number of shots at which the notice says the folder is large.
+    ///
+    /// A seam for tests, which cannot list a hundred thousand shots.
+    /// @param shots Shots at which the soft note shows, while the strip holds as many.
+    void setLargeFolderShots(int shots) {
+        largeFolderShots_ = shots;
+    }
+
+    /// @brief Shots at which the notice says the folder is large, unless set otherwise.
+    static constexpr int defaultLargeFolderShots = 100000;
+
+    /// @brief Tells whether the title bar's notice shows: some folders are not watched or cannot
+    /// be read, the folder is unavailable, or the listing is large.
+    ///
+    /// The notice is a button that refreshes the folder, or, when the large-folder note is all it
+    /// says, a plain label.
+    /// @return True while the notice is visible.
+    [[nodiscard]] bool hasWatchNotice() const;
+
     /// @brief Suggests a size for the dock.
     /// @return A strip as high as main's initial one.
     [[nodiscard]] QSize sizeHint() const override;
 
 signals:
+    /// @brief Announces that the strip was given a folder (not a change of the subfolder flag).
+    void folderChanged();
+
     /// @brief Asks the window to make a shot the active one.
     /// @param primary Primary file of the shot.
     void activationRequested(const QString& primary);
 
+    /// @brief Announces that the subfolders are now included or not.
+    /// @param include The new flag.
+    void includeSubfoldersToggled(bool include);
+
     /// @brief Announces that the folder button was pressed.
     void folderRequested();
 
-    /// @brief Asks for the active shot to be exported, from its context menu.
-    void exportRequested();
+    /// @brief Asks for the shots the context menu acts on to be exported.
+    /// @param primaries Primary files of the shots, the selection when the click was on it.
+    void exportRequested(const QStringList& primaries);
 
     /// @brief Announces that the active shot changed.
     void activeChanged();
@@ -194,6 +306,21 @@ signals:
     /// @param primary Primary file of the shot; its marks are already refreshed.
     void sidecarChangedExternally(const QString& primary);
 
+    /// @brief Announces the first shot the strip shows of a folder being listed.
+    ///
+    /// Sent at most once per ::arraw::app::FilmStrip::setFolder (or change of the subfolder
+    /// flag), when the listing brings the first shot the filter lets through; after the shot
+    /// waiting to be active, if it came in the same batch, has become active.
+    /// @param primary Primary file of the shot.
+    void firstShotListed(const QString& primary);
+
+    /// @brief Announces that the first listing of a folder is complete.
+    ///
+    /// Sent from the event loop after the listing ended, so after its
+    /// ::arraw::app::FilmStrip::firstShotListed, if any; not sent for a listing that a later
+    /// ::arraw::app::FilmStrip::setFolder (or change of the subfolder flag) replaced.
+    void listingEnded();
+
 protected:
     /// @brief Handles clicks, context menus and the size of the cells.
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -201,6 +328,42 @@ protected:
 private:
     /// @brief Builds the title bar.
     void buildTitleBar();
+
+    /// @brief Lists a folder in the model and resets what depends on the rows.
+    /// @param folder Folder to list.
+    /// @param activate File whose shot to make active when it arrives.
+    void listFolder(const std::filesystem::path& folder,
+                    std::optional<std::filesystem::path> activate);
+
+    /// @brief Shows the folder's name, a note when its subfolders are included, and one while
+    /// it is listed.
+    void updateFolderLabel();
+
+    /// @brief Takes rows the model inserted: thumbnails, the shot waiting to be active, and the
+    /// first shot shown.
+    /// @param first First row inserted.
+    /// @param last Last row inserted.
+    void takeInsertedRows(int first, int last);
+
+    /// @brief Adds the "Refresh Folder" action to a context menu.
+    /// @param menu Menu to add it to.
+    void addRefreshAction(QMenu& menu);
+
+    /// @brief Takes the watch status of the folder: shows or hides the notice.
+    /// @param status What is watched and what is not.
+    void onWatchStatus(const WatchStatus& status);
+
+    /// @brief Shows the notice for what applies (an unavailable folder, unreadable subfolders,
+    /// unwatched folders, a large listing), or hides it.
+    void updateNotice();
+
+    /// @brief Follows the start and the end of a listing.
+    /// @param listing Whether a listing is under way now.
+    void onListingChanged(bool listing);
+
+    /// @brief Follows the start and the end of a refresh: the busy note says so.
+    /// @param refreshing Whether a refresh is under way now.
+    void onRefreshingChanged(bool refreshing);
 
     /// @brief Takes a thumbnail from the worker.
     void receiveThumbnail(const ThumbnailResult& result);
@@ -218,7 +381,7 @@ private:
     /// @brief Makes the cells as high as the strip allows.
     void updateCellSide();
 
-    /// @brief Shows or hides the note that the filter leaves nothing.
+    /// @brief Shows or hides the note on an empty strip: listing, no photographs, or the filter.
     void updateEmptyHint();
 
     /// @brief Handles a press of the left button on a cell.
@@ -270,6 +433,22 @@ private:
     /// @brief Finds the primary file at a shown index.
     [[nodiscard]] static std::filesystem::path primaryAt(const QModelIndex& index);
 
+    /// @brief What a model reset that merges a refresh must not lose.
+    struct ResetStash {
+        /// Shots selected.
+        std::vector<std::filesystem::path> selected;
+        /// Shot with the focus, empty for none.
+        std::filesystem::path current;
+        /// First shot in view, empty for none.
+        std::filesystem::path anchor;
+    };
+
+    /// @brief Remembers the selection, the current shot and the scroll position before a reset.
+    void stashSelection();
+
+    /// @brief Puts back what ::arraw::app::FilmStrip::stashSelection remembered.
+    void restoreSelection();
+
     ShotModel model_;
     ShotFilterModel proxy_;
     FolderWatcher watcher_;
@@ -278,11 +457,42 @@ private:
     QLabel* emptyHint_ = nullptr;
     QWidget* titleBar_ = nullptr;
     QLabel* folderLabel_ = nullptr;
+    QToolButton* subfoldersButton_ = nullptr;
+    /// Title bar's notice (unavailable, unreadable and unwatched folders, a large listing);
+    /// hidden when none applies.
+    QToolButton* noticeButton_ = nullptr;
+    /// Title bar's large-folder note, in place of the button when it is all the notice says.
+    QLabel* largeNote_ = nullptr;
+    /// Watch status of the folder, all zeros before its walk ends.
+    WatchStatus watchStatus_;
+    /// Shots at which the large-folder note shows.
+    int largeFolderShots_ = defaultLargeFolderShots;
+    /// Whether the listing under way passed that many shots.
+    bool largeNoted_ = false;
+    bool includeSubfolders_ = false;
+    /// Whether the model is being given a new folder, which a reset must not carry a selection
+    /// into.
+    bool changingFolder_ = false;
+    /// Whether the model is dropping the subfolders' rows, whose queued thumbnails go with them.
+    bool droppingSubfolders_ = false;
+    /// Taken when the model starts a reset that merges a refresh; empty otherwise.
+    std::optional<ResetStash> stash_;
+    std::function<bool()> subfoldersLeaveGuard_;
     QComboBox* starChoice_ = nullptr;
     std::vector<std::pair<QToolButton*, ColorLabel>> swatches_;
     QToolButton* clearButton_ = nullptr;
     MarksWriter writer_;
     std::filesystem::path active_;
+    /// File whose shot becomes active once the listing under way brings it.
+    std::optional<std::filesystem::path> pendingActive_;
+    /// Whether ::arraw::app::FilmStrip::firstShotListed was sent for the listing under way.
+    bool firstShotSent_ = false;
+    /// Number of the listing under way, so that a queued first shot of an earlier one is dropped.
+    std::uint64_t listingNumber_ = 0;
+    /// Time since the listing or the refresh under way began.
+    QElapsedTimer listingClock_;
+    /// Updates the folder label's busy note while a listing or a refresh runs.
+    QTimer busyTimer_;
     QTimer activeCheck_;
     bool updatingCells_ = false;
     /// Whether the left button went down on a cell, so that its release is ours too.

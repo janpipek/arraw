@@ -106,7 +106,7 @@ std::vector<std::uint32_t> idsOf(const DevelopState& state) {
 
 // Raw XMP, for the spellings and the damage no writer of ours produces.
 
-constexpr std::string_view arrawNamespace = "http://ns.arraw.org/develop/1.0/";
+constexpr std::string_view arrawNamespace = "http://ns.arraw.org/develop/";
 
 /// One `arraw:` property element.
 std::string field(std::string_view key, std::string_view value) {
@@ -272,7 +272,7 @@ TEST_CASE("The list is a sequence of resource structures beside three properties
     CHECK_THAT(text, ContainsSubstring("<arraw:exposure>0.5</arraw:exposure>"));
     CHECK_THAT(text,
                ContainsSubstring("<arraw:relativeTemperature>-42.5</arraw:relativeTemperature>"));
-    CHECK_THAT(text, ContainsSubstring(R"(arraw:localAdjustmentsVersion="1")"));
+    CHECK_THAT(text, !ContainsSubstring("localAdjustmentsVersion"));
     CHECK_THAT(text, ContainsSubstring(R"(arraw:nextLocalAdjustmentId="4")"));
     // Zero deltas are not written: the first mask has two.
     CHECK(occurrences(text, "<arraw:dehaze>") == 1);
@@ -292,13 +292,12 @@ TEST_CASE("A state with no masks and a fresh counter leaves no trace", "[local][
     fs::remove(bench.sidecar);
     bench.write(DevelopState{});
     CHECK_THAT(slurp(bench.sidecar), !ContainsSubstring("localAdjustments"));
-    // With a raised counter and no masks it leaves the counter and the version.
+    // With a raised counter and no masks it leaves the counter.
     DevelopState counted;
     counted.nextLocalAdjustmentId = LocalAdjustmentId{9};
     bench.write(counted);
     const std::string kept = slurp(bench.sidecar);
     CHECK_THAT(kept, ContainsSubstring(R"(arraw:nextLocalAdjustmentId="9")"));
-    CHECK_THAT(kept, ContainsSubstring(R"(arraw:localAdjustmentsVersion="1")"));
     CHECK(bench.read() == counted);
 }
 
@@ -309,7 +308,7 @@ TEST_CASE("Writing again rewrites the list whole and says each thing once", "[lo
         bench.write(state);
         const std::string text = slurp(bench.sidecar);
         CHECK(occurrences(text, "<arraw:localAdjustments>") == 1);
-        CHECK(occurrences(text, "localAdjustmentsVersion=") == 1);
+        CHECK(occurrences(text, "arraw:version=") == 1);
         CHECK(occurrences(text, "nextLocalAdjustmentId=") == 1);
         CHECK(occurrences(text, "<arraw:id>") == state.localAdjustments.size());
         CHECK(bench.read() == state);
@@ -418,8 +417,8 @@ TEST_CASE("The alternative spellings of RDF read alike", "[local][sidecar]") {
     SECTION("another prefix for the namespace, and the list in another description") {
         const std::string xmp = R"(<x:xmpmeta xmlns:x="adobe:ns:meta/">
  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-  <rdf:Description rdf:about="" xmlns:a="http://ns.arraw.org/develop/1.0/" a:nextLocalAdjustmentId="2"/>
-  <rdf:Description rdf:about="" xmlns:q="http://ns.arraw.org/develop/1.0/">
+  <rdf:Description rdf:about="" xmlns:a="http://ns.arraw.org/develop/" a:nextLocalAdjustmentId="2"/>
+  <rdf:Description rdf:about="" xmlns:q="http://ns.arraw.org/develop/">
    <q:localAdjustments><rdf:Seq><rdf:li rdf:parseType="Resource">
     <q:id>1</q:id><q:type>linear</q:type><q:name>Sky</q:name><q:enabled>True</q:enabled>
     <q:opacity>1</q:opacity><q:invert>True</q:invert><q:fromX>0.5</q:fromX><q:fromY>0.2</q:fromY>
@@ -434,7 +433,7 @@ TEST_CASE("The alternative spellings of RDF read alike", "[local][sidecar]") {
     SECTION("a rdf prefix other than rdf") {
         const std::string xmp = R"(<x:xmpmeta xmlns:x="adobe:ns:meta/">
  <r:RDF xmlns:r="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-  <r:Description r:about="" xmlns:arraw="http://ns.arraw.org/develop/1.0/">
+  <r:Description r:about="" xmlns:arraw="http://ns.arraw.org/develop/">
    <arraw:localAdjustments><r:Seq><r:li r:parseType="Resource">)" +
                                 asElements + R"(</r:li></r:Seq></arraw:localAdjustments>
   </r:Description></r:RDF></x:xmpmeta>)";
@@ -565,7 +564,7 @@ TEST_CASE("A list that is not a sequence is reported and read as empty", "[local
 
     const std::string bag = R"(<x:xmpmeta xmlns:x="adobe:ns:meta/">
  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-  <rdf:Description rdf:about="" xmlns:arraw="http://ns.arraw.org/develop/1.0/">
+  <rdf:Description rdf:about="" xmlns:arraw="http://ns.arraw.org/develop/">
    <arraw:localAdjustments><rdf:Bag/></arraw:localAdjustments>
   </rdf:Description></rdf:RDF></x:xmpmeta>)";
     Hand hand(bag);
@@ -577,16 +576,16 @@ TEST_CASE("A list that is not a sequence is reported and read as empty", "[local
     CHECK(empty.log.entries().empty());
 }
 
-TEST_CASE("A newer list version is read, and then the sidecar is not written back",
+TEST_CASE("A newer sidecar's list is read, and then the sidecar is not written back",
           "[local][sidecar]") {
     Workbench bench;
-    const std::string newer = sidecarWith(R"(arraw:localAdjustmentsVersion="2")",
-                                          item(linearFields(1, field("futureThing", "1"))));
+    const std::string newer =
+        sidecarWith(R"(arraw:version="2")", item(linearFields(1, field("futureThing", "1"))));
     spit(bench.sidecar, newer);
     CollectedDiagnostics log;
     const DevelopState state = bench.read(log);
     CHECK(state.localAdjustments.size() == 1);
-    REQUIRE(count(log, Notice::NewerLocalAdjustmentsVersion) == 1);
+    REQUIRE(count(log, Notice::NewerSettingsVersion) == 1);
     CHECK(count(log, Notice::LocalAdjustmentFieldIgnored) == 1);
 
     CHECK_THROWS_WITH(bench.write(state), ContainsSubstring("newer"));
@@ -594,12 +593,23 @@ TEST_CASE("A newer list version is read, and then the sidecar is not written bac
     CHECK(slurp(bench.sidecar) == newer);
 
     // An unreadable version is not a newer one.
-    spit(bench.sidecar,
-         sidecarWith(R"(arraw:localAdjustmentsVersion="one")", item(linearFields(1))));
+    spit(bench.sidecar, sidecarWith(R"(arraw:version="one")", item(linearFields(1))));
     CollectedDiagnostics unreadable;
     CHECK(bench.read(unreadable).localAdjustments.size() == 1);
     CHECK(count(unreadable, Notice::SettingMalformed) == 1);
     CHECK_NOTHROW(bench.write(state));
+}
+
+TEST_CASE("The list version of an earlier build is ignored, and gone after a write",
+          "[local][sidecar]") {
+    Workbench bench;
+    spit(bench.sidecar, sidecarWith(R"(arraw:localAdjustmentsVersion="1")", item(linearFields(1))));
+    CollectedDiagnostics log;
+    const DevelopState state = bench.read(log);
+    CHECK(state.localAdjustments.size() == 1);
+    CHECK(log.entries().empty());
+    bench.write(state);
+    CHECK_THAT(slurp(bench.sidecar), !ContainsSubstring("localAdjustmentsVersion"));
 }
 
 TEST_CASE("Writing the marks leaves the list as it is", "[local][sidecar]") {
@@ -771,7 +781,7 @@ TEST_CASE("A brush reads in each spelling the structure may take", "[local][side
     SECTION("another prefix for both namespaces") {
         const std::string xmp = R"(<x:xmpmeta xmlns:x="adobe:ns:meta/">
  <r:RDF xmlns:r="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-  <r:Description r:about="" xmlns:q="http://ns.arraw.org/develop/1.0/">
+  <r:Description r:about="" xmlns:q="http://ns.arraw.org/develop/">
    <q:localAdjustments><r:Seq><r:li r:parseType="Resource">
     <q:id>1</q:id><q:type>brush</q:type><q:rasteriser>1</q:rasteriser><q:exposure>0.5</q:exposure>
     <q:strokes><r:Seq><r:li>)" + strokeBase64(one) +

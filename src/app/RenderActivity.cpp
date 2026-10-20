@@ -89,6 +89,8 @@ QString renderStepText(ProgressStep step) {
         return text("Decoding…");
     case ProgressStep::Denoise:
         return text("Reducing noise…");
+    case ProgressStep::Lens:
+        return text("Correcting the lens…");
     case ProgressStep::Context:
         return text("Analysing local contrast…");
     case ProgressStep::Coverage:

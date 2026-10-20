@@ -52,7 +52,7 @@ enum class StrokeDetail {
 /// @brief Writes a whole develop state as a JSON document.
 ///
 /// The settings document of ::arraw::settingsToJson plus one key (ADR 044):
-/// `"localAdjustments": {"version": 1, "nextId": 4, "masks": [...]}`, which is always written, an
+/// `"localAdjustments": {"nextId": 4, "masks": [...]}`, which is always written, an
 /// empty `masks` included, so that a written state applied onto any base gives that state back.
 /// Each mask is `{"id", "type", "name", "enabled", "opacity", "invert", "geometry", "deltas"}`;
 /// only non-zero deltas are written. A linear mask's geometry is `{"from": [x, y], "to": [x, y]}`,
@@ -71,7 +71,7 @@ enum class StrokeDetail {
 /// @param state State whose list to write.
 /// @param detail Whether a brush's strokes are written whole, or as `{"count": n, "hash": "..."}`
 /// (the digest is for keys only, and is never read back).
-/// @return The object, `{"version": 1, "nextId": n, "masks": [...]}`.
+/// @return The object, `{"nextId": n, "masks": [...]}`.
 /// @throws std::invalid_argument if @p state fails ::arraw::validate.
 [[nodiscard]] std::string localAdjustmentsToJson(const DevelopState& state,
                                                  StrokeDetail detail = StrokeDetail::Points);
@@ -87,8 +87,8 @@ enum class StrokeDetail {
 /// a brush's unreadable or over-budget strokes are dropped and its numbers clamped
 /// (::arraw::Notice::BrushStrokesTrimmed); an unknown field is ignored
 /// (::arraw::Notice::LocalAdjustmentFieldIgnored); a number out of range is clamped
-/// (::arraw::Notice::SettingClamped); a version newer than ::arraw::localAdjustmentsVersion is
-/// read as far as it is understood (::arraw::Notice::NewerLocalAdjustmentsVersion). The counter
+/// (::arraw::Notice::SettingClamped); the list has no version of its own, the document's
+/// `"arraw"` governs it, and an earlier build's `"version"` in the list is ignored. The counter
 /// is the stored one raised above every id kept. A `localAdjustments` that is not an object, or
 /// whose `masks` is not a list, is reported (::arraw::Notice::SettingMalformed) and leaves the
 /// base's list as it was.
@@ -103,7 +103,12 @@ enum class StrokeDetail {
 /// @brief Writes negative settings as a JSON object on one line.
 ///
 /// The object that sits beside `"settings"` in the documents describing a photograph (ADR 049),
-/// such as `{"demosaic": "vng"}`. It is not part of ::arraw::stateToJson.
+/// such as `{"demosaic": "vng"}`. It is not part of ::arraw::stateToJson. Lens corrections are
+/// written as `"lens": {"distortion": true, "vignetting": 0, "lateralCa": false, "recorded":
+/// {"maker": ..., "model": ..., "cropFactor": 1.6, "origin": "matched", "database": ...}}`, where
+/// `"vignetting"` is the amount in percent of the profile (0 to 150), only
+/// when something is on or recorded (`"recorded"` only when a lens is), so a negative without
+/// lens corrections reads as it did before they existed.
 /// @param negative Settings to write.
 /// @return The object.
 /// @throws std::invalid_argument if @p negative fails ::arraw::validate.
@@ -114,7 +119,11 @@ enum class StrokeDetail {
 /// A key that is absent leaves the base alone. An unknown key is skipped with
 /// ::arraw::Notice::SettingUnknown, and a `demosaic` that is not one of
 /// ::arraw::demosaicTokens (or not a string) with ::arraw::Notice::SettingMalformed, which
-/// leaves the base's value.
+/// leaves the base's value. Likewise for the parts of `lens` (a switch that is not a boolean, a
+/// recorded lens without a model or with a crop factor that is not positive, which leaves the
+/// base's record; `"recorded": null` clears it). A vignetting amount outside 0 to 150 is clamped
+/// with ::arraw::Notice::SettingClamped (key `lens.vignetting`), and `true` and `false` read as
+/// 100 and 0.
 /// @param json The object.
 /// @param base Settings the object's keys are applied onto.
 /// @param log Where the warnings go.
