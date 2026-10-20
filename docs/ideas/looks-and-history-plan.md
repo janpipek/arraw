@@ -254,10 +254,10 @@ the keys of the carried sections:
 - No second format, unlike `main`'s separate `"groups"` object.
 
 **The store.** A `PresetStore` in core:
-- one file per preset in `QStandardPaths::AppDataLocation/presets` (core links
-  Qt Core already);
+- one file per preset in `develop-presets/` of `configDirectory()` (ADR 054 section 2; core
+  links Qt Core already);
 - the directory is injected for tests;
-- `defaultPresetDirectory()` is the one place the path is made, so the GUI, the
+- `configDirectory()` is the one place the path is made, so the GUI, the
   CLI and Python all see the same presets (`main`'s ADR 0051 lesson);
 - it can list, read, save, rename and remove;
 - file names are sanitised, and names collide case-insensitively.

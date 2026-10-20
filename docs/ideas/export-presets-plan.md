@@ -1,6 +1,6 @@
 # Export presets: one shared, versioned file — plan
 
-Status: steps 1 to 4 implemented, 2026-10-20. Decision record:
+Status: implemented (steps 1 to 9), 2026-10-20; the review's fixes are in. Decision record:
 [ADR 054](../adr/054-export-presets-live-in-one-versioned-file-the-library-reads-and-writes.md).
 Answers `docs/todo.md`, "GUI tasks", "Export presets".
 

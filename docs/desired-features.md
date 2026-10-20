@@ -87,6 +87,11 @@ heavy edits don't collapse saturated colours early in the chain. Practically:
 
 - **Copy / paste settings** between images, with a checklist of which groups to carry over.
 - **Batch paste and batch export** across a multi-selection.
+- **Export presets** — named, whole export settings (format, profile, size, quality,
+  metadata), kept in one file that the app, the command line and Python all read. Pick one in
+  the export dialog, or from **Export with Preset** in the film strip and the File menu to export
+  without being asked; save, update, rename and delete them in the dialog. Four built-in presets
+  (web, social, full-size JPEG, print TIFF) come with arraw.
 - **Develop presets** — named, *partial* bundles (e.g. just the tone curve and grain),
   saved by name and manageable in one dialog.
 - **Snapshots** — named A/B versions of an image's full develop state, stored per image, so
@@ -100,6 +105,8 @@ Arraw is also a command, running the identical pipeline headless:
 ```bash
 arraw-cli export *.arw -o out/   # render every file through its own sidecar
 arraw-cli preset list            # list, show, or apply saved presets
+arraw-cli export-preset list     # list or show the saved export presets
+arraw-cli export *.arw -o out/ --export-preset "Web 2048 px"
 arraw-cli info photo.arw         # size, encoding, EXIF, sidecar marks and edits, read-only
 ```
 

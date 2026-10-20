@@ -1,6 +1,6 @@
 # Export presets live in one versioned file that the library reads and writes
 
-Status: accepted, 2026-10-20 (the library, with the file format, the store and the built-in presets, is implemented; the front ends follow). The plan is
+Status: accepted, 2026-10-20; implemented in the library, the CLI, Python and the app. The plan is
 [export-presets-plan.md](../ideas/export-presets-plan.md). Answers `docs/todo.md`, "GUI tasks",
 "Export presets".
 
@@ -234,7 +234,9 @@ reads as empty, and can be written.
   `Notice::ExportPresetsUnreadable`. It never throws for the file's content.
 - **Every write refuses** (`UnreadableFile`), and the file stays as it was.
 - `setAside()` renames the file to `export-presets.unreadable-<YYYYMMDD-HHMMSS>.json`, never
-  replacing an existing file, and returns the new path. The next write then starts a new file. The
+  replacing an existing file, and returns the new path. The next write then starts a new file.
+  Under the lock it re-reads the file and moves it only if it is unreadable still: a newer arraw's
+  file (`NewerFile`) and one that reads fine (`NotUnreadable`) stay where they are. The
   app offers this behind a confirmation that names both paths. The CLI and Python only report the
   problem; Python can call `set_aside()` explicitly.
 
@@ -262,8 +264,10 @@ button (**Update "Name"**, **Rename…**, **Delete…**, **Show File**).
 - The combo lists the usable presets in order (the built-in ones first, in a section of their own)
   and the unusable ones disabled, each with its reason as a tooltip. A built-in cannot be updated,
   renamed or deleted, so those menu items are disabled for it; Save As works from it. A preset of
-  the file that shadows a built-in is listed disabled, with the reason "hidden by the built-in
-  preset of the same name", and can be renamed or deleted. With no presets at all (only possible
+  the file that shadows a built-in is listed as "name (hidden by a built-in)", with the reason
+  "hidden by the built-in preset of the same name" as a tooltip. It can be chosen, to be renamed or
+  deleted; Update and OK stay disabled for it, and the remembered preset name is not set, so that
+  `export/preset` never holds a name that resolves to the built-in. With no presets at all (only possible
   if built-ins are removed from the code) it shows the disabled item "No presets".
 - Choosing a preset sets every control. Changing any control afterwards marks it **modified**: the
   item reads "Web 2048 (modified)" and Update becomes available. Changing the controls back clears
@@ -303,7 +307,8 @@ rename and delete in v1); auto-selecting a preset whenever the controls happen t
 - New command `export-preset`, with `list` (names on stdout, one per line, with built-in ones marked `(built-in)`;
   unusable ones and warnings on stderr), `show NAME` (the preset as this arraw writes it, a JSON object on stdout)
   and `path` (the file's path, whether it exists or not). `export` and `export-preset` take
-  `--config-dir DIR`, and `ARRAW_CONFIG_DIR` covers the rest.
+  `--config-dir DIR`, and `ARRAW_CONFIG_DIR` covers the rest. Without `--export-preset`, `export`
+  ignores `--config-dir`.
 - The CLI writes no presets in v1; scripts write through Python. *Alternative:*
   `export-preset save NAME [export flags]` and `delete NAME`, which reuse the export flag parser.
   They are easy to add later, since the command word is reserved now.
@@ -363,8 +368,9 @@ they would appear only after the first save).
 
 ## What was rejected, and why
 
-- **`QStandardPaths::AppConfigLocation` in the library.** Its answer depends on the process's application name, and the CLI and Python do not set it (section 2). The generic location is used instead.
-  the CLI and Python do not set it (section 2).
+- **`QStandardPaths::AppConfigLocation` in the library.** Its answer depends on the process's
+  application name, and the CLI and Python do not set it (section 2). The generic location is used
+  instead.
 - **Keeping presets in `QSettings`.** The CLI does not read it, Windows keeps it in the registry,
   and the user decided against it.
 - **Partial presets** (only the keys that differ). Flags already give the CLI partial overrides,
