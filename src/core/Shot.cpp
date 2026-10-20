@@ -152,14 +152,17 @@ std::vector<Shot> arraw::groupShots(std::vector<std::filesystem::path> paths) {
     return shots;
 }
 
-namespace {
-
-/// @brief Tells whether a folder is the clutter that NAS boxes and desktops leave beside
-/// photographs.
-bool isJunkFolder(const std::string& name) {
-    return name == "@eaDir" || name == "#recycle" || name == "$RECYCLE.BIN" ||
-           name == "System Volume Information";
+bool arraw::isListedFolder(const std::filesystem::directory_entry& entry) {
+    std::error_code error;
+    if (entry.symlink_status(error).type() != std::filesystem::file_type::directory) {
+        return false;
+    }
+    const std::string name = utf8(entry.path().filename());
+    return !name.starts_with('.') && name != "@eaDir" && name != "#recycle" &&
+           name != "$RECYCLE.BIN" && name != "System Volume Information";
 }
+
+namespace {
 
 /// @brief Lists the regular files of one folder, throwing if it cannot be read.
 std::vector<std::filesystem::path> filesOf(const std::filesystem::path& folder) {
@@ -186,34 +189,58 @@ std::vector<std::filesystem::path> filesOf(const std::filesystem::path& folder) 
     return files;
 }
 
-/// @brief Lists the regular files of a folder tree; only the root can make it throw.
-std::vector<std::filesystem::path> filesUnder(const std::filesystem::path& folder) {
-    std::error_code error;
-    std::filesystem::recursive_directory_iterator entries(
-        folder, std::filesystem::directory_options::skip_permission_denied, error);
-    if (error) {
-        throw std::runtime_error(folder.string() + ": " + error.message());
-    }
+/// @brief Lists the regular files of a folder tree, folder by folder.
+///
+/// Only the root can make it throw. Any other folder that cannot be opened or read to
+/// the end (permission denied, vanished, a dead mount) is skipped, and the walk goes on
+/// with its siblings.
+std::vector<std::filesystem::path> filesUnder(const std::filesystem::path& root) {
     std::vector<std::filesystem::path> files;
-    for (const std::filesystem::recursive_directory_iterator end; entries != end;) {
-        const std::filesystem::path& path = entries->path();
-        const std::string name = utf8(path.filename());
-        std::error_code ignored;
-        const auto type = entries->symlink_status(ignored).type();
-        if (type == std::filesystem::file_type::directory) {
-            if (name.starts_with('.') || isJunkFolder(name)) {
-                entries.disable_recursion_pending();
-            }
-        } else if (!name.starts_with('.') && std::filesystem::is_regular_file(path, ignored)) {
-            files.push_back(path);
-        }
-        // A subfolder that cannot be read ends the walk of that branch only.
-        entries.increment(error);
+    std::vector<std::filesystem::path> pending{root};
+    while (!pending.empty()) {
+        const std::filesystem::path folder = std::move(pending.back());
+        pending.pop_back();
+        std::error_code error;
+        std::filesystem::directory_iterator entries(folder, error);
         if (error) {
-            break;
+            if (folder == root) {
+                throw std::runtime_error(folder.string() + ": " + error.message());
+            }
+            continue;
+        }
+        for (const std::filesystem::directory_iterator end; entries != end;
+             entries.increment(error)) {
+            if (error) {
+                break;
+            }
+            const std::filesystem::path& path = entries->path();
+            if (isListedFolder(*entries)) {
+                pending.push_back(path);
+                continue;
+            }
+            std::error_code ignored;
+            if (!path.filename().native().starts_with('.') &&
+                std::filesystem::is_regular_file(path, ignored)) {
+                files.push_back(path);
+            }
         }
     }
     return files;
+}
+
+/// @brief Compares two folders component by component, so that a folder's subtree follows it.
+int compareFolders(const std::filesystem::path& left, const std::filesystem::path& right) {
+    auto a = left.begin();
+    auto b = right.begin();
+    for (; a != left.end() && b != right.end(); ++a, ++b) {
+        if (const int order = compareNatural(utf8(*a), utf8(*b)); order != 0) {
+            return order;
+        }
+    }
+    if (a == left.end() && b == right.end()) {
+        return 0;
+    }
+    return a == left.end() ? -1 : 1;
 }
 
 } // namespace
@@ -232,12 +259,10 @@ std::vector<Shot> arraw::listShots(const std::filesystem::path& folder, bool rec
         folders.push_back(entry.first);
     }
     std::ranges::sort(folders, [](const auto& left, const auto& right) {
-        const std::string a = utf8(left);
-        const std::string b = utf8(right);
-        if (const int order = compareNatural(a, b); order != 0) {
+        if (const int order = compareFolders(left, right); order != 0) {
             return order < 0;
         }
-        return a < b;
+        return utf8(left) < utf8(right);
     });
     std::vector<Shot> shots;
     for (const auto& parent : folders) {

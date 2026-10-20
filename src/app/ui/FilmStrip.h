@@ -85,6 +85,16 @@ public:
     /// @param include Whether to include the subfolders.
     void setIncludeSubfolders(bool include);
 
+    /// @brief Sets the question asked before the button drops the subfolders.
+    ///
+    /// Asked when the user switches "Include subfolders" off while the active shot lies in a
+    /// subfolder, which would leave the strip. Answering false cancels the switch: the button
+    /// is checked again and the strip stays as it is. Without a guard the switch goes ahead.
+    /// @param guard Returns whether to go ahead.
+    void setSubfoldersLeaveGuard(std::function<bool()> guard) {
+        subfoldersLeaveGuard_ = std::move(guard);
+    }
+
     /// @brief Tells whether the strip lists the subfolders.
     /// @return The flag; off by default.
     [[nodiscard]] bool includeSubfolders() const noexcept {
@@ -308,6 +318,7 @@ private:
     QLabel* folderLabel_ = nullptr;
     QToolButton* subfoldersButton_ = nullptr;
     bool includeSubfolders_ = false;
+    std::function<bool()> subfoldersLeaveGuard_;
     QComboBox* starChoice_ = nullptr;
     std::vector<std::pair<QToolButton*, ColorLabel>> swatches_;
     QToolButton* clearButton_ = nullptr;

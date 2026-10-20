@@ -38,6 +38,16 @@ struct Shot {
 /// @return The shots.
 [[nodiscard]] std::vector<Shot> groupShots(std::vector<std::filesystem::path> paths);
 
+/// @brief Tells whether a directory entry is a folder that the recursive listing enters.
+///
+/// A real directory (not a symbolic link to one) that is not hidden (a name that begins
+/// with a dot) and not the clutter of NAS and desktop systems (`@eaDir`, `#recycle`,
+/// `$RECYCLE.BIN`, `System Volume Information`). The one rule ::arraw::listShots and the
+/// folder watcher share.
+/// @param entry Entry to judge.
+/// @return Whether to enter it; false for files and for entries that cannot be examined.
+[[nodiscard]] bool isListedFolder(const std::filesystem::directory_entry& entry);
+
 /// @brief Lists the shots of a folder.
 ///
 /// The regular files of the folder itself, without hidden ones (names that
@@ -45,9 +55,10 @@ struct Shot {
 ///
 /// With @p recursive the subfolders are listed too, to any depth. Hidden
 /// folders, symbolic links to folders and the clutter of NAS and desktop
-/// systems (`@eaDir`, `#recycle`, `$RECYCLE.BIN`) are not entered, and a
-/// subfolder that cannot be read is skipped without a word. The shots come
-/// folder by folder in natural order of the folder paths (the folder itself
+/// systems are not entered (see ::arraw::isListedFolder), and a subfolder that
+/// cannot be read is skipped without a word, its siblings still listed. The shots come
+/// folder by folder in natural order of the folder paths, compared component by
+/// component so that a folder is followed by its subfolders (the folder itself
 /// first), and in the order of ::arraw::groupShots within a folder. Files pair
 /// only within one folder, so the same name in two folders is two shots.
 /// @param folder Folder to list.

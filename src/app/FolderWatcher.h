@@ -3,6 +3,7 @@
 #include <QFileSystemWatcher>
 #include <QObject>
 #include <QString>
+#include <QStringList>
 #include <QTimer>
 
 #include <chrono>
@@ -56,6 +57,12 @@ public:
     /// the file that leaves that time is not reported as external.
     /// @param sidecar Path of the sidecar written (see ::arraw::sidecarPath).
     void noteOwnWrite(const std::filesystem::path& sidecar);
+
+    /// @brief Lists the directories under watch.
+    /// @return Their paths, as Qt spells them.
+    [[nodiscard]] QStringList watchedDirectories() const {
+        return watcher_.directories();
+    }
 
 signals:
     /// @brief Announces that another program changed a shot's sidecar.

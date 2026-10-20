@@ -2,6 +2,7 @@
 
 #include "ShotModel.h"
 
+#include <Shot.h>
 #include <Sidecar.h>
 
 #include <QStringList>
@@ -24,7 +25,7 @@ std::filesystem::path normalised(const std::filesystem::path& path) {
 
 /// @brief Lists a folder and its sub-directories, shallowest first, to a limit.
 ///
-/// Hidden and symbolic-link directories are left out, as ::arraw::listShots leaves them.
+/// Enters the folders ::arraw::isListedFolder accepts, as ::arraw::listShots does.
 QStringList directoriesToWatch(const std::filesystem::path& root, int limit) {
     QStringList result;
     std::vector<std::filesystem::path> level{root};
@@ -40,10 +41,7 @@ QStringList directoriesToWatch(const std::filesystem::path& root, int limit) {
                 directory, std::filesystem::directory_options::skip_permission_denied, error);
             for (const std::filesystem::directory_iterator end; !error && entries != end;
                  entries.increment(error)) {
-                std::error_code ignored;
-                const auto name = entries->path().filename().native();
-                if (!name.starts_with('.') && entries->symlink_status(ignored).type() ==
-                                                  std::filesystem::file_type::directory) {
+                if (isListedFolder(*entries)) {
                     next.push_back(entries->path());
                 }
             }

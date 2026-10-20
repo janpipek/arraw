@@ -32,6 +32,11 @@ namespace {
 
 namespace fs = std::filesystem;
 
+/// A relative path as the tooltip shows it: with the separator of the platform.
+QString native(const char* relative) {
+    return QString::fromStdU16String(fs::path(relative).make_preferred().u16string());
+}
+
 /// Runs the event loop until a condition holds; false if it does not within the time.
 bool waitUntil(const std::function<bool()>& condition,
                std::chrono::milliseconds timeout = std::chrono::milliseconds(5000)) {
@@ -473,7 +478,8 @@ TEST_CASE("A recursive model lists the subfolders and names them in the tooltip"
     REQUIRE(model.rowOf(inB) == 2);
     REQUIRE(settle(model));
     REQUIRE(model.index(0).data(Qt::ToolTipRole).toString().startsWith("IMG_1.dng\n"));
-    REQUIRE(model.index(1).data(Qt::ToolTipRole).toString().startsWith("a/IMG_1.dng\n"));
+    REQUIRE(
+        model.index(1).data(Qt::ToolTipRole).toString().startsWith(native("a/IMG_1.dng") + "\n"));
     REQUIRE(model.index(2).data(Qt::DisplayRole).toString() == "IMG_1.dng");
 }
 
@@ -485,7 +491,10 @@ TEST_CASE("The display role is the bare file name, also in a subfolder", "[shotm
     model.setFolder(folder.path(), true);
     REQUIRE(model.rowCount() == 1);
     CHECK(display(model, 0) == "IMG_0042.dng");
-    CHECK(model.index(0).data(Qt::ToolTipRole).toString().startsWith("day1/raw/IMG_0042.dng"));
+    CHECK(model.index(0)
+              .data(Qt::ToolTipRole)
+              .toString()
+              .startsWith(native("day1/raw/IMG_0042.dng")));
 }
 
 TEST_CASE("The watcher sees a file added in a sub-directory, and in a new one",
@@ -502,11 +511,34 @@ TEST_CASE("The watcher sees a file added in a sub-directory, and in a new one",
     const fs::path inSub = addRaw(folder, "sub/IMG_2.dng");
     REQUIRE(waitUntil([&] { return model.rowOf(inSub) >= 0; }));
 
-    // A sub-directory made later joins the watch once the model has refreshed.
+    // A sub-directory made later joins the watch once the model has refreshed; the file goes
+    // in only when it does, so that only the watch can show it.
     fs::create_directories(folder.file("later"));
-    REQUIRE(waitUntil([&] { return model.rowCount() == 2; }));
-    waitUntil([] { return false; }, std::chrono::milliseconds(200));
+    const QString later = QString::fromStdU16String(folder.file("later").u16string());
+    REQUIRE(waitUntil([&] { return watcher.watchedDirectories().contains(later); }));
     const fs::path inLater = addRaw(folder, "later/IMG_3.dng");
     REQUIRE(waitUntil([&] { return model.rowOf(inLater) >= 0; }));
     REQUIRE(settle(model));
+}
+
+TEST_CASE("The watcher watches the folders the listing enters and no others",
+          "[shotmodel][watcher][recursive]") {
+    const test::TempDir folder;
+    for (const char* name : {"real/deep", ".hidden", "@eaDir/IMG_1.dng", "#recycle", "$RECYCLE.BIN",
+                             "System Volume Information"}) {
+        fs::create_directories(folder.file(name));
+    }
+    addRaw(folder, "IMG_1.dng");
+    std::error_code error;
+    fs::create_directory_symlink(folder.file("real"), folder.file("link"), error);
+    ShotModel model;
+    FolderWatcher watcher(model, std::chrono::milliseconds(20));
+    model.setFolder(folder.path(), true);
+
+    std::set<fs::path> expected{folder.path(), folder.file("real"), folder.file("real/deep")};
+    std::set<fs::path> watched;
+    for (const QString& entry : watcher.watchedDirectories()) {
+        watched.insert(fs::path(entry.toStdU16String()));
+    }
+    REQUIRE(watched == expected);
 }

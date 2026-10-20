@@ -314,8 +314,11 @@ std::filesystem::path ShotModel::shownName(const Shot& shot) const {
         return {};
     }
     std::filesystem::path relative = shot.primary.lexically_relative(folder_);
-    return relative.has_parent_path() && *relative.begin() != ".." ? relative
-                                                                   : std::filesystem::path();
+    if (!relative.has_parent_path() || *relative.begin() == "..") {
+        return {};
+    }
+    // Shown with the separator of the platform.
+    return relative.make_preferred();
 }
 
 void ShotModel::refresh() {

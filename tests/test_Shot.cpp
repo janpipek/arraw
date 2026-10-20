@@ -353,3 +353,64 @@ TEST_CASE("Listing without recursion leaves the subfolders alone", "[shot][list]
     REQUIRE(listShots(directory.path()) == std::vector{shotOf(directory.file("b.jpg"))});
     REQUIRE(listShots(directory.path(), false) == listShots(directory.path()));
 }
+
+TEST_CASE("Listing recursively keeps a folder's subtree next to it", "[shot][list][recursive]") {
+    const test::TempDir directory;
+    for (const char* name : {"Rome/raw", "Rome 2", "Trip-2", "Trip/day1"}) {
+        fs::create_directories(directory.file(name));
+        touch(directory.file(name) / "x.jpg");
+    }
+    touch(directory.file("Rome/x.jpg"));
+    touch(directory.file("Trip/x.jpg"));
+
+    std::vector<fs::path> folders;
+    for (const auto& shot : listShots(directory.path(), true)) {
+        folders.push_back(shot.primary.parent_path());
+    }
+    REQUIRE(folders == std::vector{directory.file("Rome"), directory.file("Rome/raw"),
+                                   directory.file("Rome 2"), directory.file("Trip"),
+                                   directory.file("Trip/day1"), directory.file("Trip-2")});
+}
+
+TEST_CASE("Listing recursively skips a folder that cannot be read and goes on",
+          "[shot][list][recursive]") {
+    const test::TempDir directory;
+    fs::create_directories(directory.file("a"));
+    fs::create_directories(directory.file("locked/inner"));
+    fs::create_directories(directory.file("z"));
+    touch(directory.file("a/1.jpg"));
+    touch(directory.file("locked/2.jpg"));
+    touch(directory.file("locked/inner/3.jpg"));
+    touch(directory.file("z/4.jpg"));
+    fs::permissions(directory.file("locked"), fs::perms::none);
+    std::error_code error;
+    const bool readable =
+        fs::directory_iterator(directory.file("locked"), error) != fs::directory_iterator() ||
+        !error;
+    const auto shots = listShots(directory.path(), true);
+    fs::permissions(directory.file("locked"), fs::perms::owner_all);
+    if (readable) {
+        SKIP("permissions are not enforced here (running as the superuser?)");
+    }
+    REQUIRE(shots ==
+            std::vector{shotOf(directory.file("a/1.jpg")), shotOf(directory.file("z/4.jpg"))});
+}
+
+TEST_CASE("The listed-folder rule refuses hidden, junk and linked folders",
+          "[shot][list][recursive]") {
+    const test::TempDir directory;
+    for (const char* name :
+         {"real", ".hidden", "@eaDir", "#recycle", "$RECYCLE.BIN", "System Volume Information"}) {
+        fs::create_directories(directory.file(name));
+    }
+    touch(directory.file("file.jpg"));
+    std::error_code error;
+    fs::create_directory_symlink(directory.file("real"), directory.file("link"), error);
+    const bool linked = !error;
+    for (const auto& entry : fs::directory_iterator(directory.path())) {
+        const std::string name = entry.path().filename().string();
+        INFO(name);
+        CHECK(isListedFolder(entry) == (name == "real"));
+    }
+    CHECK(linked == fs::is_symlink(directory.file("link")));
+}

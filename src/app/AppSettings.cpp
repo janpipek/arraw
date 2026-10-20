@@ -14,8 +14,19 @@ std::optional<std::filesystem::path> restoreOpenPath(QSettings& store) {
     const std::filesystem::path file(store.value("lastFile").toString().toStdU16String());
     const std::filesystem::path folder(store.value("lastFolder").toString().toStdU16String());
     std::error_code error;
-    if (!file.empty() && std::filesystem::is_regular_file(file, error) &&
-        (folder.empty() || file.parent_path().lexically_normal() == folder.lexically_normal())) {
+    // With subfolders listed the remembered folder is the strip's, and may hold the file below.
+    const auto holds = [&] {
+        if (folder.empty()) {
+            return true;
+        }
+        const auto parent = file.parent_path().lexically_normal();
+        if (parent == folder.lexically_normal()) {
+            return true;
+        }
+        const auto relative = parent.lexically_relative(folder.lexically_normal());
+        return restoreIncludeSubfolders(store) && !relative.empty() && *relative.begin() != "..";
+    };
+    if (!file.empty() && std::filesystem::is_regular_file(file, error) && holds()) {
         return file;
     }
     if (!folder.empty() && std::filesystem::is_directory(folder, error)) {

@@ -1608,6 +1608,19 @@ void MainWindow::openInitialPath(const std::optional<std::filesystem::path>& pat
     if (std::filesystem::is_directory(absolute, error)) {
         openFolder(absolute);
     } else {
+        // A photograph restored from below the strip's remembered folder: list that folder
+        // first, so that the strip is what it was.
+        if (!path && filmStrip_->includeSubfolders()) {
+            const std::filesystem::path root(store.value("lastFolder").toString().toStdU16String());
+            if (!root.empty() &&
+                root.lexically_normal() != absolute.parent_path().lexically_normal()) {
+                try {
+                    filmStrip_->setFolder(root);
+                } catch (const std::exception&) {
+                    // openFile lists the photograph's own folder instead.
+                }
+            }
+        }
         openFile(absolute);
     }
 }
@@ -1630,15 +1643,9 @@ void MainWindow::openFile(const std::filesystem::path& path) {
             return;
         }
         const std::filesystem::path folder = path.parent_path();
-        // With subfolders listed, a photograph below the listed folder is already in the strip.
-        const auto below = [&] {
-            const auto relative = folder.lexically_normal().lexically_relative(
-                filmStrip_->folder().lexically_normal());
-            return !relative.empty() && *relative.begin() != "..";
-        };
-        const bool listed =
-            filmStrip_->folder().lexically_normal() == folder.lexically_normal() ||
-            (filmStrip_->includeSubfolders() && !filmStrip_->folder().empty() && below());
+        // Asked of the strip's own listing: a path under a folder it skips (a symbolic link,
+        // a hidden folder) or has not refreshed yet is not listed, however it is spelled.
+        const bool listed = filmStrip_->shotContaining(path).has_value();
         if (!listed) {
             try {
                 const detail::TimingSpan folderTiming("window.folder.scan");
@@ -1652,7 +1659,6 @@ void MainWindow::openFile(const std::filesystem::path& path) {
             }
         }
         showPhoto(std::move(photo));
-        rememberFolder(folder);
         // The shot that holds the file, as its primary or as a companion; the file the user
         // chose stays the one developed.
         if (const auto shot = filmStrip_->shotContaining(path)) {
@@ -1687,7 +1693,7 @@ void MainWindow::openFolder(const std::filesystem::path& folder) {
             tr("%1\n\n%2").arg(toQString(folder), QString::fromUtf8(error.what())));
         return;
     }
-    rememberFolder(folder);
+    rememberFolder(filmStrip_->folder());
     QSettings().remove("lastFile");
     if (const auto first = filmStrip_->firstVisible()) {
         activateShot(toQString(*first));
@@ -1744,6 +1750,22 @@ void MainWindow::buildFilmStripDock() {
     filmStrip_->setMarksWriter([this](const std::filesystem::path& primary,
                                       const PhotoMarks& marks) { writeMarks(primary, marks); });
     connect(filmStrip_, &FilmStrip::activationRequested, this, &MainWindow::activateShot);
+    // Dropping the subfolders may take the open photograph out of the strip: ask about its
+    // unsaved edits first, and move on to the first shot that is left.
+    filmStrip_->setSubfoldersLeaveGuard([this] { return confirmLeavingPhoto(); });
+    connect(filmStrip_, &FilmStrip::includeSubfoldersToggled, this, [this](bool include) {
+        if (include || !open_) {
+            return;
+        }
+        const auto& path = open_->session.photo().path();
+        if (filmStrip_->shotContaining(path).has_value()) {
+            return;
+        }
+        // An empty listing leaves the photograph open, without an active shot.
+        if (const auto first = filmStrip_->firstVisible()) {
+            activateShot(toQString(*first));
+        }
+    });
     connect(filmStrip_, &FilmStrip::folderRequested, this, &MainWindow::openFolderWithDialog);
     connect(filmStrip_, &FilmStrip::exportRequested, this, &MainWindow::exportWithDialog);
     connect(filmStrip_, &FilmStrip::sidecarChangedExternally, this,
@@ -2263,7 +2285,10 @@ void MainWindow::showPhoto(Photo photo) {
     renderIndicator_->report(0.0, ProgressStep::Decode);
     updateEditingActions();
     refreshPanel(); // The sidecar's state at once; the render waits for the pixels.
-    rememberFolder(path.parent_path());
+    // The strip's folder, not the photograph's: with subfolders it may lie below it.
+    if (!filmStrip_->folder().empty()) {
+        rememberFolder(filmStrip_->folder());
+    }
     QSettings().setValue("lastFile", QFileInfo(toQString(path)).absoluteFilePath());
 }
 

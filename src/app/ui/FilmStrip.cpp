@@ -367,7 +367,18 @@ void FilmStrip::buildTitleBar() {
     subfoldersButton_->setAutoRaise(true);
     subfoldersButton_->setToolTip(tr("Include subfolders"));
     subfoldersButton_->setFocusPolicy(Qt::NoFocus);
-    connect(subfoldersButton_, &QToolButton::toggled, this, &FilmStrip::setIncludeSubfolders);
+    connect(subfoldersButton_, &QToolButton::toggled, this, [this](bool include) {
+        const bool leaves =
+            !include && !active_.empty() && !model_.folder().empty() &&
+            active_.parent_path().lexically_normal() != model_.folder().lexically_normal();
+        if (leaves && subfoldersLeaveGuard_ && !subfoldersLeaveGuard_()) {
+            subfoldersButton_->blockSignals(true);
+            subfoldersButton_->setChecked(true);
+            subfoldersButton_->blockSignals(false);
+            return;
+        }
+        setIncludeSubfolders(include);
+    });
     layout->addWidget(subfoldersButton_);
 
     folderLabel_ = new QLabel(tr("No folder"), titleBar_);
