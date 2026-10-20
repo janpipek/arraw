@@ -152,6 +152,7 @@ add_executable(arraw-widget-tests
         test_MainWindowMasks.cpp
         test_MainWindowNegative.cpp
         test_FilmStripListing.cpp
+        test_FilmStripListingBench.cpp
         test_FilmStripSubfolders.cpp
         test_MainWindowOpening.cpp
         test_MaskOverlay.cpp

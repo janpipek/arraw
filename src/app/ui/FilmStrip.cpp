@@ -596,6 +596,15 @@ void FilmStrip::onListingChanged(bool listing) {
         busyTimer_.stop();
         // The listing is complete without it: the photograph stays open, and no shot is active.
         pendingActive_.reset();
+        // Queued as firstShotListed is, so that it comes after it.
+        QMetaObject::invokeMethod(
+            this,
+            [this, number = listingNumber_] {
+                if (number == listingNumber_) {
+                    emit listingEnded();
+                }
+            },
+            Qt::QueuedConnection);
     }
     updateFolderLabel();
     updateEmptyHint();
@@ -658,6 +667,9 @@ fs::path FilmStrip::primaryAt(const QModelIndex& index) {
 void FilmStrip::setActive(const fs::path& primary) {
     if (model_.rowOf(primary) < 0) {
         if (model_.isListing()) {
+            // The shot active before is no longer the open one: marks must not go to it while
+            // this one is on its way.
+            clearActive();
             pendingActive_ = primary;
         }
         return;

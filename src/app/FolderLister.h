@@ -25,8 +25,8 @@ namespace arraw::app {
 /// strip's rows, so the rows a walk brings are always appended. Each directory is one queued
 /// call, so a new walk is taken up between two directories, never in the middle of one.
 ///
-/// The directories read are handed over in batches: the root's at once, then whenever
-/// ::arraw::app::FolderLister::batchShots shots have gathered, or
+/// The directories read are handed over in batches: at once when the first shots are found,
+/// however deep, then whenever ::arraw::app::FolderLister::batchShots shots have gathered, or
 /// ::arraw::app::FolderLister::batchInterval has passed since the last batch, or the walk is
 /// done. A directory that cannot be read (gone, no permission, an I/O error) is counted and
 /// skipped with its subtree; its siblings are still read.
@@ -116,7 +116,7 @@ private:
     std::vector<FolderResult> batch_;
     /// Shots in the batch.
     std::size_t batchShotCount_ = 0;
-    /// Whether a batch was handed over in this walk.
+    /// Whether a batch with a shot was handed over in this walk.
     bool flushed_ = false;
     /// When the last batch was handed over, or the walk began.
     std::chrono::steady_clock::time_point lastFlush_;

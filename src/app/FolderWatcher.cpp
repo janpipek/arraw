@@ -36,9 +36,12 @@ FolderWatcher::FolderWatcher(ShotModel& model, std::chrono::milliseconds debounc
       lister_(std::make_unique<FolderLister>(
           [this](std::uint64_t walk, std::vector<FolderResult> batch) {
               // On the lister thread. Dropped if the watcher is gone by the time it would run.
+              // The model applies it a slice at a time (ShotModel::queueFolders).
               QMetaObject::invokeMethod(
                   this,
-                  [this, walk, batch = std::move(batch)] { model_.applyFolders(walk, batch); },
+                  [this, walk, batch = std::move(batch)]() mutable {
+                      model_.queueFolders(walk, std::move(batch));
+                  },
                   Qt::QueuedConnection);
           },
           [this](std::uint64_t walk, ListingSummary summary) {
@@ -97,9 +100,10 @@ void FolderWatcher::finishWalk(std::uint64_t walk, const ListingSummary& summary
     if (walk != model_.walk()) {
         return; // A later walk replaced it; the model drops it too.
     }
-    // Watched before the model may start a refresh it had put off, which reads them again.
+    // Watched before the model may start a refresh it had put off, which reads them again. The
+    // model takes the end after the batches it has still queued.
     rewatch(summary.directories);
-    model_.finishListing(walk, summary);
+    model_.queueFinish(walk, summary);
 }
 
 void FolderWatcher::rewatch(const std::vector<ListedDirectory>& directories) {

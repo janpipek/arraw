@@ -293,7 +293,14 @@ ShotModel::ShotModel(QObject* parent)
           // Called on the loader thread. The queued call is dropped if the model is gone.
           QMetaObject::invokeMethod(
               this, [this, result = std::move(result)] { receive(result); }, Qt::QueuedConnection);
-      })) {}
+      })) {
+    // A timer, not a queued call: it waits for its turn after the posted events, the input and
+    // the painting, so a backlog of batches cannot become one long stall.
+    applyTimer_.setSingleShot(true);
+    applyTimer_.setInterval(0);
+    connect(&applyTimer_, &QTimer::timeout, this,
+            [this] { applyQueued(std::chrono::steady_clock::now() + applyBudget); });
+}
 
 ShotModel::~ShotModel() {
     // Joins the thread before the members the callback touches go.
@@ -322,6 +329,10 @@ void ShotModel::setFolder(const std::filesystem::path& folder, bool recursive) {
     refreshWanted_ = false;
     wantedAll_ = false;
     wantedFolders_.clear();
+    incoming_.clear();
+    nextFolder_ = 0;
+    nextShot_ = 0;
+    applyTimer_.stop();
     walking_ = Walking::Listing;
     endResetModel();
     emit listingChanged(true);
@@ -367,39 +378,100 @@ void ShotModel::startRefresh() {
     emit walkRequested();
 }
 
-void ShotModel::applyFolders(std::uint64_t walk, const std::vector<FolderResult>& batch) {
-    if (walk != walk_ || walking_ == Walking::None) {
-        return;
+void ShotModel::queueFolders(std::uint64_t walk, std::vector<FolderResult> batch) {
+    incoming_.push_back({.walk = walk, .batch = std::move(batch), .end = std::nullopt});
+    if (!applyTimer_.isActive()) {
+        applyTimer_.start();
     }
-    std::vector<fs::path> added;
-    std::vector<Job> rechecks;
-    for (const FolderResult& result : batch) {
-        applyFolder(result, added, rechecks);
-    }
-#ifndef NDEBUG
-    // The one comparator must agree with the walk (plan, Risks): spans tile the rows in order.
-    int next = 0;
-    for (const auto& [folder, span] : spans_) {
-        assert(span.first == next && span.count > 0);
-        next = span.first + span.count;
-    }
-    assert(next == static_cast<int>(rows_.size()));
-#endif
-    pending_ += static_cast<int>(rechecks.size());
-    loader_->enqueue(std::move(rechecks));
-    queueLoads(added);
 }
 
-void ShotModel::finishListing(std::uint64_t walk, const ListingSummary& /*summary*/) {
-    if (walk != walk_ || walking_ == Walking::None) {
+void ShotModel::queueFinish(std::uint64_t walk, ListingSummary summary) {
+    incoming_.push_back({.walk = walk, .batch = {}, .end = std::move(summary)});
+    if (!applyTimer_.isActive()) {
+        applyTimer_.start();
+    }
+}
+
+void ShotModel::applyFolders(std::uint64_t walk, const std::vector<FolderResult>& batch) {
+    queueFolders(walk, batch);
+    applyQueued(std::nullopt);
+}
+
+void ShotModel::finishListing(std::uint64_t walk, const ListingSummary& summary) {
+    queueFinish(walk, summary);
+    applyQueued(std::nullopt);
+}
+
+void ShotModel::applyQueued(std::optional<Deadline> deadline) {
+    const std::uint64_t generation = generation_;
+    std::vector<fs::path> added;
+    std::vector<Job> rechecks;
+    // Hands the reads of what was applied to the loader, unless a new folder came in between
+    // (from a view's handler): those rows are gone.
+    const auto handOver = [&] {
+        if (generation_ == generation) {
+            pending_ += static_cast<int>(rechecks.size());
+            loader_->enqueue(std::exchange(rechecks, {}));
+            queueLoads(std::exchange(added, {}));
+        }
+        added.clear();
+        rechecks.clear();
+    };
+    bool worked = false;
+    while (!incoming_.empty() &&
+           !(deadline && worked && std::chrono::steady_clock::now() >= *deadline)) {
+        worked = true;
+        Incoming& next = incoming_.front();
+        if (next.walk != walk_ || walking_ == Walking::None) {
+            dropIncoming(); // Stale.
+        } else if (next.end) {
+            dropIncoming();
+            // The reads of the last rows count before the end may report the loading finished.
+            handOver();
+            endWalk();
+        } else if (nextFolder_ >= next.batch.size()) {
+            dropIncoming();
+        } else {
+            applyStep(added, rechecks);
+        }
+    }
+    handOver();
+    checkSpans();
+    if (!incoming_.empty() && !applyTimer_.isActive()) {
+        applyTimer_.start();
+    }
+}
+
+void ShotModel::dropIncoming() {
+    incoming_.pop_front();
+    nextFolder_ = 0;
+    nextShot_ = 0;
+}
+
+void ShotModel::applyStep(std::vector<fs::path>& added, std::vector<Job>& rechecks) {
+    std::vector<FolderResult>& batch = incoming_.front().batch;
+    const fs::path folder = withoutTrailingSeparator(batch[nextFolder_].folder);
+    if (nextShot_ > 0 || !spans_.contains(folder)) {
+        insertRun(added);
         return;
     }
+    // Taken out of the queue before any signal: a view's handler may change the folder, which
+    // empties the queue.
+    const std::vector<Shot> fresh = std::move(batch[nextFolder_].shots);
+    ++nextFolder_;
+    mergeFolder(folder, fresh, added, rechecks);
+}
+
+void ShotModel::endWalk() {
     // What the walk did not read is gone, or cannot be read: it has no shots now. From the last
-    // folder back, so that each removal moves the fewest spans.
+    // folder back, so that each removal moves the fewest spans. A first listing made every span
+    // from what it read, so it has none to look for.
     std::vector<fs::path> unseen;
-    for (const auto& [folder, span] : spans_) {
-        if (!seen_.contains(folder)) {
-            unseen.push_back(folder);
+    if (walking_ != Walking::Listing) {
+        for (const auto& [folder, span] : spans_) {
+            if (!seen_.contains(folder)) {
+                unseen.push_back(folder);
+            }
         }
     }
     for (auto folder = unseen.rbegin(); folder != unseen.rend(); ++folder) {
@@ -420,18 +492,22 @@ void ShotModel::finishListing(std::uint64_t walk, const ListingSummary& /*summar
     reportIfLoaded();
 }
 
-void ShotModel::applyFolder(const FolderResult& result, std::vector<fs::path>& added,
-                            std::vector<Job>& rechecks) {
-    const fs::path folder = withoutTrailingSeparator(result.folder);
-    seen_.insert(folder);
-    const std::span<const Shot> fresh(result.shots);
-    const auto found = spans_.find(folder);
-    if (found == spans_.end()) {
-        if (!fresh.empty()) {
-            insertFolder(folder, fresh, added);
-        }
-        return;
+void ShotModel::checkSpans() const {
+#ifndef NDEBUG
+    // The one comparator must agree with the walk (plan, Risks): spans tile the rows in order.
+    int next = 0;
+    for (const auto& [folder, span] : spans_) {
+        assert(span.first == next && span.count > 0);
+        next = span.first + span.count;
     }
+    assert(next == static_cast<int>(rows_.size()));
+#endif
+}
+
+void ShotModel::mergeFolder(const fs::path& folder, std::span<const Shot> fresh,
+                            std::vector<fs::path>& added, std::vector<Job>& rechecks) {
+    seen_.insert(folder);
+    const auto found = spans_.find(folder);
     const Span span = found->second;
     const FolderDiff diff = diffFolder(
         static_cast<std::size_t>(span.count),
@@ -461,23 +537,68 @@ void ShotModel::applyFolder(const FolderResult& result, std::vector<fs::path>& a
     }
 }
 
-void ShotModel::insertFolder(const fs::path& folder, std::span<const Shot> shots,
-                             std::vector<fs::path>& added) {
-    const auto next = spans_.lower_bound(folder);
-    const int first = next == spans_.end() ? static_cast<int>(rows_.size()) : next->second.first;
-    const int count = static_cast<int>(shots.size());
+void ShotModel::insertRun(std::vector<fs::path>& added) {
+    std::vector<FolderResult>& batch = incoming_.front().batch;
+    /// @brief Rows of one directory in the run.
+    struct Piece {
+        fs::path folder;
+        int count = 0;
+        bool extends = false; ///< Whether its span exists, from the part inserted before.
+    };
+    std::vector<Piece> pieces;
     std::vector<Row> fresh;
-    fresh.reserve(shots.size());
-    for (const Shot& shot : shots) {
-        fresh.push_back(Row{.shot = shot});
-        added.push_back(shot.primary);
+    std::optional<Spans::iterator> place; // The span the run goes before.
+    while (nextFolder_ < batch.size() && fresh.size() < maxInsertRows) {
+        std::vector<Shot>& shots = batch[nextFolder_].shots;
+        fs::path folder = withoutTrailingSeparator(batch[nextFolder_].folder);
+        const bool extends = nextShot_ > 0;
+        const auto found = spans_.find(folder);
+        if (found != spans_.end() && !extends) {
+            break; // Rows to merge with: the next step's.
+        }
+        if (shots.empty()) {
+            seen_.insert(std::move(folder));
+            ++nextFolder_;
+            continue;
+        }
+        const auto next = extends ? std::next(found) : spans_.lower_bound(folder);
+        if (place && next != *place) {
+            break; // Goes elsewhere: the next insert.
+        }
+        place = next;
+        const std::size_t take = std::min(shots.size() - nextShot_, maxInsertRows - fresh.size());
+        for (std::size_t k = nextShot_; k < nextShot_ + take; ++k) {
+            added.push_back(shots[k].primary);
+            fresh.push_back(Row{.shot = std::move(shots[k])});
+        }
+        seen_.insert(folder);
+        pieces.push_back({std::move(folder), static_cast<int>(take), extends});
+        nextShot_ += take;
+        if (nextShot_ == shots.size()) {
+            ++nextFolder_;
+            nextShot_ = 0;
+        }
     }
+    if (fresh.empty()) {
+        return;
+    }
+    const auto next = *place;
+    const int first = next == spans_.end() ? static_cast<int>(rows_.size()) : next->second.first;
+    const int count = static_cast<int>(fresh.size());
     beginInsertRows({}, first, first + count - 1);
     rows_.insert(rows_.begin() + first, std::make_move_iterator(fresh.begin()),
                  std::make_move_iterator(fresh.end()));
     // The model is whole again before views hear of the rows: they may look a shot up.
     shiftSpans(next, count);
-    spans_.emplace_hint(next, folder, Span{first, count});
+    int row = first;
+    for (Piece& piece : pieces) {
+        if (piece.extends) {
+            spans_.find(piece.folder)->second.count += piece.count;
+        } else {
+            spans_.emplace_hint(next, std::move(piece.folder), Span{row, piece.count});
+        }
+        row += piece.count;
+    }
     reindexFrom(first);
     endInsertRows();
 }

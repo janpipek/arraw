@@ -216,9 +216,19 @@ private:
     /// @brief Fills the film strip with a folder and develops its first shot.
     ///
     /// Asks about unsaved changes first. The first shot is the first the strip's filter shows;
-    /// it is opened when the listing brings it, unless a shot was made active by then.
+    /// it is opened when the listing brings it, unless a shot was made active by then, or the
+    /// photograph still open was edited in the meantime (leaving it is not asked about twice).
     /// @param folder Folder to open.
     void openFolder(const std::filesystem::path& folder);
+
+    /// @brief Makes the first shot the strip's listing brings open, once it arrives.
+    void armFirstListed();
+
+    /// @brief Tells whether the open photograph gained unsaved changes since armFirstListed,
+    /// having had none then.
+    ///
+    /// Finishes an edit in progress first, as leaving the photograph would.
+    [[nodiscard]] bool editedSinceAsked();
 
     /// @brief Develops a shot of the strip, when the user lets go of the open photograph.
     ///
@@ -580,6 +590,9 @@ private:
     /// Whether the first shot the strip's listing brings is to be opened (a folder was opened,
     /// or the subfolders that held the open photograph were dropped).
     bool activateFirstListed_ = false;
+    /// Whether the open photograph had no unsaved changes when activateFirstListed_ was set: the
+    /// question of leaving it was answered then, or not needed.
+    bool cleanWhenArmed_ = true;
     QDockWidget* stripDock_ = nullptr;
     QMenu* viewMenu_ = nullptr;
     CullingActions* culling_ = nullptr;

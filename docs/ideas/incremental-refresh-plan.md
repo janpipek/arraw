@@ -220,7 +220,12 @@ GUI   ShotModel::applyFolders → appends spans (always at the end, by the DFS o
         → rowsInserted → thumbnails.addShots, FilmStrip pending activation, busy count
 ```
 
-- The first flush happens right after the root, so the root's shots show at once.
+- The first flush happens as soon as a directory with shots is read, so the first shots show at
+  once even when the root has none (review 2026-10-20, R5).
+- The GUI side queues each batch (`ShotModel::queueFolders`) and applies it from a 0 ms `QTimer`,
+  about 12 ms of work per event-loop turn. New folders that go to one place share one insert, and
+  no insert holds more than 2 000 rows, so a flat folder of 50 000 shots, or 20 000 tiny folders,
+  do not stall the window (review 2026-10-20, B2).
 - Cancellation:
   - A new `setFolder` or a toggle bumps `generation_`. The lister checks it before each directory,
     and the model drops stale batches.

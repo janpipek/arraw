@@ -736,9 +736,9 @@ TEST_CASE("Folders are merged where they stand: new, vanished and changed ones",
     }
     REQUIRE(model.rowOf(folder.file("d/IMG_1.jpg")) == -1);
     REQUIRE(log.resets == 0);
-    // One signal per run, folder by folder: b gains a row, c and c/deep come in as one run each
-    // (they are two folders), and d, which was last, goes.
-    REQUIRE(log.events == std::vector<std::string>{"+3..3", "+4..4", "+5..5", "-6..6"});
+    // One signal per run: b gains a row, c and c/deep, new and next to each other, come in as
+    // one run, and d, which was last, goes.
+    REQUIRE(log.events == std::vector<std::string>{"+3..3", "+4..5", "-6..6"});
 }
 
 TEST_CASE("A scattered change resets the model and keeps what the rows know",

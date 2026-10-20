@@ -1740,7 +1740,24 @@ void MainWindow::openFolder(const std::filesystem::path& folder) {
     rememberFolder(filmStrip_->folder());
     QSettings().remove("lastFile");
     // The first shot the strip shows opens once the listing brings it (firstShotListed).
+    armFirstListed();
+}
+
+void MainWindow::armFirstListed() {
     activateFirstListed_ = true;
+    cleanWhenArmed_ = !open_ || !open_->session.hasUnsavedChanges();
+}
+
+bool MainWindow::editedSinceAsked() {
+    if (!cleanWhenArmed_ || !open_) {
+        return false;
+    }
+    try {
+        developPanel_->finishPendingEdit();
+    } catch (const std::exception&) {
+        // The edit stays open, and counts as unsaved below.
+    }
+    return open_->session.hasUnsavedChanges();
 }
 
 void MainWindow::activateShot(const QString& primary) {
@@ -1801,15 +1818,20 @@ void MainWindow::buildFilmStripDock() {
         // shot is announced; if it does not, the first shot opens. An empty listing leaves the
         // photograph open, without an active shot.
         if (!include && open_) {
-            activateFirstListed_ = true;
+            armFirstListed();
         }
     });
     connect(filmStrip_, &FilmStrip::firstShotListed, this, [this](const QString& primary) {
-        // Not when the user, or a file opened since, has made a shot active already.
-        if (std::exchange(activateFirstListed_, false) && !filmStrip_->activePrimary()) {
+        // Not when the user, or a file opened since, has made a shot active already. Nor when
+        // the open photograph was edited while the listing was on its way: leaving it was asked
+        // about before (openFolder, or the subfolders' guard), and is not asked twice.
+        if (std::exchange(activateFirstListed_, false) && !filmStrip_->activePrimary() &&
+            !editedSinceAsked()) {
             activateShot(primary);
         }
     });
+    // A listing that brought no shot opens nothing, now or at a later listing.
+    connect(filmStrip_, &FilmStrip::listingEnded, this, [this] { activateFirstListed_ = false; });
     connect(filmStrip_, &FilmStrip::folderRequested, this, &MainWindow::openFolderWithDialog);
     connect(filmStrip_, &FilmStrip::exportRequested, this, &MainWindow::exportWithDialog);
     connect(filmStrip_, &FilmStrip::sidecarChangedExternally, this,

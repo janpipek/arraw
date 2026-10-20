@@ -9,8 +9,12 @@
 #include <QAbstractListModel>
 #include <QImage>
 #include <QString>
+#include <QTimer>
 
+#include <chrono>
+#include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <map>
 #include <memory>
@@ -18,6 +22,7 @@
 #include <set>
 #include <span>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace arraw::app {
@@ -67,6 +72,13 @@ struct FolderDiff;
 /// appended. Each directory a walk reads replaces its span: the model changes by inserting and
 /// removing runs of rows rather than by resetting, so views keep their selection; only a change
 /// too scattered for that, past ::arraw::app::maxFolderRuns runs in a folder, resets it.
+///
+/// What a walk streams in is queued (::arraw::app::ShotModel::queueFolders) and applied from the
+/// event loop a slice at a time, about ::arraw::app::ShotModel::applyBudget of work per turn,
+/// so that neither a folder of fifty thousand shots nor thousands of tiny folders stall the
+/// window. Rows that go to one place are inserted together, at most
+/// ::arraw::app::ShotModel::maxInsertRows at a time: the new folders of a batch share one insert,
+/// and a large one is inserted in parts.
 class ShotModel : public QAbstractListModel {
     Q_OBJECT
 
@@ -123,10 +135,35 @@ public:
         return walking_ == Walking::Refresh || refreshWanted_;
     }
 
-    /// @brief Takes a batch of a walk: each directory's shots replace its rows.
+    /// @brief Most rows one insert brings.
+    static constexpr std::size_t maxInsertRows = 2000;
+
+    /// @brief Work done on queued results in one turn of the event loop, before the rest waits
+    /// for the next turn.
+    static constexpr std::chrono::milliseconds applyBudget{12};
+
+    /// @brief Queues a batch of a walk, to be applied from the event loop.
     ///
-    /// A directory that has no rows yet gets its span where the folder order puts it, with one
-    /// insert; one that has rows is merged with them in linear time (see
+    /// Applied as ::arraw::app::ShotModel::applyFolders does, in the order queued, a slice of
+    /// ::arraw::app::ShotModel::applyBudget per turn of the event loop. A batch of a walk that is
+    /// no longer the last one asked for when its turn comes is dropped.
+    /// @param walk Number of the walk.
+    /// @param batch Directories read, in walk order.
+    void queueFolders(std::uint64_t walk, std::vector<FolderResult> batch);
+
+    /// @brief Queues the end of a walk, to be taken once the batches before it are applied.
+    ///
+    /// Taken as ::arraw::app::ShotModel::finishListing does.
+    /// @param walk Number of the walk.
+    /// @param summary What it saw.
+    void queueFinish(std::uint64_t walk, ListingSummary summary);
+
+    /// @brief Takes a batch of a walk at once: each directory's shots replace its rows.
+    ///
+    /// Whatever is queued is applied first. A directory that has no rows yet gets its span where
+    /// the folder order puts it, sharing one insert with the new directories next to it (up to
+    /// ::arraw::app::ShotModel::maxInsertRows rows each); one that has rows is merged with them in
+    /// linear time (see
     /// ::arraw::app::diffFolder): rows of shots that are still there stay, with their marks,
     /// EXIF and thumbnail; shots that went are removed and new ones inserted, in order, one
     /// insert or remove per run of adjacent rows, so a view's selection follows its shot. A
@@ -141,14 +178,15 @@ public:
     /// @param batch Directories read, in walk order.
     void applyFolders(std::uint64_t walk, const std::vector<FolderResult>& batch);
 
-    /// @brief Takes the end of a walk.
+    /// @brief Takes the end of a walk at once.
     ///
-    /// The rows of every folder the walk did not read (a folder that went, or could not be read)
-    /// are removed. Then the walk is over: ::arraw::app::ShotModel::listingChanged reports the
-    /// end of a first listing, a refresh that was put off starts, and
+    /// Whatever is queued is applied first. The rows of every folder the walk did not read (a
+    /// folder that went, or could not be read) are removed. Then the walk is over:
+    /// ::arraw::app::ShotModel::listingChanged reports the end of a first listing, a refresh that
+    /// was put off starts, and
     /// ::arraw::app::ShotModel::loadingFinished follows once the loader is done too.
     /// @param walk Number of the walk; any but the last one asked for is ignored.
-    /// @param summary What it saw.
+    /// @param summary What it saw; not used yet (the refresh steps of the plan will).
     void finishListing(std::uint64_t walk, const ListingSummary& summary);
 
     /// @brief Tells whether the subfolders are listed.
@@ -327,6 +365,47 @@ private:
 
     struct Job;
 
+    /// @brief A batch or the end of a walk, waiting to be applied.
+    struct Incoming {
+        /// Number of the walk.
+        std::uint64_t walk = 0;
+        /// Directories read; empty for an end.
+        std::vector<FolderResult> batch;
+        /// What the walk saw, for an end.
+        std::optional<ListingSummary> end;
+    };
+
+    /// @brief Point in time a slice of queued work must stop at.
+    using Deadline = std::chrono::steady_clock::time_point;
+
+    /// @brief Applies queued results, in order, until the queue is empty or a deadline passed.
+    ///
+    /// At least one step is taken. What is left waits for the next turn of the event loop.
+    /// @param deadline When to stop; nothing to apply everything.
+    void applyQueued(std::optional<Deadline> deadline);
+
+    /// @brief Drops the first queued item.
+    void dropIncoming();
+
+    /// @brief Applies the next step of the first queued batch: the merge of one directory that
+    /// has rows, or one insert of new ones.
+    /// @param added Receives the primaries that were not rows before.
+    /// @param rechecks Receives the sidecar checks of the rows that stay.
+    void applyStep(std::vector<std::filesystem::path>& added, std::vector<Job>& rechecks);
+
+    /// @brief Inserts the rows of the next new directories of the first queued batch that go to
+    /// one place, at most ::arraw::app::ShotModel::maxInsertRows, with one insert.
+    ///
+    /// A directory whose rows do not all fit is continued by the next call.
+    /// @param added Receives the primaries inserted.
+    void insertRun(std::vector<std::filesystem::path>& added);
+
+    /// @brief Ends the walk under way: the rows of the folders it did not read go.
+    void endWalk();
+
+    /// @brief Checks, in a debug build, that the spans tile the rows in order.
+    void checkSpans() const;
+
     /// @brief Points the path index of the rows from a row on at their places.
     /// @param from First row that moved.
     void reindexFrom(int from);
@@ -336,16 +415,13 @@ private:
     /// @param delta Rows to move them by.
     void shiftSpans(Spans::iterator from, int delta);
 
-    /// @brief Replaces the rows of one folder by its shots now.
-    /// @param result Folder and its shots.
+    /// @brief Replaces the rows of one folder that has rows by its shots now.
+    /// @param folder Folder, without a trailing separator.
+    /// @param fresh Its shots now.
     /// @param added Receives the primaries that were not rows before.
     /// @param rechecks Receives the sidecar checks of the rows that stay.
-    void applyFolder(const FolderResult& result, std::vector<std::filesystem::path>& added,
-                     std::vector<Job>& rechecks);
-
-    /// @brief Inserts the rows of a folder that has none.
-    void insertFolder(const std::filesystem::path& folder, std::span<const Shot> shots,
-                      std::vector<std::filesystem::path>& added);
+    void mergeFolder(const std::filesystem::path& folder, std::span<const Shot> fresh,
+                     std::vector<std::filesystem::path>& added, std::vector<Job>& rechecks);
 
     /// @brief Applies the diff of a folder with a signal per run.
     /// @param first First row of the folder.
@@ -409,7 +485,7 @@ private:
     Walking walking_ = Walking::None;
 
     /// Folders the walk under way has read, spelled as span keys.
-    std::set<std::filesystem::path> seen_;
+    std::unordered_set<std::filesystem::path> seen_;
 
     /// Whether the refresh under way checks the sidecars of every row it merges.
     bool recheckAll_ = false;
@@ -425,6 +501,18 @@ private:
 
     /// Folders the refresh put off checks, normalised.
     std::set<std::filesystem::path> wantedFolders_;
+
+    /// Batches and ends of walks not applied yet, in the order they came.
+    std::deque<Incoming> incoming_;
+
+    /// Directory of the first queued batch to apply next.
+    std::size_t nextFolder_ = 0;
+
+    /// Shots of that directory inserted already, when it is inserted in parts.
+    std::size_t nextShot_ = 0;
+
+    /// Timer that applies the next slice of the queue on the next turn of the event loop.
+    QTimer applyTimer_;
 
     /// Declared last, so that the thread stops before anything it hands results to is gone.
     std::unique_ptr<Loader> loader_;

@@ -103,7 +103,8 @@ void FolderLister::step() {
     }
 
     const bool done = work_.empty();
-    if (!flushed_ || done || batchShotCount_ >= batchShots ||
+    // The first shots go at once, however deep the walk had to go to find them.
+    if ((!flushed_ && batchShotCount_ > 0) || done || batchShotCount_ >= batchShots ||
         Clock::now() - lastFlush_ >= batchInterval) {
         flush();
     }
@@ -118,11 +119,11 @@ void FolderLister::step() {
 }
 
 void FolderLister::flush() {
-    flushed_ = true;
     lastFlush_ = Clock::now();
     if (batch_.empty()) {
         return;
     }
+    flushed_ = flushed_ || batchShotCount_ > 0;
     onBatch_(walk_, std::exchange(batch_, {}));
     batchShotCount_ = 0;
 }

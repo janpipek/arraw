@@ -25,8 +25,8 @@ class ShotModel;
 ///
 /// Owns the ::arraw::app::FolderLister and its thread. Each walk the model asks for (a new
 /// folder, see ::arraw::app::ShotModel::setFolder, or a refresh) runs on that thread, and its
-/// batches and its end are handed to the model on this one
-/// (::arraw::app::ShotModel::applyFolders, ::arraw::app::ShotModel::finishListing).
+/// batches and its end are queued on the model on this one
+/// (::arraw::app::ShotModel::queueFolders, ::arraw::app::ShotModel::queueFinish).
 ///
 /// Watches the model's folder. A change to the folder's entries is debounced, because a program
 /// that writes a file touches the folder several times, and then handed to

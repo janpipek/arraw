@@ -137,9 +137,9 @@ public:
     /// Scrolls it into the middle of the strip. A shot the filter hides clears the
     /// filter first: the photograph is open, so it must be seen.
     /// @param primary Primary file of a shot of this folder. An unknown one is ignored, unless
-    /// the folder is still being listed: then the shot that holds it, as its primary or a
-    /// companion, becomes active once it arrives (as with ::arraw::app::FilmStrip::setFolder's
-    /// file to activate, which this replaces).
+    /// the folder is still being listed: then no shot is active or selected until the shot that
+    /// holds it, as its primary or a companion, arrives and becomes active (as with
+    /// ::arraw::app::FilmStrip::setFolder's file to activate, which this replaces).
     void setActive(const std::filesystem::path& primary);
 
     /// @brief Leaves no shot active, and none selected, and none waiting to be.
@@ -261,6 +261,13 @@ signals:
     /// waiting to be active, if it came in the same batch, has become active.
     /// @param primary Primary file of the shot.
     void firstShotListed(const QString& primary);
+
+    /// @brief Announces that the first listing of a folder is complete.
+    ///
+    /// Sent from the event loop after the listing ended, so after its
+    /// ::arraw::app::FilmStrip::firstShotListed, if any; not sent for a listing that a later
+    /// ::arraw::app::FilmStrip::setFolder (or change of the subfolder flag) replaced.
+    void listingEnded();
 
 protected:
     /// @brief Handles clicks, context menus and the size of the cells.
