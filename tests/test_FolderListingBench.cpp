@@ -193,3 +193,61 @@ TEST_CASE("Listing a large tree in the background: time to the first batch, and 
         }
     }
 }
+
+TEST_CASE("A change in one folder of a large tree: the cost of reading that folder again",
+          "[.bench][listing-bench]") {
+    // Step 4 of the plan: a change reads again only the directory that reported it. Measured
+    // from the file's creation (a real inotify event, debounce 0) to its row, and against a
+    // refresh of all, which is what every event cost before.
+    std::optional<test::TempDir> generated;
+    const fs::path root = benchTree(generated);
+    app::ShotModel model;
+    app::ShotFilterModel proxy;
+    proxy.setSourceModel(&model);
+    app::FolderWatcher watcher(model, std::chrono::milliseconds(0));
+    const auto runUntil = [](const std::function<bool()>& done) {
+        while (!done()) {
+            QCoreApplication::processEvents(QEventLoop::AllEvents | QEventLoop::WaitForMoreEvents,
+                                            5);
+        }
+    };
+    model.setFolder(root, true);
+    runUntil([&] { return !model.isListing() && model.pendingLoads() == 0; });
+    const std::vector<fs::path> folders = foldersOf(root);
+
+    test::StallProbe probe;
+    std::vector<double> latencies;
+    double stall = 0;
+    for (int n = 0; n < 20; ++n) {
+        const fs::path& folder = folders[(static_cast<std::size_t>(n) * 37 + 1) % folders.size()];
+        const fs::path added = folder / ("ZZ_bench_" + std::to_string(n) + ".jpg");
+        probe.start();
+        const auto start = Clock::now();
+        std::ofstream(added, std::ios::binary).put('\0');
+        runUntil([&] { return model.rowOf(added) >= 0; });
+        latencies.push_back(
+            std::chrono::duration<double, std::milli>(Clock::now() - start).count());
+        runUntil([&] { return model.pendingLoads() == 0; });
+        stall = std::max(stall, probe.longestMs());
+        probe.stop();
+    }
+    std::ranges::sort(latencies);
+
+    double refreshAll = 1e300;
+    for (int i = 0; i < 3; ++i) {
+        refreshAll = std::min(
+            refreshAll, timed([&] {
+                watcher.refreshAll();
+                runUntil([&] { return !model.isRefreshing() && model.pendingLoads() == 0; });
+            }));
+    }
+    std::cout << std::fixed << std::setprecision(1) << "per-folder refresh (" << model.rowCount()
+              << " shots, " << folders.size() << " folders): file to row median "
+              << latencies[latencies.size() / 2] << " ms, max " << latencies.back()
+              << " ms, longest GUI stall " << stall << " ms; refresh of all (walk, merge, "
+              << "recheck every sidecar) " << refreshAll << " ms (best of 3)\n";
+    for (int n = 0; n < 20; ++n) {
+        const fs::path& folder = folders[(static_cast<std::size_t>(n) * 37 + 1) % folders.size()];
+        fs::remove(folder / ("ZZ_bench_" + std::to_string(n) + ".jpg"));
+    }
+}

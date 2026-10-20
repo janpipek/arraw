@@ -6,6 +6,7 @@
 #include "support/TempDir.h"
 
 #include <Shot.h>
+#include <Sidecar.h>
 
 #include <QCoreApplication>
 #include <QThread>
@@ -17,6 +18,8 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <iterator>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -235,7 +238,7 @@ TEST_CASE("A model takes its rows from the walk it asked for, and drops other wa
         model.applyFolders(walk, {{root, {jpeg(root / "IMG_1.jpg")}},
                                   {root / "gone", {jpeg(root / "gone/IMG_1.jpg")}}});
         model.refresh();
-        model.refresh(std::vector<fs::path>{root});
+        model.refresh();
         REQUIRE(walks == 1);
         REQUIRE(model.isRefreshing());
         model.finishListing(walk, {});
@@ -254,6 +257,36 @@ TEST_CASE("A model takes its rows from the walk it asked for, and drops other wa
         REQUIRE(log.events == std::vector<std::string>{"+1..1", "-2..2"});
         REQUIRE(primaries(model) == std::vector<fs::path>{root / "IMG_1.jpg", root / "IMG_2.jpg"});
         REQUIRE(listing == std::vector<bool>{true, false});
+    }
+    SECTION("After the walk, a folder read again is merged, a new one inserted, a gone one "
+            "removed with its subtree in one go") {
+        model.applyFolders(walk, {{root, {jpeg(root / "IMG_1.jpg")}},
+                                  {root / "b", {jpeg(root / "b/IMG_1.jpg")}},
+                                  {root / "b/deep", {jpeg(root / "b/deep/IMG_1.jpg")}},
+                                  {root / "b2", {jpeg(root / "b2/IMG_1.jpg")}}});
+        model.finishListing(walk, {});
+        log.events.clear();
+        // The same walk's number: what the watcher reads again after a change.
+        model.applyFolders(walk,
+                           {{.folder = root / "b",
+                             .shots = {jpeg(root / "b/IMG_1.jpg"), jpeg(root / "b/IMG_2.jpg")},
+                             .gone = false,
+                             .recheck = true}});
+        REQUIRE(log.events == std::vector<std::string>{"+2..2"});
+        model.applyFolders(walk,
+                           {{.folder = root / "b", .shots = {}, .gone = true, .recheck = false},
+                            {root / "a", {jpeg(root / "a/IMG_1.jpg")}}});
+        REQUIRE(log.events == std::vector<std::string>{"+2..2", "-1..3", "+1..1"});
+        REQUIRE(primaries(model) == std::vector<fs::path>{root / "IMG_1.jpg", root / "a/IMG_1.jpg",
+                                                          root / "b2/IMG_1.jpg"});
+        REQUIRE(model.rowOf(root / "b2/IMG_1.jpg") == 2);
+        // A folder without rows, and a stale walk, change nothing.
+        model.removeSubtree(walk, root / "zzz");
+        model.removeSubtree(walk + 1, root / "a");
+        REQUIRE(model.rowCount() == 3);
+        model.removeSubtree(walk, root);
+        REQUIRE(model.rowCount() == 0);
+        REQUIRE(log.events.back() == "-0..2");
     }
 }
 
@@ -397,4 +430,249 @@ TEST_CASE("The watch set follows the walk, changed by what differs", "[watcher][
                !watcher.watchedDirectories().contains(text(folder.file("a")));
     }));
     REQUIRE(watcher.watchedDirectories().size() == 2);
+}
+
+// Step 4 of the plan: the lister watches each directory before it reads it, and a change reads
+// again only the directory that reported it.
+
+namespace {
+
+/// Directories a gate saw read from a point on.
+std::set<fs::path> readSince(const test::ListingGate& gate, std::size_t from) {
+    const std::vector<fs::path> read = gate.read();
+    return {read.begin() + static_cast<std::ptrdiff_t>(std::min(from, read.size())), read.end()};
+}
+
+/// A path as the watcher spells it.
+QString qtPath(const fs::path& path) {
+    return QString::fromStdU16String(path.u16string());
+}
+
+} // namespace
+
+TEST_CASE("A change in a subfolder reads that folder again, and no other",
+          "[watcher][listing][refresh]") {
+    const test::TempDir folder;
+    for (const char* name : {"IMG_1.jpg", "a/IMG_1.jpg", "b/IMG_1.jpg", "c/IMG_1.jpg"}) {
+        addJpeg(folder.file(name));
+    }
+    ShotModel model;
+    FolderWatcher watcher(model, std::chrono::milliseconds(20));
+    // Never reached: it only counts the reads.
+    const test::ListingGate reads(folder.file("never"));
+    watcher.setReadHook(reads.hook());
+    model.setFolder(folder.path(), true);
+    REQUIRE(waitUntil([&] { return !model.isListing() && model.pendingLoads() == 0; }));
+    REQUIRE(watcher.watchedDirectories().size() == 4);
+    const std::set<fs::path> onlyA{folder.file("a")};
+
+    std::size_t mark = reads.read().size();
+    addJpeg(folder.file("a/IMG_2.jpg"));
+    REQUIRE(waitUntil([&] { return model.rowOf(folder.file("a/IMG_2.jpg")) >= 0; }));
+    REQUIRE(readSince(reads, mark) == onlyA);
+
+    mark = reads.read().size();
+    fs::rename(folder.file("a/IMG_1.jpg"), folder.file("a/IMG_9.jpg"));
+    REQUIRE(waitUntil([&] {
+        return model.rowOf(folder.file("a/IMG_9.jpg")) >= 0 &&
+               model.rowOf(folder.file("a/IMG_1.jpg")) < 0;
+    }));
+    REQUIRE(readSince(reads, mark) == onlyA);
+
+    mark = reads.read().size();
+    fs::remove(folder.file("a/IMG_2.jpg"));
+    REQUIRE(waitUntil([&] { return model.rowOf(folder.file("a/IMG_2.jpg")) < 0; }));
+    REQUIRE(readSince(reads, mark) == onlyA);
+    REQUIRE(primaries(model) == primaries(listShots(folder.path(), true)));
+    // No change is a refresh of all.
+    REQUIRE_FALSE(model.isRefreshing());
+}
+
+TEST_CASE("A new nested subtree is walked, and one moved away goes with one remove",
+          "[watcher][listing][refresh]") {
+    const test::TempDir folder;
+    const test::TempDir outside;
+    for (const char* name : {"IMG_1.jpg", "b/IMG_1.jpg", "b/deep/IMG_1.jpg", "c/IMG_1.jpg"}) {
+        addJpeg(folder.file(name));
+    }
+    ShotModel model;
+    FolderWatcher watcher(model, std::chrono::milliseconds(20));
+    model.setFolder(folder.path(), true);
+    REQUIRE(waitUntil([&] { return !model.isListing(); }));
+    RowLog log(model);
+
+    // Written as soon as each directory is made, before any watch can be on it (R7): each is
+    // in its directory's first read, or reported to its watch.
+    std::vector<fs::path> made;
+    for (int n = 0; n < 20; ++n) {
+        const std::string day = "new/d" + std::to_string(n);
+        made.push_back(addJpeg(folder.file(day + "/IMG_1.jpg")));
+        made.push_back(addJpeg(folder.file(day + "/x/IMG_1.jpg")));
+    }
+    REQUIRE(waitUntil([&] {
+        return std::ranges::all_of(made, [&](const fs::path& p) { return model.rowOf(p) >= 0; });
+    }));
+    REQUIRE(
+        waitUntil([&] { return primaries(model) == primaries(listShots(folder.path(), true)); }));
+    REQUIRE(waitUntil([&] { return watcher.watchedDirectories().size() == 4 + 1 + 40; }));
+    REQUIRE(watcher.watchedDirectories().contains(qtPath(folder.file("new/d7/x"))));
+
+    // Moved out at once: b and b/deep are one run of rows, removed by one signal.
+    log.events.clear();
+    fs::rename(folder.file("b"), outside.file("b"));
+    REQUIRE(waitUntil([&] { return model.rowOf(folder.file("b/deep/IMG_1.jpg")) < 0; }));
+    REQUIRE(model.rowOf(folder.file("b/IMG_1.jpg")) < 0);
+    REQUIRE(log.events == std::vector<std::string>{"-1..2"});
+    REQUIRE(waitUntil([&] {
+        const QStringList watched = watcher.watchedDirectories();
+        return !watched.contains(qtPath(folder.file("b"))) &&
+               !watched.contains(qtPath(folder.file("b/deep")));
+    }));
+    REQUIRE(model.rowOf(folder.file("c/IMG_1.jpg")) >= 0);
+}
+
+TEST_CASE("A directory is watched before it is read, and changes during the walk are read",
+          "[watcher][listing][refresh]") {
+    const test::TempDir folder;
+    for (const char* name : {"IMG_1.jpg", "a/IMG_1.jpg", "c/IMG_1.jpg"}) {
+        addJpeg(folder.file(name));
+    }
+    ShotModel model;
+    FolderWatcher watcher(model, std::chrono::milliseconds(20));
+    const test::ListingGate gate(folder.file("c"));
+    watcher.setReadHook(gate.hook());
+    model.setFolder(folder.path(), true);
+    REQUIRE(waitUntil([&] { return gate.reached(); }));
+    // Held before c's read, and c is watched already.
+    REQUIRE(watcher.watchedDirectories().contains(qtPath(folder.file("c"))));
+    // Between c's watch and its read: in the read (and reported too).
+    addJpeg(folder.file("c/IMG_2.jpg"));
+    // In a, read already: reported, and a is read again once the walk lets it.
+    addJpeg(folder.file("a/IMG_2.jpg"));
+    gate.release();
+    REQUIRE(waitUntil([&] {
+        return model.rowOf(folder.file("a/IMG_2.jpg")) >= 0 &&
+               model.rowOf(folder.file("c/IMG_2.jpg")) >= 0 && !model.isListing();
+    }));
+    const std::vector<fs::path> read = gate.read();
+    REQUIRE(std::ranges::count(read, folder.file("a")) >= 2);
+    REQUIRE(std::ranges::count(read, folder.path()) == 1);
+    REQUIRE(model.rowCount() == 5);
+}
+
+TEST_CASE("A change rechecks the sidecars of its folder only, and own writes stay quiet",
+          "[watcher][listing][refresh]") {
+    const test::TempDir folder;
+    const fs::path inA = addJpeg(folder.file("a/IMG_1.jpg"));
+    const fs::path inB = addJpeg(folder.file("b/IMG_1.jpg"));
+    writeSidecarMarks(inA, {.rating = 1});
+    writeSidecarMarks(inB, {.rating = 1});
+    // A sidecar of rating 3, to copy into b's file in place: no event reports that.
+    const fs::path spare = addJpeg(folder.file("spare/IMG_1.jpg"));
+    writeSidecarMarks(spare, {.rating = 3});
+    std::string spareText;
+    {
+        std::ifstream in(sidecarPath(spare), std::ios::binary);
+        spareText.assign(std::istreambuf_iterator<char>(in), {});
+    }
+    fs::remove_all(folder.file("spare"));
+
+    ShotModel model;
+    FolderWatcher watcher(model, std::chrono::milliseconds(20));
+    std::vector<fs::path> refreshed;
+    QObject::connect(
+        &model, &ShotModel::sidecarRefreshed, &model,
+        [&](const QString& primary, qint64) { refreshed.emplace_back(primary.toStdU16String()); });
+    std::vector<fs::path> external;
+    QObject::connect(
+        &watcher, &FolderWatcher::sidecarChangedExternally, &watcher,
+        [&](const QString& primary) { external.emplace_back(primary.toStdU16String()); });
+    model.setFolder(folder.path(), true);
+    REQUIRE(waitUntil([&] { return !model.isListing() && model.pendingLoads() == 0; }));
+    REQUIRE(model.marks(model.rowOf(inB)).rating == 1);
+
+    // b's sidecar rewritten in place: no event.
+    {
+        std::ofstream out(sidecarPath(inB), std::ios::binary | std::ios::trunc);
+        out << spareText;
+    }
+    // a's replaced by another program: a's event rechecks a's rows only.
+    writeSidecarMarks(inA, {.rating = 4});
+    REQUIRE(waitUntil([&] { return model.marks(model.rowOf(inA)).rating == 4; }));
+    REQUIRE(waitUntil([&] { return model.pendingLoads() == 0; }));
+    REQUIRE(refreshed == std::vector<fs::path>{inA});
+    REQUIRE(external == std::vector<fs::path>{inA});
+    REQUIRE(model.marks(model.rowOf(inB)).rating == 1);
+
+    // b's change shows once b reports one.
+    watcher.simulateDirectoryChanged(folder.file("b"));
+    REQUIRE(waitUntil([&] { return model.marks(model.rowOf(inB)).rating == 3; }));
+    REQUIRE(external == std::vector<fs::path>{inA, inB});
+
+    // The application's own write is rechecked, and not reported as another program's.
+    writeSidecarMarks(inA, {.rating = 5});
+    model.setMarks(inA, {.rating = 5});
+    watcher.noteOwnWrite(sidecarPath(inA));
+    REQUIRE(waitUntil([&] { return refreshed.size() == 3; }));
+    REQUIRE(refreshed.back() == inA);
+    REQUIRE(waitUntil([&] { return model.pendingLoads() == 0; }));
+    REQUIRE(external.size() == 2);
+}
+
+TEST_CASE("A new folder cancels the change being read for the old one", "[watcher][listing]") {
+    const test::TempDir first;
+    const test::TempDir second;
+    addJpeg(first.file("a/IMG_1.jpg"));
+    addJpeg(second.file("IMG_9.jpg"));
+    ShotModel model;
+    FolderWatcher watcher(model, std::chrono::milliseconds(20));
+    model.setFolder(first.path(), true);
+    REQUIRE(waitUntil([&] { return !model.isListing(); }));
+
+    const test::ListingGate gate(first.file("a"));
+    watcher.setReadHook(gate.hook());
+    addJpeg(first.file("a/IMG_2.jpg"));
+    watcher.simulateDirectoryChanged(first.file("a"));
+    REQUIRE(waitUntil([&] { return gate.reached(); }));
+    model.setFolder(second.path(), true);
+    gate.release();
+    REQUIRE(waitUntil([&] { return !model.isListing(); }));
+    // Whatever was queued for the old folder is stale.
+    QCoreApplication::processEvents();
+    REQUIRE(primaries(model) == std::vector<fs::path>{second.file("IMG_9.jpg")});
+    REQUIRE(watcher.watchedDirectories() == QStringList{qtPath(second.path())});
+    // And a report of the old folder is ignored.
+    const std::size_t mark = gate.read().size();
+    watcher.simulateDirectoryChanged(first.file("a"));
+    watcher.simulateDirectoryChanged(second.path());
+    REQUIRE(waitUntil([&] { return readSince(gate, mark).contains(second.path()); }));
+    REQUIRE(readSince(gate, mark) == std::set<fs::path>{second.path()});
+}
+
+TEST_CASE("The watcher goes while changes are pending or being read", "[watcher][listing]") {
+    const test::TempDir folder;
+    addJpeg(folder.file("a/IMG_1.jpg"));
+    ShotModel model;
+
+    SECTION("Waiting for the debounce") {
+        FolderWatcher watcher(model, std::chrono::hours(1));
+        model.setFolder(folder.path(), true);
+        REQUIRE(waitUntil([&] { return !model.isListing(); }));
+        watcher.simulateDirectoryChanged(folder.file("a"));
+        addJpeg(folder.file("a/IMG_2.jpg"));
+        QCoreApplication::processEvents();
+    }
+    SECTION("Held in the read of a change") {
+        FolderWatcher watcher(model, std::chrono::milliseconds(0));
+        model.setFolder(folder.path(), true);
+        REQUIRE(waitUntil([&] { return !model.isListing(); }));
+        const test::ListingGate gate(folder.file("a"));
+        watcher.setReadHook(gate.hook());
+        watcher.simulateDirectoryChanged(folder.file("a"));
+        REQUIRE(waitUntil([&] { return gate.reached(); }));
+        // The gate goes first and lets the read finish; the watcher then stops its thread.
+    }
+    // Nothing of the gone watcher arrives.
+    QCoreApplication::processEvents();
+    REQUIRE(model.rowCount() == 1);
 }

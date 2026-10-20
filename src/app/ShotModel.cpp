@@ -19,7 +19,6 @@
 #include <functional>
 #include <iterator>
 #include <mutex>
-#include <set>
 #include <span>
 #include <stdexcept>
 #include <system_error>
@@ -79,12 +78,6 @@ QString dateText(const std::string& exifDate) {
         text[7] = '-';
     }
     return text;
-}
-
-/// @brief Spells a folder one way, so that the watcher's spelling and the listing's agree.
-fs::path folderKey(const fs::path& folder) {
-    fs::path key = folder.lexically_normal();
-    return key.has_filename() ? key : key.parent_path();
 }
 
 } // namespace
@@ -324,11 +317,7 @@ void ShotModel::setFolder(const std::filesystem::path& folder, bool recursive) {
     spans_.clear();
     index_.clear();
     seen_.clear();
-    recheckAll_ = false;
-    dirtyFolders_.clear();
     refreshWanted_ = false;
-    wantedAll_ = false;
-    wantedFolders_.clear();
     incoming_.clear();
     nextFolder_ = 0;
     nextShot_ = 0;
@@ -351,16 +340,9 @@ std::filesystem::path ShotModel::shownName(const Shot& shot) const {
     return relative.make_preferred();
 }
 
-void ShotModel::refresh(const std::optional<std::vector<fs::path>>& dirty) {
+void ShotModel::refresh() {
     if (folder_.empty()) {
         return;
-    }
-    if (dirty) {
-        for (const fs::path& folder : *dirty) {
-            wantedFolders_.insert(folderKey(folder));
-        }
-    } else {
-        wantedAll_ = true;
     }
     refreshWanted_ = true;
     if (walking_ == Walking::None) {
@@ -370,8 +352,6 @@ void ShotModel::refresh(const std::optional<std::vector<fs::path>>& dirty) {
 
 void ShotModel::startRefresh() {
     refreshWanted_ = false;
-    recheckAll_ = std::exchange(wantedAll_, false);
-    dirtyFolders_ = std::exchange(wantedFolders_, {});
     ++walk_;
     seen_.clear();
     walking_ = Walking::Refresh;
@@ -394,6 +374,11 @@ void ShotModel::queueFinish(std::uint64_t walk, ListingSummary summary) {
 
 void ShotModel::applyFolders(std::uint64_t walk, const std::vector<FolderResult>& batch) {
     queueFolders(walk, batch);
+    applyQueued(std::nullopt);
+}
+
+void ShotModel::removeSubtree(std::uint64_t walk, const std::filesystem::path& folder) {
+    queueFolders(walk, {{.folder = folder, .shots = {}, .gone = true, .recheck = false}});
     applyQueued(std::nullopt);
 }
 
@@ -422,7 +407,9 @@ void ShotModel::applyQueued(std::optional<Deadline> deadline) {
            !(deadline && worked && std::chrono::steady_clock::now() >= *deadline)) {
         worked = true;
         Incoming& next = incoming_.front();
-        if (next.walk != walk_ || walking_ == Walking::None) {
+        // A batch of the last walk counts after its end too: the directories read again after a
+        // change. An end counts once.
+        if (next.walk != walk_ || (next.end && walking_ == Walking::None)) {
             dropIncoming(); // Stale.
         } else if (next.end) {
             dropIncoming();
@@ -451,6 +438,11 @@ void ShotModel::dropIncoming() {
 void ShotModel::applyStep(std::vector<fs::path>& added, std::vector<Job>& rechecks) {
     std::vector<FolderResult>& batch = incoming_.front().batch;
     const fs::path folder = withoutTrailingSeparator(batch[nextFolder_].folder);
+    if (nextShot_ == 0 && batch[nextFolder_].gone) {
+        ++nextFolder_;
+        removeTree(folder);
+        return;
+    }
     if (nextShot_ > 0 || !spans_.contains(folder)) {
         insertRun(added);
         return;
@@ -458,8 +450,9 @@ void ShotModel::applyStep(std::vector<fs::path>& added, std::vector<Job>& rechec
     // Taken out of the queue before any signal: a view's handler may change the folder, which
     // empties the queue.
     const std::vector<Shot> fresh = std::move(batch[nextFolder_].shots);
+    const bool recheck = batch[nextFolder_].recheck;
     ++nextFolder_;
-    mergeFolder(folder, fresh, added, rechecks);
+    mergeFolder(folder, fresh, recheck, added, rechecks);
 }
 
 void ShotModel::endWalk() {
@@ -480,8 +473,6 @@ void ShotModel::endWalk() {
     seen_.clear();
     const bool wasListing = walking_ == Walking::Listing;
     walking_ = Walking::None;
-    recheckAll_ = false;
-    dirtyFolders_.clear();
     if (wasListing) {
         emit listingChanged(false);
     }
@@ -504,7 +495,7 @@ void ShotModel::checkSpans() const {
 #endif
 }
 
-void ShotModel::mergeFolder(const fs::path& folder, std::span<const Shot> fresh,
+void ShotModel::mergeFolder(const fs::path& folder, std::span<const Shot> fresh, bool recheck,
                             std::vector<fs::path>& added, std::vector<Job>& rechecks) {
     seen_.insert(folder);
     const auto found = spans_.find(folder);
@@ -526,7 +517,8 @@ void ShotModel::mergeFolder(const fs::path& folder, std::span<const Shot> fresh,
         return;
     }
     found->second.count = count;
-    if (recheckAll_ || diff.changed() || dirtyFolders_.contains(folderKey(folder))) {
+    // A refresh of all checks every row; otherwise only the folders that changed (plan, 2.4).
+    if (recheck || walking_ == Walking::Refresh || diff.changed()) {
         for (int row = span.first; row < span.first + count; ++row) {
             const Row& entry = rows_[row];
             if (entry.marksLoaded) {
@@ -553,8 +545,8 @@ void ShotModel::insertRun(std::vector<fs::path>& added) {
         fs::path folder = withoutTrailingSeparator(batch[nextFolder_].folder);
         const bool extends = nextShot_ > 0;
         const auto found = spans_.find(folder);
-        if (found != spans_.end() && !extends) {
-            break; // Rows to merge with: the next step's.
+        if (!extends && (found != spans_.end() || batch[nextFolder_].gone)) {
+            break; // Rows to merge with, or to remove: the next step's.
         }
         if (shots.empty()) {
             seen_.insert(std::move(folder));
@@ -674,6 +666,29 @@ void ShotModel::removeFolder(Spans::iterator span) {
     shiftSpans(std::next(span), -rows.count);
     spans_.erase(span);
     reindexFrom(rows.first);
+    endRemoveRows();
+}
+
+void ShotModel::removeTree(const fs::path& folder) {
+    // A subtree is one run of spans, so one run of rows (plan, section 2).
+    const auto first = spans_.lower_bound(folder);
+    auto last = first;
+    while (last != spans_.end() && isWithin(last->first, folder)) {
+        ++last;
+    }
+    if (first == last) {
+        return;
+    }
+    const int from = first->second.first;
+    const int count = std::prev(last)->second.first + std::prev(last)->second.count - from;
+    beginRemoveRows({}, from, from + count - 1);
+    for (int row = from; row < from + count; ++row) {
+        index_.erase(rows_[row].shot.primary);
+    }
+    rows_.erase(rows_.begin() + from, rows_.begin() + from + count);
+    shiftSpans(last, -count);
+    spans_.erase(first, last);
+    reindexFrom(from);
     endRemoveRows();
 }
 

@@ -333,7 +333,7 @@ FilmStrip::FilmStrip(QWidget* parent, ThumbnailCache cache, LensDatabaseSource l
     connect(&model_, &ShotModel::listingChanged, this, &FilmStrip::onListingChanged);
     busyTimer_.setInterval(busyNoteMs);
     connect(&busyTimer_, &QTimer::timeout, this, &FilmStrip::updateFolderLabel);
-    // A refresh that is too scattered to merge by runs resets the model (see ShotModel::refresh);
+    // A change too scattered to merge by runs resets the model (see ShotModel::applyFolders);
     // the selection is carried over it. A new folder is not carried, and gets its thumbnails in
     // setFolder.
     connect(&proxy_, &QAbstractItemModel::modelAboutToBeReset, this, [this] {

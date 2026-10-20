@@ -791,7 +791,7 @@ TEST_CASE("A scattered change resets the model and keeps what the rows know",
     REQUIRE(model.rowCount() == 200 - 64);
 }
 
-TEST_CASE("A refresh checks the sidecars of the folders that changed, or that it is told of",
+TEST_CASE("A merged folder's sidecars are checked when it reported a change, and only then",
           "[shotmodel][merge][recursive]") {
     const test::TempDir folder;
     fs::create_directories(folder.file("a"));
@@ -804,35 +804,38 @@ TEST_CASE("A refresh checks the sidecars of the folders that changed, or that it
     model.setFolder(folder.path(), true);
     test::listNow(model);
     REQUIRE(settle(model));
-    const std::vector<fs::path> none;
+    // A directory read again after the walk, as the watcher hands it over.
+    const auto reread = [&](const char* name, bool recheck) {
+        const fs::path directory = folder.file(name);
+        model.applyFolders(model.walk(), {{.folder = directory,
+                                           .shots = listFolder(directory).shots,
+                                           .gone = false,
+                                           .recheck = recheck}});
+    };
 
-    SECTION("Nothing changed and nobody called: nothing is read") {
-        model.refresh(none);
-        test::listNow(model);
+    SECTION("Read again without a report and unchanged: nothing is read") {
+        reread("a", false);
         REQUIRE(model.pendingLoads() == 0);
+    }
+    SECTION("A report checks that folder's rows only") {
+        reread("a", true);
+        REQUIRE(model.pendingLoads() == 3);
+        REQUIRE(settle(model));
     }
     SECTION("A changed folder is checked, and so are the new rows' first reads") {
         addJpeg(folder, "a/IMG_4.jpg");
-        model.refresh(none);
-        test::listNow(model);
+        reread("a", false);
         // Three rechecks in a, then marks and EXIF of the new shot.
         REQUIRE(model.pendingLoads() == 3 + 2);
+        REQUIRE(model.rowCount() == 8);
         REQUIRE(settle(model));
     }
-    SECTION("A folder that was told about is checked, whatever its listing") {
-        model.refresh(std::vector<fs::path>{folder.file("b") / ""});
-        test::listNow(model);
-        REQUIRE(model.pendingLoads() == 4);
-        REQUIRE(settle(model));
-    }
-    SECTION("A vanished folder checks no one") {
-        fs::remove_all(folder.file("b"));
-        model.refresh(none);
-        test::listNow(model);
+    SECTION("A folder that went checks no one, and takes its rows") {
+        model.removeSubtree(model.walk(), folder.file("b"));
         REQUIRE(model.pendingLoads() == 0);
         REQUIRE(model.rowCount() == 3);
     }
-    SECTION("Without a list of folders every loaded row is checked") {
+    SECTION("A refresh of all checks every loaded row") {
         model.refresh();
         test::listNow(model);
         REQUIRE(model.pendingLoads() == 7);

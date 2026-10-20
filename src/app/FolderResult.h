@@ -2,6 +2,7 @@
 
 #include <Shot.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <vector>
 
@@ -17,29 +18,48 @@ namespace arraw::app {
     return folder;
 }
 
-/// @brief One directory as a walk of the film strip's folder read it.
+/// @brief Order of folders as ::arraw::folderPrecedes gives it: a folder, then its subtree, then
+/// its next sibling.
+///
+/// The one comparator of the film strip's rows and of the lister's tree (plan, Risks), so that a
+/// folder's subtree is one contiguous range of either.
+struct FolderOrder {
+    /// @brief Tells whether @p a comes before @p b.
+    bool operator()(const std::filesystem::path& a, const std::filesystem::path& b) const {
+        return folderPrecedes(a, b);
+    }
+};
+
+/// @brief Tells whether a path is a folder or lies below it, component by component.
+/// @param path Path to look at, spelled as @p folder is (no trailing separator).
+/// @param folder Folder.
+/// @return True for @p folder itself and anything under it; false for `/a/bc` against `/a/b`.
+[[nodiscard]] inline bool isWithin(const std::filesystem::path& path,
+                                   const std::filesystem::path& folder) {
+    const auto [inFolder, inPath] =
+        std::mismatch(folder.begin(), folder.end(), path.begin(), path.end());
+    return inFolder == folder.end();
+}
+
+/// @brief One directory as the film strip's lister read it, or found it gone.
 struct FolderResult {
     /// @brief Directory read, without a trailing separator.
     std::filesystem::path folder;
 
     /// @brief Its own shots, in ::arraw::groupShots order; none for a directory without any.
     std::vector<Shot> shots;
-};
 
-/// @brief A directory a walk read, and how deep it lies.
-struct ListedDirectory {
-    /// @brief Path of the directory, spelled as ::arraw::app::FolderResult::folder.
-    std::filesystem::path path;
+    /// @brief Whether the directory went, or could not be read: its rows go, and so do those of
+    /// every folder below it (::arraw::app::ShotModel::removeSubtree).
+    bool gone = false;
 
-    /// @brief Depth below the root of the walk; 0 for the root.
-    int depth = 0;
+    /// @brief Whether the directory was read again because it reported a change, so that the
+    /// sidecars of its rows that stay are checked too (a sidecar replaced by another program).
+    bool recheck = false;
 };
 
 /// @brief What a finished walk saw.
 struct ListingSummary {
-    /// @brief Every directory read, the root first, in walk order (::arraw::folderPrecedes).
-    std::vector<ListedDirectory> directories;
-
     /// @brief Number of shots listed.
     int shots = 0;
 

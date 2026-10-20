@@ -22,21 +22,17 @@ namespace arraw::test {
 inline void listNow(app::ShotModel& model) {
     std::vector<app::FolderResult> batch;
     app::ListingSummary summary;
-    std::vector<app::ListedDirectory> pending{{app::withoutTrailingSeparator(model.folder()), 0}};
+    std::vector<std::filesystem::path> pending{app::withoutTrailingSeparator(model.folder())};
     while (!pending.empty()) {
-        const app::ListedDirectory directory = std::move(pending.back());
+        const std::filesystem::path directory = std::move(pending.back());
         pending.pop_back();
         try {
-            FolderListing listing = listFolder(directory.path);
+            FolderListing listing = listFolder(directory);
             if (model.recursive()) {
-                for (auto child = listing.folders.rbegin(); child != listing.folders.rend();
-                     ++child) {
-                    pending.push_back({*child, directory.depth + 1});
-                }
+                pending.insert(pending.end(), listing.folders.rbegin(), listing.folders.rend());
             }
-            summary.directories.push_back(directory);
             summary.shots += static_cast<int>(listing.shots.size());
-            batch.push_back({directory.path, std::move(listing.shots)});
+            batch.push_back({directory, std::move(listing.shots)});
         } catch (const std::exception&) {
             ++summary.unreadable;
         }

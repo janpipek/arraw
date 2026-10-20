@@ -2,9 +2,13 @@
 
 #include <Shot.h>
 
+#include <QFileSystemWatcher>
 #include <QMetaObject>
+#include <QTimer>
 
+#include <algorithm>
 #include <exception>
+#include <optional>
 #include <utility>
 
 namespace arraw::app {
@@ -12,8 +16,20 @@ namespace arraw::app {
 namespace fs = std::filesystem;
 using Clock = std::chrono::steady_clock;
 
-FolderLister::FolderLister(BatchReceiver onBatch, FinishReceiver onFinished)
-    : onBatch_(std::move(onBatch)), onFinished_(std::move(onFinished)) {}
+namespace {
+
+/// @brief Spells a path as Qt's watcher takes and reports it.
+QString toQString(const fs::path& path) {
+    return QString::fromStdU16String(path.u16string());
+}
+
+} // namespace
+
+FolderLister::FolderLister(BatchReceiver onBatch, FinishReceiver onFinished,
+                           std::chrono::milliseconds debounce)
+    : onBatch_(std::move(onBatch)), onFinished_(std::move(onFinished)), debounce_(debounce) {}
+
+FolderLister::~FolderLister() = default;
 
 void FolderLister::start(const fs::path& root, bool recursive, std::uint64_t walk) {
     // Written at once, so that the walk under way stops before its next directory even while
@@ -28,45 +44,134 @@ void FolderLister::cancel() {
     wanted_.store(0);
 }
 
+void FolderLister::shutDown() {
+    debounceTimer_.reset();
+    watcher_.reset();
+    const std::scoped_lock lock(watchedMutex_);
+    watchedCopy_.clear();
+}
+
 void FolderLister::setReadHook(ReadHook hook) {
     const std::scoped_lock lock(hookMutex_);
     hook_ = std::move(hook);
+}
+
+QStringList FolderLister::watchedDirectories() const {
+    const std::scoped_lock lock(watchedMutex_);
+    return {watchedCopy_.begin(), watchedCopy_.end()};
+}
+
+void FolderLister::simulateDirectoryChanged(const fs::path& directory) {
+    QMetaObject::invokeMethod(
+        this, [this, path = toQString(directory)] { onDirectoryChanged(path); },
+        Qt::QueuedConnection);
+}
+
+void FolderLister::ensureWatcher() {
+    if (watcher_) {
+        return;
+    }
+    watcher_ = std::make_unique<QFileSystemWatcher>();
+    connect(watcher_.get(), &QFileSystemWatcher::directoryChanged, this,
+            [this](const QString& path) { onDirectoryChanged(path); });
+    debounceTimer_ = std::make_unique<QTimer>();
+    debounceTimer_->setSingleShot(true);
+    connect(debounceTimer_.get(), &QTimer::timeout, this, [this] { readChanged(); });
 }
 
 void FolderLister::begin(const fs::path& root, bool recursive, std::uint64_t walk) {
     if (walk != wanted_.load()) {
         return; // Started and superseded before this thread got to it.
     }
+    ensureWatcher();
     abandon();
-    walk_ = walk;
-    ++chain_;
+    const fs::path folder = withoutTrailingSeparator(root);
+    if (folder != root_) {
+        // The watches and the changes of another folder say nothing of this one.
+        unwatchAll();
+        tree_.clear();
+        dirty_.clear();
+        debounceTimer_->stop();
+        root_ = folder;
+    } else if (!dirty_.empty()) {
+        // Reports put off while no walk was wanted.
+        debounceTimer_->start(0);
+    }
     recursive_ = recursive;
-    work_.push_back({withoutTrailingSeparator(root), 0});
+    walk_ = walk;
+    walking_ = true;
+    flushed_ = false;
     lastFlush_ = Clock::now();
+    const auto [rootDir, added] = tree_.try_emplace(root_);
+    unbalanced_ = unbalanced_ || added;
+    enqueue(rootDir, true, false);
     scheduleStep();
 }
 
 void FolderLister::scheduleStep() {
-    QMetaObject::invokeMethod(
-        this,
-        [this, chain = chain_] {
-            // A step queued for an earlier walk must not run a second chain of this one.
-            if (chain == chain_) {
-                step();
-            }
-        },
-        Qt::QueuedConnection);
+    if (stepQueued_) {
+        return;
+    }
+    stepQueued_ = true;
+    QMetaObject::invokeMethod(this, [this] { step(); }, Qt::QueuedConnection);
+}
+
+bool FolderLister::enqueue(Tree::iterator directory, bool enter, bool recheck) {
+    Dir& dir = directory->second;
+    const bool wasQueued = dir.queued;
+    const bool deeper = enter && !dir.enter;
+    dir.queued = true;
+    dir.enter = dir.enter || enter;
+    dir.recheck = dir.recheck || recheck;
+    if (wasQueued && !deeper) {
+        return false; // Its read is still to come, and covers this one (plan, section 4, rule 4).
+    }
+    // A read that now enters its subfolders moves to the front; the old place is skipped.
+    work_.push_front(directory->first);
+    return true;
 }
 
 void FolderLister::step() {
-    if (!current() || work_.empty()) {
-        if (walk_ != 0 && !current()) {
-            abandon();
+    stepQueued_ = false;
+    if (!current()) {
+        abandon();
+        return;
+    }
+    auto directory = tree_.end();
+    while (!work_.empty() && directory == tree_.end()) {
+        const auto found = tree_.find(work_.front());
+        work_.pop_front();
+        if (found != tree_.end() && found->second.queued) {
+            directory = found;
+        }
+    }
+    if (directory == tree_.end()) {
+        // Nothing left to read: what is gathered goes, then the watches settle, which may queue
+        // reads of their own.
+        flush();
+        balanceWatches();
+        if (!work_.empty()) {
+            scheduleStep();
+            return;
+        }
+        if (walking_) {
+            walking_ = false;
+            onFinished_(walk_, std::exchange(summary_, {}));
         }
         return;
     }
-    const ListedDirectory directory = std::move(work_.front());
-    work_.pop_front();
+
+    Dir& dir = directory->second;
+    const bool enter = dir.enter;
+    const bool recheck = dir.recheck;
+    dir.queued = false;
+    dir.enter = false;
+    dir.recheck = false;
+    // Watch, then read: a change after the read is reported, one before it is in the read.
+    if (!dir.watched && !watch(directory) && watchedCount_ < maxWatchedFolders) {
+        unbalanced_ = true; // Refused; tried again once there is nothing to read.
+    }
+    const fs::path path = directory->first;
 
     ReadHook hook;
     {
@@ -74,46 +179,230 @@ void FolderLister::step() {
         hook = hook_;
     }
     if (hook) {
-        hook(directory.path);
+        hook(path);
         if (!current()) {
             abandon();
             return;
         }
     }
 
+    std::optional<FolderListing> listing;
     try {
-        FolderListing listing = listFolder(directory.path);
-        if (recursive_) {
-            // Pre-order: the subfolders come next, before the directory's later siblings.
-            for (auto child = listing.folders.rbegin(); child != listing.folders.rend(); ++child) {
-                work_.push_front({std::move(*child), directory.depth + 1});
-            }
-        }
-        summary_.directories.push_back(directory);
-        summary_.shots += static_cast<int>(listing.shots.size());
-        batchShotCount_ += listing.shots.size();
-        batch_.push_back({directory.path, std::move(listing.shots)});
+        listing = listFolder(path);
     } catch (const std::exception&) {
-        // Gone, no permission or an I/O error: skipped with its subtree (plan, section 6).
-        ++summary_.unreadable;
+        // Gone, no permission or an I/O error: dropped with its subtree (plan, section 6).
     }
     if (!current()) {
         abandon();
         return;
     }
+    if (!listing) {
+        if (walking_) {
+            ++summary_.unreadable;
+        }
+        dropSubtree(directory);
+    } else {
+        if (walking_) {
+            summary_.shots += static_cast<int>(listing->shots.size());
+        }
+        batchShotCount_ += listing->shots.size();
+        batch_.push_back({.folder = path,
+                          .shots = std::move(listing->shots),
+                          .gone = false,
+                          .recheck = recheck});
+        followSubfolders(directory, recursive_ ? listing->folders : std::vector<fs::path>{}, enter);
+    }
 
-    const bool done = work_.empty();
     // The first shots go at once, however deep the walk had to go to find them.
-    if ((!flushed_ && batchShotCount_ > 0) || done || batchShotCount_ >= batchShots ||
+    if ((!flushed_ && batchShotCount_ > 0) || batchShotCount_ >= batchShots ||
         Clock::now() - lastFlush_ >= batchInterval) {
         flush();
     }
-    if (done) {
-        const std::uint64_t walk = walk_;
-        ListingSummary summary = std::move(summary_);
-        abandon();
-        onFinished_(walk, std::move(summary));
+    scheduleStep();
+}
+
+void FolderLister::followSubfolders(Tree::iterator directory, const std::vector<fs::path>& folders,
+                                    bool enter) {
+    const fs::path& parent = directory->first;
+    const int depth = directory->second.depth + 1;
+    // The subfolders known: the direct children within the directory's range of the tree.
+    std::vector<fs::path> known;
+    for (auto entry = std::next(directory); entry != tree_.end() && isWithin(entry->first, parent);
+         ++entry) {
+        if (entry->second.depth == depth) {
+            known.push_back(entry->first);
+        }
+    }
+    // Both lists are in folder order: one pass tells the new, the gone and the kept.
+    const FolderOrder precedes;
+    std::vector<Tree::iterator> toRead;
+    std::vector<fs::path> gone;
+    std::size_t k = 0;
+    for (const fs::path& folder : folders) {
+        while (k < known.size() && precedes(known[k], folder)) {
+            gone.push_back(known[k++]);
+        }
+        if (k < known.size() && known[k] == folder) {
+            ++k;
+            if (enter) {
+                toRead.push_back(tree_.find(folder));
+            }
+            continue;
+        }
+        toRead.push_back(tree_.try_emplace(folder, Dir{.depth = depth}).first);
+        unbalanced_ = true;
+    }
+    gone.insert(gone.end(), known.begin() + static_cast<std::ptrdiff_t>(k), known.end());
+    for (const fs::path& folder : gone) {
+        dropSubtree(tree_.find(folder));
+    }
+    // Pre-order: the subfolders come next, before the directory's later siblings.
+    for (auto child = toRead.rbegin(); child != toRead.rend(); ++child) {
+        enqueue(*child, true, false);
+    }
+}
+
+void FolderLister::dropSubtree(Tree::iterator directory) {
+    fs::path folder = directory->first;
+    auto end = std::next(directory);
+    while (end != tree_.end() && isWithin(end->first, folder)) {
+        ++end;
+    }
+    QStringList released;
+    for (auto entry = directory; entry != end; ++entry) {
+        if (entry->second.watched) {
+            released << toQString(entry->first);
+        }
+    }
+    unwatch(released);
+    tree_.erase(directory, end);
+    unbalanced_ = true;
+    batch_.push_back({.folder = std::move(folder), .shots = {}, .gone = true, .recheck = false});
+}
+
+bool FolderLister::watch(Tree::iterator directory) {
+    if (watchedCount_ >= maxWatchedFolders) {
+        return false;
+    }
+    const QString path = toQString(directory->first);
+    if (!watcher_->addPath(path)) {
+        return false; // Gone already, or the system's limit (ENOSPC): unwatched.
+    }
+    directory->second.watched = true;
+    ++watchedCount_;
+    const std::scoped_lock lock(watchedMutex_);
+    watchedCopy_.insert(path);
+    return true;
+}
+
+void FolderLister::unwatch(const QStringList& paths) {
+    if (paths.isEmpty()) {
         return;
+    }
+    // A watch Qt dropped already is simply not removed again.
+    watcher_->removePaths(paths);
+    watchedCount_ -= static_cast<int>(paths.size());
+    const std::scoped_lock lock(watchedMutex_);
+    for (const QString& path : paths) {
+        watchedCopy_.remove(path);
+    }
+}
+
+void FolderLister::unwatchAll() {
+    if (const QStringList present = watcher_->directories(); !present.isEmpty()) {
+        watcher_->removePaths(present);
+    }
+    for (auto& [path, dir] : tree_) {
+        dir.watched = false;
+    }
+    watchedCount_ = 0;
+    const std::scoped_lock lock(watchedMutex_);
+    watchedCopy_.clear();
+}
+
+void FolderLister::balanceWatches() {
+    if (!unbalanced_) {
+        return;
+    }
+    unbalanced_ = false;
+    // The shallowest first; within a depth the folder order.
+    std::vector<Tree::iterator> order;
+    order.reserve(tree_.size());
+    for (auto entry = tree_.begin(); entry != tree_.end(); ++entry) {
+        order.push_back(entry);
+    }
+    const auto keep = std::min(order.size(), static_cast<std::size_t>(maxWatchedFolders));
+    if (order.size() > keep) {
+        std::ranges::stable_sort(order, {},
+                                 [](Tree::iterator entry) { return entry->second.depth; });
+    }
+    QStringList released;
+    for (std::size_t k = keep; k < order.size(); ++k) {
+        if (order[k]->second.watched) {
+            order[k]->second.watched = false;
+            released << toQString(order[k]->first);
+        }
+    }
+    unwatch(released);
+    for (std::size_t k = 0; k < keep; ++k) {
+        // A watch got after the read: read once more, so nothing between the two is missed
+        // (plan, section 4, rule 2).
+        if (!order[k]->second.watched && watch(order[k])) {
+            enqueue(order[k], false, true);
+        }
+    }
+}
+
+void FolderLister::onDirectoryChanged(const QString& path) {
+    if (!current()) {
+        return;
+    }
+    fs::path directory(path.toStdU16String());
+    if (!tree_.contains(directory)) {
+        return; // Dropped from the tree since; its parent's read said so.
+    }
+    const auto now = Clock::now();
+    if (dirty_.empty()) {
+        firstDirty_ = now;
+    }
+    dirty_.insert(std::move(directory));
+    // Trailing, but never later than the longest wait after the first report.
+    const auto left =
+        std::chrono::duration_cast<std::chrono::milliseconds>(maxLatency - (now - firstDirty_));
+    debounceTimer_->start(std::max(std::chrono::milliseconds(0), std::min(debounce_, left)));
+}
+
+void FolderLister::readChanged() {
+    if (!current()) {
+        return; // Kept for the walk that is to begin (see begin).
+    }
+    // Qt drops the watch of a directory removed, moved or unmounted, and reports it. One that
+    // lists still gets its watch again before its read (plan, section 4, rule 5).
+    std::optional<QSet<QString>> present;
+    std::vector<Tree::iterator> changed;
+    for (const fs::path& directory : dirty_) {
+        const auto entry = tree_.find(directory);
+        if (entry == tree_.end()) {
+            continue;
+        }
+        if (entry->second.watched) {
+            if (!present) {
+                const QStringList watched = watcher_->directories();
+                present.emplace(watched.begin(), watched.end());
+            }
+            if (const QString path = toQString(directory); !present->contains(path)) {
+                entry->second.watched = false;
+                --watchedCount_;
+                const std::scoped_lock lock(watchedMutex_);
+                watchedCopy_.remove(path);
+            }
+        }
+        changed.push_back(entry);
+    }
+    dirty_.clear();
+    // Ahead of a walk under way, in folder order.
+    for (auto entry = changed.rbegin(); entry != changed.rend(); ++entry) {
+        enqueue(*entry, false, true);
     }
     scheduleStep();
 }
@@ -129,11 +418,15 @@ void FolderLister::flush() {
 }
 
 void FolderLister::abandon() {
-    walk_ = 0;
     work_.clear();
+    for (auto& [path, dir] : tree_) {
+        dir.queued = false;
+        dir.enter = false;
+        dir.recheck = false;
+    }
     batch_.clear();
     batchShotCount_ = 0;
-    flushed_ = false;
+    walking_ = false;
     summary_ = {};
 }
 

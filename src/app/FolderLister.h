@@ -3,6 +3,9 @@
 #include "FolderResult.h"
 
 #include <QObject>
+#include <QSet>
+#include <QString>
+#include <QStringList>
 
 #include <atomic>
 #include <chrono>
@@ -11,39 +14,61 @@
 #include <deque>
 #include <filesystem>
 #include <functional>
+#include <map>
+#include <memory>
 #include <mutex>
+#include <set>
 #include <vector>
+
+class QFileSystemWatcher;
+class QTimer;
 
 namespace arraw::app {
 
-/// @brief Walker of a folder tree on a thread of its own, one directory per turn of its event
-/// loop.
+/// @brief Reader and watcher of a folder tree, on a thread of its own, one directory per turn of
+/// its event loop.
 ///
-/// Lives on the thread its owner (::arraw::app::FolderWatcher) moves it to. A walk reads the root
-/// with ::arraw::listFolder and, when it is recursive, every listed subfolder, in pre-order with
-/// the subfolders of each directory in ::arraw::folderPrecedes order: the order of the film
-/// strip's rows, so the rows a walk brings are always appended. Each directory is one queued
-/// call, so a new walk is taken up between two directories, never in the middle of one.
+/// Lives on the thread its owner (::arraw::app::FolderWatcher) moves it to, and keeps there the
+/// tree of the directories it listed, the system watches on them, the directories that reported a
+/// change and the debounce of those reports.
 ///
-/// The directories read are handed over in batches: at once when the first shots are found,
-/// however deep, then whenever ::arraw::app::FolderLister::batchShots shots have gathered, or
-/// ::arraw::app::FolderLister::batchInterval has passed since the last batch, or the walk is
-/// done. A directory that cannot be read (gone, no permission, an I/O error) is counted and
-/// skipped with its subtree; its siblings are still read.
+/// **Walks.** A walk reads the root with ::arraw::listFolder and, when it is recursive, every
+/// listed subfolder, in pre-order with the subfolders of each directory in
+/// ::arraw::folderPrecedes order: the order of the film strip's rows, so the rows of a first
+/// listing are always appended. The directories read are handed over in batches: at once when the
+/// first shots are found, however deep, then whenever ::arraw::app::FolderLister::batchShots shots
+/// have gathered, or ::arraw::app::FolderLister::batchInterval has passed since the last batch, or
+/// there is nothing more to read. A walk of the root the tree already holds (a refresh, or the
+/// same folder with or without its subfolders) keeps the watches there are.
 ///
-/// Walks are numbered by the caller. Starting one abandons the walk under way: nothing more of
-/// it is delivered once the next directory begins, and it is never reported finished.
+/// **Watch, then read** (plan, section 4). Each directory is watched before it is read, so a
+/// change made after the read is reported, and one made before is in the read. A directory that
+/// gets its watch only after its read (a watch that could not be had at first, or that the system
+/// dropped) is read once more. At most ::arraw::app::FolderLister::maxWatchedFolders are watched:
+/// first come during a walk, then, once there is nothing to read, the shallowest ones.
+///
+/// **Changes.** A directory that reports a change is read again, alone, once its reports have been
+/// quiet for the debounce time (but no later than ::arraw::app::FolderLister::maxLatency after the
+/// first): its result is merged into its rows and asks for its sidecars to be checked. A
+/// subfolder that is new is walked with its subtree; one that went is handed over as gone, with
+/// its subtree, and its watches are released. A directory that can no longer be read counts as
+/// gone. A report for a directory still waiting to be read is folded into that read.
+///
+/// Results are stamped with the number of the walk of the tree they belong to, the last one
+/// started. Starting one abandons the walk under way, and what was to be read for the walk before:
+/// nothing more of it is delivered once the next directory begins, and it is never reported
+/// finished.
 class FolderLister : public QObject {
 public:
-    /// @brief Receives a batch, on the lister thread: the walk's number and its directories, in
-    /// walk order.
+    /// @brief Receiver of a batch, on the lister thread: the walk's number and its directories,
+    /// in the order read.
     using BatchReceiver = std::function<void(std::uint64_t, std::vector<FolderResult>)>;
 
-    /// @brief Receives the end of a walk, on the lister thread: its number and what it saw.
+    /// @brief Receiver of the end of a walk, on the lister thread: its number and what it saw.
     using FinishReceiver = std::function<void(std::uint64_t, ListingSummary)>;
 
-    /// @brief Is called on the lister thread before each directory is read; a seam for tests,
-    /// which may block in it.
+    /// @brief Function called on the lister thread before each directory is read, once it is
+    /// watched; a seam for tests, which may block in it.
     using ReadHook = std::function<void(const std::filesystem::path&)>;
 
     /// @brief Shots after which a batch is handed over.
@@ -52,38 +77,134 @@ public:
     /// @brief Time after which a batch is handed over, however few shots it holds.
     static constexpr std::chrono::milliseconds batchInterval{100};
 
+    /// @brief Most directories watched at once.
+    static constexpr int maxWatchedFolders = 1000;
+
+    /// @brief Longest wait from a directory's first report of a change to its reading, however
+    /// busy it stays (plan, answer 3).
+    static constexpr std::chrono::milliseconds maxLatency{2000};
+
     /// @brief Makes an idle lister.
     /// @param onBatch Receives each batch; it must marshal to its own thread, and not throw.
     /// @param onFinished Receives the end of each walk that was not abandoned; the same.
-    FolderLister(BatchReceiver onBatch, FinishReceiver onFinished);
+    /// @param debounce Quiet time to wait after a directory reported a change before reading it.
+    FolderLister(BatchReceiver onBatch, FinishReceiver onFinished,
+                 std::chrono::milliseconds debounce);
+
+    /// @brief Destroys the lister; its thread must have stopped (see
+    /// ::arraw::app::FolderLister::shutDown).
+    ~FolderLister() override;
+
+    FolderLister(const FolderLister&) = delete;
+    FolderLister& operator=(const FolderLister&) = delete;
+    FolderLister(FolderLister&&) = delete;
+    FolderLister& operator=(FolderLister&&) = delete;
 
     /// @brief Starts a walk, abandoning the one under way. Safe from any thread.
-    /// @param root Folder to walk; a trailing separator is dropped.
+    /// @param root Folder to walk; a trailing separator is dropped. Another root than the last
+    /// one drops the tree, its watches and its pending changes.
     /// @param recursive Whether to enter its subfolders.
-    /// @param walk Number of the walk, never 0, stamped on what it delivers.
+    /// @param walk Number of the walk, never 0, stamped on what it delivers and on every change
+    /// read after it.
     void start(const std::filesystem::path& root, bool recursive, std::uint64_t walk);
 
-    /// @brief Abandons the walk under way, if any. Safe from any thread.
+    /// @brief Stops all work: the walk under way and the reading of changes. Safe from any thread.
     void cancel();
+
+    /// @brief Releases the watches and the timer, on the lister thread as it ends.
+    ///
+    /// Connect it to the thread's `finished` signal with a direct connection, so that what lives
+    /// on that thread is destroyed there.
+    void shutDown();
 
     /// @brief Sets the function called before each directory is read. Safe from any thread.
     /// @param hook Function, or an empty one for none.
     void setReadHook(ReadHook hook);
 
+    /// @brief Lists the directories under watch. Safe from any thread.
+    /// @return Their paths, as Qt spells them, in no particular order.
+    [[nodiscard]] QStringList watchedDirectories() const;
+
+    /// @brief Takes a directory's report of a change as if the system had sent it. Safe from any
+    /// thread; a seam for tests, which do not depend on the system's timing this way.
+    /// @param directory Directory, spelled as the lister spells it.
+    void simulateDirectoryChanged(const std::filesystem::path& directory);
+
 private:
+    /// @brief A directory of the tree.
+    struct Dir {
+        /// Depth below the root; 0 for the root.
+        int depth = 0;
+        /// Whether it has a watch.
+        bool watched = false;
+        /// Whether it waits in the queue to be read.
+        bool queued = false;
+        /// Whether its read is to read its known subfolders too (a walk).
+        bool enter = false;
+        /// Whether its read is for a change it reported.
+        bool recheck = false;
+    };
+
+    /// @brief Directories of the tree, in folder order.
+    using Tree = std::map<std::filesystem::path, Dir, FolderOrder>;
+
+    /// @brief Makes the system watcher and the debounce timer, on the lister thread, once.
+    void ensureWatcher();
+
     /// @brief Takes up a walk on the lister thread, unless a later one was started since.
     void begin(const std::filesystem::path& root, bool recursive, std::uint64_t walk);
 
     /// @brief Reads the next directory and hands over what is due.
     void step();
 
-    /// @brief Queues the next step on the lister thread.
+    /// @brief Queues the next step on the lister thread, unless one is queued already.
     void scheduleStep();
+
+    /// @brief Puts a directory of the tree at the front of the queue, or folds what is asked into
+    /// its queued read.
+    /// @param directory Directory.
+    /// @param enter Whether to read its known subfolders too.
+    /// @param recheck Whether the read is for a change.
+    /// @return Whether it went into the queue (false when it was there already).
+    bool enqueue(Tree::iterator directory, bool enter, bool recheck);
+
+    /// @brief Compares a directory's subfolders now with the tree, and queues what is to be read.
+    /// @param directory Directory just read.
+    /// @param folders Its listed subfolders, in folder order; none when not recursive.
+    /// @param enter Whether its known subfolders are read again too.
+    void followSubfolders(Tree::iterator directory,
+                          const std::vector<std::filesystem::path>& folders, bool enter);
+
+    /// @brief Drops a directory and its subtree from the tree, releasing their watches, and hands
+    /// it over as gone.
+    /// @param directory Directory, in the tree.
+    void dropSubtree(Tree::iterator directory);
+
+    /// @brief Gives a directory a watch, if the budget allows and the system does.
+    /// @return Whether it is watched now.
+    bool watch(Tree::iterator directory);
+
+    /// @brief Releases the watches of some directories.
+    /// @param paths Their paths.
+    void unwatch(const QStringList& paths);
+
+    /// @brief Releases every watch.
+    void unwatchAll();
+
+    /// @brief Moves the watches to the shallowest directories, and queues a read of each that
+    /// gets one now (plan, section 4, rule 2).
+    void balanceWatches();
+
+    /// @brief Takes a report of a change from the system watcher.
+    void onDirectoryChanged(const QString& path);
+
+    /// @brief Queues the reads of the directories that reported a change.
+    void readChanged();
 
     /// @brief Hands the gathered directories over.
     void flush();
 
-    /// @brief Drops the walk's state.
+    /// @brief Drops the work at hand: what was to be read and what was not handed over yet.
     void abandon();
 
     /// @brief Tells whether the walk at hand is still the one wanted.
@@ -95,23 +216,48 @@ private:
     BatchReceiver onBatch_;
     /// Receiver of finished walks.
     FinishReceiver onFinished_;
-    /// Walk last started, written by any thread; 0 for none.
+    /// Quiet time before a changed directory is read.
+    std::chrono::milliseconds debounce_;
+    /// Walk last started, written by any thread; 0 for none, or after a cancel.
     std::atomic<std::uint64_t> wanted_{0};
     /// Guard of the hook.
     std::mutex hookMutex_;
     /// Function called before each read.
     ReadHook hook_;
+    /// Guard of the copy of the watched set.
+    mutable std::mutex watchedMutex_;
+    /// Directories watched, as Qt spells them, for other threads to read.
+    QSet<QString> watchedCopy_;
 
-    // State of the walk at hand, touched on the lister thread only.
+    // State touched on the lister thread only.
 
-    /// Number of the walk at hand; 0 when idle.
-    std::uint64_t walk_ = 0;
-    /// Number of the chain of queued steps that serves the walk at hand.
-    std::uint64_t chain_ = 0;
-    /// Whether it enters subfolders.
+    /// System watcher; made on the lister thread.
+    std::unique_ptr<QFileSystemWatcher> watcher_;
+    /// Timer that waits for the changed directories to be quiet.
+    std::unique_ptr<QTimer> debounceTimer_;
+    /// Root of the tree; empty before the first walk.
+    std::filesystem::path root_;
+    /// Whether the tree enters subfolders.
     bool recursive_ = false;
-    /// Directories still to read, the next one first.
-    std::deque<ListedDirectory> work_;
+    /// Every directory listed or about to be, empty ones included. A directory's subtree is the
+    /// range from it to the first entry not within it.
+    Tree tree_;
+    /// Directories to read, the next one first; entries no longer queued in the tree are skipped.
+    std::deque<std::filesystem::path> work_;
+    /// Directories that reported a change, waiting for the debounce.
+    std::set<std::filesystem::path, FolderOrder> dirty_;
+    /// When the first of them reported.
+    std::chrono::steady_clock::time_point firstDirty_;
+    /// Number of directories watched.
+    int watchedCount_ = 0;
+    /// Whether the watches may not be on the shallowest directories (the tree or a watch changed).
+    bool unbalanced_ = false;
+    /// Number of the tree's walk, stamped on what is delivered; 0 when idle.
+    std::uint64_t walk_ = 0;
+    /// Whether a walk is under way, to be reported finished once nothing is left to read.
+    bool walking_ = false;
+    /// Whether a step is queued.
+    bool stepQueued_ = false;
     /// Directories read and not handed over yet.
     std::vector<FolderResult> batch_;
     /// Shots in the batch.

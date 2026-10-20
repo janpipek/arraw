@@ -3,19 +3,16 @@
 #include "FolderLister.h"
 #include "FolderResult.h"
 
-#include <QFileSystemWatcher>
 #include <QObject>
 #include <QString>
 #include <QStringList>
 #include <QThread>
-#include <QTimer>
 
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <map>
 #include <memory>
-#include <vector>
 
 namespace arraw::app {
 
@@ -23,30 +20,26 @@ class ShotModel;
 
 /// @brief Keeps a ::arraw::app::ShotModel in step with its folder on disk.
 ///
-/// Owns the ::arraw::app::FolderLister and its thread. Each walk the model asks for (a new
-/// folder, see ::arraw::app::ShotModel::setFolder, or a refresh) runs on that thread, and its
-/// batches and its end are queued on the model on this one
+/// Owns the ::arraw::app::FolderLister and its thread, which walks the folder, watches its
+/// directories and reads again each directory that reports a change. Each walk the model asks
+/// for (a new folder, see ::arraw::app::ShotModel::setFolder, or a refresh of all, see
+/// ::arraw::app::FolderWatcher::refreshAll) runs on that thread; its batches, the directories
+/// read again after a change, and the end of each walk are queued on the model on this one
 /// (::arraw::app::ShotModel::queueFolders, ::arraw::app::ShotModel::queueFinish).
 ///
-/// Watches the model's folder. A change to the folder's entries is debounced, because a program
-/// that writes a file touches the folder several times, and then handed to
-/// ::arraw::app::ShotModel::refresh, together with the directories that reported a change. The
-/// watcher also tells apart sidecar changes the application made from those other programs did.
+/// A change to a directory's entries is debounced on the lister's thread, because a program that
+/// writes a file touches the directory several times, and then only that directory is read again
+/// and merged into its rows, with a check of their sidecars. A subfolder that appears is walked;
+/// one that goes takes its subtree's rows with it. Every directory is watched before it is read,
+/// so no change between the two is missed (plan, section 4). At most
+/// ::arraw::app::FolderWatcher::maxWatchedFolders are watched, the shallowest first, because the
+/// system's number of watches (inotify on Linux) is finite and shared with other programs; changes
+/// in the others show on the next refresh of all.
 ///
-/// For a model that lists subfolders, every sub-directory is watched too. The directories to
-/// watch are the ones the last finished walk read, so the tree is walked once, not twice; the
-/// watch set is changed by what differs, not dropped and made again. At most
-/// ::arraw::app::FolderWatcher::maxWatchedFolders are watched, the folder itself and the
-/// shallowest sub-directories first, because the system's number of watches (inotify on Linux)
-/// is finite and shared with other programs; beyond that the deeper sub-directories are simply
-/// not watched, and their changes show on the next refresh caused by something else. A
-/// directory is watched only once its walk has finished, so a change made to it between its
-/// read and that moment is seen only with the next change.
-///
-/// Only changes to the folder's entries are seen: a file added, removed or
-/// renamed, and so a sidecar that another program replaces. One that is
-/// rewritten in place without changing the folder goes unnoticed until the next
-/// folder event, as no watch is kept on each file.
+/// The watcher also tells apart sidecar changes the application made from those other programs
+/// did. Only changes to a directory's entries are seen: a file added, removed or renamed, and so a
+/// sidecar that another program replaces. One that is rewritten in place without changing the
+/// directory goes unnoticed until the next event there, as no watch is kept on each file.
 class FolderWatcher : public QObject {
     Q_OBJECT
 
@@ -56,13 +49,13 @@ public:
     /// Answers the walks the model asks for from now on; a folder the model shows already is
     /// watched from its next walk.
     /// @param model Model to keep up to date; must outlive the watcher.
-    /// @param debounce Quiet time to wait after a change before refreshing.
+    /// @param debounce Quiet time to wait after a directory's change before reading it again.
     /// @param parent Owner.
     explicit FolderWatcher(ShotModel& model,
                            std::chrono::milliseconds debounce = std::chrono::milliseconds(300),
                            QObject* parent = nullptr);
 
-    /// @brief Stops the lister, after the directory it is reading.
+    /// @brief Stops the lister, after the directory it is reading, and releases the watches.
     ~FolderWatcher() override;
 
     FolderWatcher(const FolderWatcher&) = delete;
@@ -71,7 +64,7 @@ public:
     FolderWatcher& operator=(FolderWatcher&&) = delete;
 
     /// @brief Most directories watched at once.
-    static constexpr int maxWatchedFolders = 1000;
+    static constexpr int maxWatchedFolders = FolderLister::maxWatchedFolders;
 
     /// @brief Records a sidecar the application has just written.
     ///
@@ -84,14 +77,28 @@ public:
     /// @brief Lists the directories under watch.
     /// @return Their paths, as Qt spells them.
     [[nodiscard]] QStringList watchedDirectories() const {
-        return watcher_.directories();
+        return lister_->watchedDirectories();
     }
+
+    /// @brief Walks the whole folder again and merges what it finds, folder by folder.
+    ///
+    /// For what no watch reports: a directory beyond
+    /// ::arraw::app::FolderWatcher::maxWatchedFolders, or a sidecar rewritten in place. Every
+    /// loaded row's sidecar is checked (see
+    /// ::arraw::app::ShotModel::refresh).
+    void refreshAll();
 
     /// @brief Sets a function the lister calls on its thread before it reads each directory.
     ///
     /// A seam for tests, which block in it to hold a walk at a known point.
     /// @param hook Function, or an empty one for none.
     void setReadHook(FolderLister::ReadHook hook);
+
+    /// @brief Takes a directory's report of a change as if the system had sent it.
+    ///
+    /// A seam for tests, which do not depend on the system's timing this way.
+    /// @param directory Directory, spelled as the listing spells it.
+    void simulateDirectoryChanged(const std::filesystem::path& directory);
 
 signals:
     /// @brief Announces that another program changed a shot's sidecar.
@@ -105,14 +112,10 @@ private:
     /// @brief Starts the walk the model asks for.
     void startWalk();
 
-    /// @brief Hands a finished walk to the model and watches what it read.
+    /// @brief Hands a finished walk to the model.
     /// @param walk Number of the walk.
     /// @param summary What it saw.
-    void finishWalk(std::uint64_t walk, const ListingSummary& summary);
-
-    /// @brief Watches the shallowest of the directories a walk read, and no others.
-    /// @param directories Directories of the walk, in walk order.
-    void rewatch(const std::vector<ListedDirectory>& directories);
+    void finishWalk(std::uint64_t walk, ListingSummary summary);
 
     /// @brief Judges a refreshed sidecar.
     /// @param primary Shot whose sidecar was re-read.
@@ -121,16 +124,8 @@ private:
 
     /// Model kept up to date.
     ShotModel& model_;
-    /// Watch on the folder.
-    QFileSystemWatcher watcher_;
-    /// Timer that waits for the folder to be quiet.
-    QTimer debounce_;
-    /// Directories that reported a change since the last refresh.
-    std::vector<std::filesystem::path> dirty_;
     /// Stamp of each sidecar the application wrote, by normalised path.
     std::map<std::filesystem::path, std::int64_t> ownStamps_;
-    /// Folder the watches were last set for.
-    std::filesystem::path watchedRoot_;
     /// Thread the lister runs on.
     QThread thread_;
     /// Lister; lives on thread_, deleted once that has stopped.

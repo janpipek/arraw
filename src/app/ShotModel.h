@@ -19,7 +19,6 @@
 #include <map>
 #include <memory>
 #include <optional>
-#include <set>
 #include <span>
 #include <unordered_map>
 #include <unordered_set>
@@ -60,12 +59,15 @@ struct FolderDiff;
 /// and hands over directory by directory (::arraw::app::ShotModel::applyFolders), so a tree of
 /// fifty thousand shots does not block the window. The model asks for a walk with
 /// ::arraw::app::ShotModel::walkRequested, and numbers each one; batches of another walk are
-/// stale and dropped. Opening no file is part of listing (ADR 029). The marks of each sidecar
-/// and the EXIF of each photograph are read afterwards on one background thread, marks of
-/// every shot before any EXIF, and handed back to this thread. EXIF is read by that loader
-/// rather than on the first tooltip request: a tooltip is drawn on the GUI thread, which must
-/// not open a RAW. Changing the folder drops what the loader has not done and ignores what it
-/// is still doing.
+/// stale and dropped. After its walk, the same number stamps each directory the watcher reads
+/// again because it changed: that directory's result replaces its rows, a new subfolder comes as
+/// a walk of its own subtree, and one that went is removed with its subtree in one go
+/// (::arraw::app::ShotModel::removeSubtree). Opening no file is part of listing (ADR 029). The
+/// marks of each sidecar and the EXIF of each photograph are read afterwards on one background
+/// thread, marks of every shot before any EXIF, and handed back to this thread. EXIF is read by
+/// that loader rather than on the first tooltip request: a tooltip is drawn on the GUI thread,
+/// which must not open a RAW. Changing the folder drops what the loader has not done and ignores
+/// what it is still doing.
 ///
 /// The rows are kept as one contiguous span per folder, folders in ::arraw::folderPrecedes
 /// order, which is the order a walk comes in, so the rows of a first listing are only ever
@@ -110,9 +112,8 @@ public:
     /// Anything the loader was doing for the previous folder is dropped, and so is the walk of
     /// it that may still be under way.
     /// @param folder Folder to list.
-    /// @param recursive Whether to list its subfolders too (see ::arraw::listShots); remembered
-    /// for ::arraw::app::ShotModel::refresh. Changing it for the same folder resets the model
-    /// like a new folder does.
+    /// @param recursive Whether to list its subfolders too (see ::arraw::listShots). Changing it
+    /// for the same folder resets the model like a new folder does.
     /// @throws std::runtime_error (a std::filesystem::filesystem_error) if the folder cannot be
     /// opened; the model is left as it was.
     void setFolder(const std::filesystem::path& folder, bool recursive = false);
@@ -130,7 +131,8 @@ public:
     }
 
     /// @brief Tells whether a refresh walk is under way, or put off until the one under way ends.
-    /// @return True from ::arraw::app::ShotModel::refresh until its walk is finished.
+    /// @return True from ::arraw::app::ShotModel::refresh until its walk is finished; a directory
+    /// read again after a change is no refresh.
     [[nodiscard]] bool isRefreshing() const noexcept {
         return walking_ == Walking::Refresh || refreshWanted_;
     }
@@ -148,7 +150,7 @@ public:
     /// ::arraw::app::ShotModel::applyBudget per turn of the event loop. A batch of a walk that is
     /// no longer the last one asked for when its turn comes is dropped.
     /// @param walk Number of the walk.
-    /// @param batch Directories read, in walk order.
+    /// @param batch Directories read, in the order read.
     void queueFolders(std::uint64_t walk, std::vector<FolderResult> batch);
 
     /// @brief Queues the end of a walk, to be taken once the batches before it are applied.
@@ -171,12 +173,24 @@ public:
     /// ::arraw::app::maxFolderRuns runs, the model is reset instead (rows still keep their
     /// data), and views must restore their selection.
     ///
-    /// New rows are queued for their marks and EXIF. In a refresh, the loaded rows of a merged
-    /// directory are queued for a check of their sidecars as well, if the refresh checks it (see
-    /// ::arraw::app::ShotModel::refresh).
-    /// @param walk Number of the walk; a batch of any but the last one asked for is dropped.
-    /// @param batch Directories read, in walk order.
+    /// A directory marked ::arraw::app::FolderResult::gone is removed with its subtree, as
+    /// ::arraw::app::ShotModel::removeSubtree does.
+    ///
+    /// New rows are queued for their marks and EXIF. The loaded rows of a merged directory are
+    /// queued for a check of their sidecars as well when the directory is marked
+    /// ::arraw::app::FolderResult::recheck, when its rows changed, or in a refresh of all (see
+    /// ::arraw::app::ShotModel::refresh); the rows of other directories are not.
+    /// @param walk Number of the walk; a batch of any but the last one asked for is dropped. It
+    /// is taken after the walk has finished too: the directories read again after a change.
+    /// @param batch Directories read, in the order read.
     void applyFolders(std::uint64_t walk, const std::vector<FolderResult>& batch);
+
+    /// @brief Removes the rows of a folder and of every folder below it, with one signal.
+    ///
+    /// For a subfolder that went, or can no longer be read. Whatever is queued is applied first.
+    /// @param walk Number of the walk; any but the last one asked for is ignored.
+    /// @param folder Folder, without a trailing separator; one without rows changes nothing.
+    void removeSubtree(std::uint64_t walk, const std::filesystem::path& folder);
 
     /// @brief Takes the end of a walk at once.
     ///
@@ -186,7 +200,7 @@ public:
     /// was put off starts, and
     /// ::arraw::app::ShotModel::loadingFinished follows once the loader is done too.
     /// @param walk Number of the walk; any but the last one asked for is ignored.
-    /// @param summary What it saw; not used yet (the refresh steps of the plan will).
+    /// @param summary What it saw; not used yet (steps 5 and 6 of the plan will).
     void finishListing(std::uint64_t walk, const ListingSummary& summary);
 
     /// @brief Tells whether the subfolders are listed.
@@ -203,19 +217,16 @@ public:
 
     /// @brief Asks for the folder to be walked again, and merged in folder by folder.
     ///
-    /// Asynchronous: ::arraw::app::ShotModel::walkRequested asks for a walk, whose batches are
-    /// merged by ::arraw::app::ShotModel::applyFolders and whose end removes the folders it did
-    /// not find (::arraw::app::ShotModel::finishListing). While a walk is under way the refresh
-    /// is put off until it ends, the folders of several such calls gathered into one.
+    /// The manual refresh of all, for what no watch reports. Asynchronous:
+    /// ::arraw::app::ShotModel::walkRequested asks for a walk, whose batches are merged by
+    /// ::arraw::app::ShotModel::applyFolders and whose end removes the folders it did not find
+    /// (::arraw::app::ShotModel::finishListing). While a walk is under way the refresh is put off
+    /// until it ends, several such calls gathered into one.
     ///
-    /// The sidecars of merged rows are checked on the loader thread, and re-read when the
+    /// The sidecar of every loaded row is checked on the loader thread, and re-read when the
     /// modification time is not the one last seen; ::arraw::app::ShotModel::sidecarRefreshed
-    /// reports each of those. Only the rows of some folders are checked, not all: with @p dirty,
-    /// those of the folders it names and of the folders whose listing changed; without it,
-    /// every loaded row. A folder that can no longer be read counts as empty.
-    /// @param dirty Folders where something happened (such as a sidecar written, which no
-    /// listing shows), spelled as the watcher spells them; nothing to check every row.
-    void refresh(const std::optional<std::vector<std::filesystem::path>>& dirty = std::nullopt);
+    /// reports each of those. A folder that can no longer be read counts as empty.
+    void refresh();
 
     /// @brief Counts the shots.
     /// @return Number of rows.
@@ -346,13 +357,6 @@ private:
         int count = 0;
     };
 
-    /// @brief Orders folders as ::arraw::folderPrecedes does.
-    struct FolderOrder {
-        bool operator()(const std::filesystem::path& a, const std::filesystem::path& b) const {
-            return folderPrecedes(a, b);
-        }
-    };
-
     /// @brief Rows of each folder, in folder order.
     using Spans = std::map<std::filesystem::path, Span, FolderOrder>;
 
@@ -388,7 +392,7 @@ private:
     void dropIncoming();
 
     /// @brief Applies the next step of the first queued batch: the merge of one directory that
-    /// has rows, or one insert of new ones.
+    /// has rows, the removal of one that went, or one insert of new ones.
     /// @param added Receives the primaries that were not rows before.
     /// @param rechecks Receives the sidecar checks of the rows that stay.
     void applyStep(std::vector<std::filesystem::path>& added, std::vector<Job>& rechecks);
@@ -418,9 +422,10 @@ private:
     /// @brief Replaces the rows of one folder that has rows by its shots now.
     /// @param folder Folder, without a trailing separator.
     /// @param fresh Its shots now.
+    /// @param recheck Whether the sidecars of its rows are checked whatever the diff.
     /// @param added Receives the primaries that were not rows before.
     /// @param rechecks Receives the sidecar checks of the rows that stay.
-    void mergeFolder(const std::filesystem::path& folder, std::span<const Shot> fresh,
+    void mergeFolder(const std::filesystem::path& folder, std::span<const Shot> fresh, bool recheck,
                      std::vector<std::filesystem::path>& added, std::vector<Job>& rechecks);
 
     /// @brief Applies the diff of a folder with a signal per run.
@@ -441,6 +446,10 @@ private:
     /// @brief Removes the rows of one folder.
     /// @param span The folder's span; erased.
     void removeFolder(Spans::iterator span);
+
+    /// @brief Removes the rows of a folder and of its subtree, with one remove.
+    /// @param folder Folder, without a trailing separator.
+    void removeTree(const std::filesystem::path& folder);
 
     /// @brief Starts a refresh walk now.
     void startRefresh();
@@ -487,20 +496,8 @@ private:
     /// Folders the walk under way has read, spelled as span keys.
     std::unordered_set<std::filesystem::path> seen_;
 
-    /// Whether the refresh under way checks the sidecars of every row it merges.
-    bool recheckAll_ = false;
-
-    /// Folders whose sidecars the refresh under way checks, normalised.
-    std::set<std::filesystem::path> dirtyFolders_;
-
     /// Whether a refresh is put off until the walk under way ends.
     bool refreshWanted_ = false;
-
-    /// Whether the refresh put off checks every row.
-    bool wantedAll_ = false;
-
-    /// Folders the refresh put off checks, normalised.
-    std::set<std::filesystem::path> wantedFolders_;
 
     /// Batches and ends of walks not applied yet, in the order they came.
     std::deque<Incoming> incoming_;
