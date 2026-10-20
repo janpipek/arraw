@@ -81,6 +81,7 @@ add_executable(arraw-tests
         test_GpuContext.cpp
         test_GpuDevice.cpp
         test_GpuPlan.cpp
+        test_HistogramCounter.cpp
         test_HistoryModel.cpp
         test_MaskEditing.cpp
         test_MasksModel.cpp
