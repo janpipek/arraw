@@ -887,9 +887,6 @@ std::optional<ExportRequest> buildRequest(const QCommandLineParser& parser, std:
         request.options = optionsOf(preset->settings);
         request.render = requestOf(preset->settings);
         request.metadata = selectionOf(preset->settings);
-    } else if (parser.isSet("config-dir")) {
-        code = usageError(err, "--config-dir only matters with --export-preset");
-        return std::nullopt;
     }
 
     if (parser.isSet("format")) {

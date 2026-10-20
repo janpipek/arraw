@@ -1,8 +1,12 @@
 #pragma once
 
-#include "ExportSettings.h"
+#include <Diagnostics.h>
+#include <ExportSettings.h>
 
+#include <filesystem>
 #include <optional>
+#include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -24,7 +28,7 @@ struct ExportPreset {
     /// built-in is the one found by name. Set by ::arraw::ExportPresetStore::read.
     bool shadowed = false;
 
-    /// @brief Compares the name as written and every setting.
+    /// @brief Compares the name as written, every setting and the built-in and shadowed flags.
     [[nodiscard]] bool operator==(const ExportPreset&) const = default;
 };
 
@@ -44,9 +48,10 @@ enum class ExportPresetFileState {
     Unreadable, ///< It cannot be read: no presets, and it is never written over.
 };
 
-/// @brief The presets of a file, in name order.
+/// @brief What reading the presets gave: the built-in presets first, then the file's in name order.
 struct ExportPresetCatalog {
-    std::vector<ExportPreset> presets;          ///< Usable presets, sorted by folded name.
+    std::vector<ExportPreset> presets; ///< Usable presets: the built-in ones, then the file's
+                                       ///< (shadowed ones flagged) by folded name.
     std::vector<UnusableExportPreset> unusable; ///< Entries this arraw cannot use.
     ExportPresetFileState state = ExportPresetFileState::Missing; ///< What the file is.
     int version = 0;     ///< Version the file declares; 0 when there is no file.
@@ -91,6 +96,7 @@ enum class ExportPresetProblem {
     Busy,           ///< Another process is changing the file and did not finish in time.
     WriteFailed,    ///< The file or its directory could not be written; the old file stays.
     BuiltIn,        ///< The name is a built-in preset's, which cannot be changed.
+    NotUnreadable,  ///< The file can be read, so it is not set aside: only an unreadable one is.
 };
 
 /// @brief A change to the presets that could not be made.
@@ -168,9 +174,11 @@ public:
 
     /// @brief Moves the file to `export-presets.unreadable-<YYYYMMDD-HHMMSS>.json` beside it.
     ///
-    /// Never replaces a file; the next write starts a new one.
+    /// Never replaces a file; the next write starts a new one. Only a file that is unreadable
+    /// when the lock is held is moved.
     /// @return The new path.
-    /// @throws ExportPresetError NotFound (there is no file), Busy or WriteFailed.
+    /// @throws ExportPresetError NotFound (there is no file), NewerFile, NotUnreadable (the file
+    /// reads fine), Busy or WriteFailed.
     std::filesystem::path setAside();
 
 private:

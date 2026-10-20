@@ -238,7 +238,9 @@ void ExportPresetStore::rename(std::string_view from, std::string_view to) {
                                                                        "), so it is not renamed");
         }
         for (const PresetEntry& other : parsed.entries) {
-            if (&other != entry && presetNamesEqual(other.name, target)) {
+            // A later entry of the same name is unusable and never found by name: not a clash.
+            if (&other != entry && other.reason != "duplicate name" &&
+                presetNamesEqual(other.name, target)) {
                 throw ExportPresetError(ExportPresetProblem::NameTaken,
                                         "a preset named '" + other.name + "' exists already");
             }
@@ -275,6 +277,21 @@ std::filesystem::path ExportPresetStore::setAside() {
                                     ? ExportPresetProblem::Busy
                                     : ExportPresetProblem::WriteFailed,
                                 "cannot lock " + source.string() + " to set it aside");
+    }
+    // Under the lock, only a file that is unreadable now may go (ADR 054 section 6): not one a
+    // newer arraw wrote, and not one that was mended since the caller looked.
+    const ParsedPresets current = readFile(source, discardedDiagnostics());
+    if (current.state == ExportPresetFileState::Missing) {
+        throw ExportPresetError(ExportPresetProblem::NotFound,
+                                "there is no presets file at " + source.string());
+    }
+    if (current.state != ExportPresetFileState::Unreadable) {
+        throw ExportPresetError(
+            current.state == ExportPresetFileState::Newer ? ExportPresetProblem::NewerFile
+                                                          : ExportPresetProblem::NotUnreadable,
+            source.string() + (current.state == ExportPresetFileState::Newer
+                                   ? " was written by a newer arraw, so it is not set aside"
+                                   : " can be read, so it is not set aside"));
     }
     const std::string stamp =
         QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss")).toStdString();

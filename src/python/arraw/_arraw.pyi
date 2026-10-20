@@ -2249,6 +2249,9 @@ class ExportPresetProblem(enum.Enum):
     BUILT_IN = 8
     """The name is a built-in preset's, which cannot be changed."""
 
+    NOT_UNREADABLE = 9
+    """The file can be read, so it is not set aside: only an unreadable one is."""
+
 class ExportPresetFileState(enum.Enum):
     """What reading the export presets file found."""
 
@@ -2366,7 +2369,7 @@ class ExportPresetStore:
 
     def set_aside(self) -> pathlib.Path:
         """
-        Move the presets file to `export-presets.unreadable-<date>.json` beside it, so that the next change starts a new file, and return the new path. Never replaces a file.
+        Move the presets file to `export-presets.unreadable-<date>.json` beside it, so that the next change starts a new file, and return the new path. Never replaces a file. Only an unreadable file is moved: raises ExportPresetError with NOT_FOUND when there is none, NEWER_FILE for a newer arraw's, NOT_UNREADABLE for one that reads fine.
         """
 
 def config_directory() -> pathlib.Path:
