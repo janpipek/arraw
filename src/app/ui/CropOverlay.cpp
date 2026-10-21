@@ -399,6 +399,47 @@ QRectF CropOverlay::cropRect() const {
                   widgetFromUpright({crop.right(), crop.bottom()}));
 }
 
+QPointF CropOverlay::imagePointFromUpright(QPointF upright) const {
+    const CropBox whole = editing_->unstraightened();
+    const QPointF middle(editing_->uprightWidth() / 2, editing_->uprightHeight() / 2);
+    // The painter rotates the image about the middle by the displayed angle; undo that.
+    QTransform undo;
+    undo.rotate(-editing_->displayedAngle());
+    const QPointF inWhole = undo.map(upright - middle) + QPointF(whole.width / 2, whole.height / 2);
+    return {inWhole.x() * image_.width() / whole.width,
+            inWhole.y() * image_.height() / whole.height};
+}
+
+std::array<QPointF, 4> CropOverlay::cropQuadInImage() const {
+    if (!editing_ || image_.isNull()) {
+        return {};
+    }
+    const CropBox& crop = editing_->crop();
+    return {imagePointFromUpright({crop.left, crop.top}),
+            imagePointFromUpright({crop.right(), crop.top}),
+            imagePointFromUpright({crop.right(), crop.bottom()}),
+            imagePointFromUpright({crop.left, crop.bottom()})};
+}
+
+std::optional<QRgb> CropOverlay::colourAt(QPointF position) const {
+    if (!editing_ || image_.isNull() || !cropRect().contains(position)) {
+        return std::nullopt;
+    }
+    const CropPoint upright = uprightFromWidget(position);
+    const QPointF at = imagePointFromUpright({upright.x, upright.y});
+    const int x = static_cast<int>(std::floor(at.x()));
+    const int y = static_cast<int>(std::floor(at.y()));
+    if (x < 0 || y < 0 || x >= image_.width() || y >= image_.height()) {
+        return std::nullopt;
+    }
+    return image_.pixel(x, y);
+}
+
+void CropOverlay::leaveEvent(QEvent* event) {
+    QWidget::leaveEvent(event);
+    emit pointerColourChanged(std::nullopt);
+}
+
 CropHit CropOverlay::hitAt(QPointF position) const {
     if (!editing_) {
         return {};
@@ -799,6 +840,7 @@ void CropOverlay::mouseMoveEvent(QMouseEvent* event) {
         return;
     }
     pointer_ = event->position();
+    emit pointerColourChanged(colourAt(pointer_));
     switch (drag_) {
     case Drag::None:
         updateCursor(pointer_, event->modifiers());

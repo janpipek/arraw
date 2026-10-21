@@ -284,6 +284,6 @@ def test_the_stub_shows_the_real_signature_of_save():
     (line,) = [l for l in stub.splitlines() if l.startswith("def save(")]
     assert "bit_depth: int = 8" in line
     assert "quality: int = 90" in line
-    assert "settings: ExportSettings | None = None" in line
+    assert "settings" not in line
     assert "Optional" not in line
     assert "class ExportPresetError(RuntimeError)" in stub

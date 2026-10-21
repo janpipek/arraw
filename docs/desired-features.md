@@ -30,7 +30,7 @@ the sidecar, not to a database, so they travel with the photo.
 
 **3. Develop.** Every slider redraws the full preview instantly — there is no "rendering"
 pause between moving a control and seeing the result. Hold `\` for a before/after flip,
-`J` for a clipping overlay. Every change goes on one undo stack (`Ctrl+Z`), with a
+`J` for a clipping overlay on the picture, next to a histogram in the develop dock. Every change goes on one undo stack (`Ctrl+Z`), with a
 slider-drag counting as a single step rather than a hundred.
 
 **4. Export.** JPEG, PNG, or TIFF (8- or 16-bit), to sRGB, Display P3 or Adobe RGB with
@@ -57,6 +57,26 @@ top: turning on B&W hides the colour controls and reveals the mixer.
 | **Geometry** | 90° rotation and flips, Straighten (±45°), Crop with aspect presets |
 | **Lens Corrections** | Profile-driven distortion, vignetting and chromatic-aberration correction, from the lensfun database, matched from the file's EXIF and recorded with the edit, off by default and for a RAW only; profiles embedded in the file are a later option |
 | **Effects** | Post-crop vignette (amount / midpoint / feather) and film grain (amount / size / roughness) |
+
+### The histogram
+
+A histogram sits at the top of the develop dock, above the Adjustments and Masks tabs. It can
+be collapsed, and it remembers whether it was.
+
+- **It counts the picture as shown.** The whole cropped frame in the output colour space
+  (sRGB today), after every edit, whatever the zoom or pan. In the crop mode it counts the
+  crop being drawn. Red, green and blue are drawn over each other, or switch to **Luma**.
+- **The scale is linear with a soft cap.** A spike at black or white does not flatten the rest:
+  the height follows the tallest ordinary bins, and the bins that are cut off get a line at the
+  top. Pure black and pure white each get a marker of their own at the side of the plot.
+- **Clipping warnings.** A triangle at each top corner lights up when pixels are clipped (any of
+  R, G, B at 0 or 255 in the shown 8-bit picture), in the colour of the channels that clip.
+  Click one to paint those pixels on the photograph, blue for shadows and red for highlights;
+  `J` turns both on, or both off. The choice is remembered between sessions.
+- **A readout** under the plot gives the R, G, B percentages of the pixel under the pointer.
+
+The count runs on a thread of its own, so it never holds up a render. Outside the window, Python
+has `arraw.output_histogram(image)`; the CLI's `info` is unchanged.
 
 ### Local adjustments
 

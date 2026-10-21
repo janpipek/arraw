@@ -5,8 +5,11 @@
 #include <QImage>
 #include <QPointF>
 #include <QRectF>
+#include <QRgb>
 #include <QSize>
 #include <QWidget>
+
+#include <optional>
 
 class QMouseEvent;
 class QPaintEvent;
@@ -83,6 +86,20 @@ public:
     /// shows all of it, else the reduced one beneath; null before the first render.
     [[nodiscard]] QImage wholeFrameImage() const;
 
+    /// @brief Gives the part of the frame the render shows, in fractions of the frame; empty
+    /// before the first render.
+    [[nodiscard]] QRectF renderRegion() const noexcept {
+        return image_.isNull() ? QRectF() : imageRegion_;
+    }
+
+    /// @brief Sets which kinds of clipping are painted over the picture (ADR 055, section 5).
+    ///
+    /// The mask is made from the images shown, so it needs no render and follows each new one.
+    /// Not painted in the crop mode.
+    /// @param shadows Whether shadow-clipped pixels are painted blue.
+    /// @param highlights Whether highlight-clipped pixels are painted red.
+    void setClippingShown(bool shadows, bool highlights);
+
     /// @brief Fits the whole frame and keeps it fitted; for a newly opened photograph.
     ///
     /// Does not emit viewChanged: the caller renders.
@@ -147,6 +164,10 @@ signals:
     /// Emitted by a click while picking, with the point in fractions of the frame
     /// (inside [0, 1]).
     void picked(QPointF point);
+    /// Emitted when the pointer moves over the view or leaves it, with the colour of the picture
+    /// as shown under it (the render where it covers the point, else the whole-frame image
+    /// beneath); empty off the picture. Not emitted while the crop overlay covers the view.
+    void pointerColourChanged(std::optional<QRgb> colour);
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -155,8 +176,17 @@ protected:
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
+    void leaveEvent(QEvent* event) override;
 
 private:
+    /// @brief Gives the colour of the picture as shown at a position of the view.
+    /// @param position Logical pixels from the widget's top-left corner.
+    [[nodiscard]] std::optional<QRgb> colourAt(QPointF position) const;
+
+    /// @brief Emits pointerColourChanged for the last pointer position, if it is over the view,
+    /// after the picture or the transform changed under a still pointer.
+    void refreshPointerColour();
+
     /// @brief Adopts a transform as the view, emitting what changed.
     /// @param next The new view.
     /// @param fit Whether it is the fitting one.
@@ -183,6 +213,26 @@ private:
     bool picking_ = false;
     bool dragging_ = false;
     QPointF lastPosition_;
+    /// Last pointer position over the view, in logical pixels; empty after it left.
+    std::optional<QPointF> pointer_;
+
+    /// A picture and the mask made of it, kept while the picture is the same.
+    struct CachedMask {
+        qint64 key = 0;
+        bool shadows = false;
+        bool highlights = false;
+        QImage mask;
+    };
+
+    /// @brief Gives the clipping mask of a picture, made again only if it changed.
+    /// @param picture The picture shown.
+    /// @param cache Where the last mask of that picture is kept.
+    [[nodiscard]] const QImage& maskOf(const QImage& picture, CachedMask& cache) const;
+
+    bool clipShadows_ = false;
+    bool clipHighlights_ = false;
+    /// Mask of the render; built once per render, and only the render is masked.
+    mutable CachedMask imageMask_;
 
     /// The newest render.
     QImage image_;

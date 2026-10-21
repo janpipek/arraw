@@ -140,6 +140,40 @@ Steps 1 to 6 of `docs/ideas/incremental-refresh-plan.md` (ADR 052, accepted), co
   (`docs/adr/053-the-film-strip-guards-against-problems-in-layers.md`);
 - the multi-shot film-strip export (GUI tasks below) is to be done after this work.
 
+## Done: histogram panel (branch `histogram`, 2026-10-20)
+
+Steps 1 to 9 of `docs/ideas/histogram-panel-plan.md` (ADR 055), not pushed or merged:
+- `OutputHistogram` (core, `include/OutputHistogram.h`): the shown picture as 8-bit codes in the
+  output encoding, R, G, B and luma, clipping any channel at 0/255; Python `output_histogram`;
+  a GPU-vs-CPU parity test;
+- `HistogramCounter` on its own thread (latest wins), the panel at the top of the develop dock
+  (collapsible, remembered), a pixel readout, clipping triangles, and the clipping overlay on the
+  picture (`J`, View > Show Clipping), red highlights and blue shadows, its state remembered in
+  `QSettings` `histogram/clipping`; the whole cropped frame is counted, not the visible part;
+- review `docs/reviews/claude-opus-5-5_2026-10-20_histogram-panel.md` (untracked): the critical
+  finding (overlay when zoomed) and the mediums are fixed.
+Open:
+- **Count cost** (user, 2026-10-21): the 10 ms budget is missed, accepted: about 0.1 s of lag at
+  4K in a drag is fine, more is not. The counted image is capped at 6 MP by a row/column stride
+  (`outputHistogramMaxPixels`; never an extra render): release 59-64 ms at 2560x1600, 31-33 ms at
+  3840x2160. Multi-threading the count is rejected: it would take cores from the render in a
+  drag. Levers if it grows: a coarser stride only during a drag, a lower thread priority;
+- the critical fix (overlay only where a render covers) has had no second review;
+- review lows skipped: `TriangleButton` cast and the app-core include of `ThemeColors.h`,
+  counting while the window is minimised;
+- drag-to-adjust on the histogram (later idea), a log scale, the curve editor's scale left alone;
+- the soft cap (third tallest interior bin) wants tuning on real photographs.
+
+## Existing test failure: stroke repaint (found 2026-10-20)
+
+The widget test "While stroking only the ring and the new dabs repaint"
+(`tests/test_MaskOverlay.cpp`, ~line 800) fails every time, alone or in the full suite, on `main`
+as well as on `histogram`: the overlay repaints whole (right edge 599 of 600, full height) where
+it should repaint the ring and the new dabs. It passed earlier the same day, so check what
+changed in the environment (display scale, Qt, the 2026-10-20 "In the window a stroke repaints
+only where it painted" fix, which made that sibling test ignore whole-overlay repaints) before
+treating it as a plain flake. Fix the test or the repaint.
+
 ## Done: session history (branch `copy-settings`, 2026-10-08)
 
 Step 3 of `docs/ideas/looks-and-history-plan.md`: `EditSession` keeps a list

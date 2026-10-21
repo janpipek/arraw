@@ -13,6 +13,7 @@
 #include <LensResolution.h>
 #include <LocalAdjustmentEdits.h>
 #include <NegativeSettings.h>
+#include <OutputHistogram.h>
 #include <Photo.h>
 #include <PhotoMarks.h>
 #include <Sidecar.h>
@@ -778,6 +779,66 @@ void bindPhoto(nb::module_& m) {
                 "lens_database: LensDatabase | None = None) -> CurveHistogram"),
         "Decode a photograph, sample it at Tap.CURVE_INPUT with its own state unless `state` is "
         "given, and count it; `size` and the resize as for a decoded buffer.");
+
+    m.attr("OUTPUT_HISTOGRAM_BINS") = outputHistogramBins;
+
+    // A read-only view of the bins, not a copy; it keeps the histogram alive.
+    const auto outputBinsOf = [](OutputHistogram::Bins OutputHistogram::* channel) {
+        return [channel](nb::handle self) {
+            const auto& bins = nb::cast<const OutputHistogram&>(self).*channel;
+            return nb::ndarray<nb::numpy, const std::uint64_t, nb::shape<outputHistogramBins>>(
+                bins.data(), {outputHistogramBins}, self);
+        };
+    };
+    nb::class_<OutputHistogram>(
+        m, "OutputHistogram",
+        "Pixel counts of a finished picture by 8-bit code, OUTPUT_HISTOGRAM_BINS bins per channel, "
+        "in the output encoding; not constructible from Python.")
+        .def_prop_ro("luma", outputBinsOf(&OutputHistogram::luma),
+                     "Read-only uint64 array of the luma counts: the output space's luminance, "
+                     "encoded and rounded to a code.")
+        .def_prop_ro("red", outputBinsOf(&OutputHistogram::red),
+                     "Read-only uint64 array of the red counts.")
+        .def_prop_ro("green", outputBinsOf(&OutputHistogram::green),
+                     "Read-only uint64 array of the green counts.")
+        .def_prop_ro("blue", outputBinsOf(&OutputHistogram::blue),
+                     "Read-only uint64 array of the blue counts.")
+        .def_ro("pixels", &OutputHistogram::pixels,
+                "Number of pixels counted; fully transparent ones are not.")
+        .def_ro("shadows_clipped", &OutputHistogram::shadowsClipped,
+                "Number of pixels with any of R, G, B at code 0.")
+        .def_ro("highlights_clipped", &OutputHistogram::highlightsClipped,
+                "Number of pixels with any of R, G, B at code 255.")
+        .def_ro("encoding", &OutputHistogram::encoding, "Output encoding the codes are in.")
+        .def(nb::self == nb::self)
+        .def("__repr__", [](const OutputHistogram& histogram) {
+            return "OutputHistogram(pixels=" + std::to_string(histogram.pixels) + ")";
+        });
+    m.attr("OutputHistogram").attr("__hash__") = nb::none();
+
+    m.def(
+        "output_histogram",
+        [](const ImageBuffer& image, const std::optional<NamedEncoding>& encoding) {
+            return withoutGil([&] {
+                const auto* own = std::get_if<NamedEncoding>(&image.encoding());
+                if (!own || *own == NamedEncoding::LinearRec2020) {
+                    return outputHistogram(image, encoding.value_or(NamedEncoding::Srgb));
+                }
+                if (encoding && own && *encoding != *own) {
+                    throw std::invalid_argument(
+                        "the buffer is already encoded; encoding must be None or equal to it");
+                }
+                return outputHistogram(image);
+            });
+        },
+        "image"_a, "encoding"_a.none() = nb::none(),
+        nb::sig("def output_histogram(image: ImageBuffer, encoding: NamedEncoding | None = None) "
+                "-> OutputHistogram"),
+        "Count the 8-bit picture an output shows. A developed buffer in the working encoding is "
+        "converted to `encoding` (default NamedEncoding.SRGB) as save() would at 8 bits. Python "
+        "cannot yet make a buffer already in SRGB, DISPLAY_P3 or ADOBE_RGB (that case is counted "
+        "as it is, and `encoding` must then be None or equal to it). Any other encoding raises "
+        "ValueError.");
 
     m.def(
         "resolved_size",

@@ -69,6 +69,22 @@ inline const QColor progressIdle{0x80, 0x80, 0x80};
 /// Toolbar separators: a dim divider only a touch off the window grey.
 inline const QColor separator{0x3a, 0x3a, 0x3a};
 
+/// Plot ground of the histogram; always dark, since the channels are composed additively over it.
+inline const QColor histogramGround{0x14, 0x14, 0x14};
+/// Red channel of the histogram and of the clipping triangles.
+inline const QColor histogramRed{0xe6, 0x28, 0x28};
+/// Green channel of the histogram and of the clipping triangles.
+inline const QColor histogramGreen{0x28, 0xd2, 0x3c};
+/// Blue channel of the histogram and of the clipping triangles; lighter than a pure blue, which
+/// is hard to see on a dark ground.
+inline const QColor histogramBlue{0x32, 0x6e, 0xff};
+/// Line that marks where the histogram's tallest bins are cut off.
+inline const QColor histogramCap{0xff, 0xff, 0xff};
+/// Paint of the pixels clipped to white in the clipping overlay.
+inline const QColor clippingHighlights{0xff, 0x20, 0x20};
+/// Paint of the pixels clipped to black in the clipping overlay.
+inline const QColor clippingShadows{0x20, 0x40, 0xff};
+
 /// The single accent, legible for selection without flooding the screen on
 /// multi-select.
 inline const QColor highlight{0x3b, 0x6e, 0xa5};

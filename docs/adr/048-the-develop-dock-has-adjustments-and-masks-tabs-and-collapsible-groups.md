@@ -50,4 +50,7 @@ so a title row would only hide the tab's content. It stays a `QGroupBox`.
   Mask rows are no longer descendants of `DevelopPanel`; look in the window.
 - Spots and Info tabs, when they exist, join the same tab widget; the
   tab-follows-mode rule is for Masks only.
+- Amended by ADR 055: the develop dock's widget is a column, with a collapsible `histogram`
+  section above the tab widget (`developSections/histogram/open`). The tab-follows-mode rule is
+  unchanged.
 - This supersedes ADR 044's placement of the Masks group in the develop dock below Crop.

@@ -1,8 +1,10 @@
 #include "PhotoView.h"
 
+#include "ClippingMask.h"
 #include "CropOverlay.h"
 #include "MaskOverlay.h"
 
+#include <QCursor>
 #include <QMouseEvent>
 #include <QPaintEvent>
 #include <QPainter>
@@ -33,6 +35,7 @@ PhotoView::PhotoView(QWidget* parent) : QWidget(parent) {
     // reach the window's actions, which step between photographs.
     setFocusPolicy(Qt::ClickFocus);
     setAutoFillBackground(false);
+    setMouseTracking(true);
     crop_ = new CropOverlay(this);
     crop_->hide();
     mask_ = new MaskOverlay(this);
@@ -76,6 +79,10 @@ void PhotoView::setCropMode(bool cropping) {
         setFocus();
     }
     crop_->hide();
+    // The overlay owned the pointer; read what is under it now, if it is over the view.
+    const QPoint at = mapFromGlobal(QCursor::pos());
+    pointer_ = rect().contains(at) ? std::optional<QPointF>(at) : std::nullopt;
+    refreshPointerColour();
 }
 
 void PhotoView::setMaskMode(bool masking) {
@@ -141,6 +148,7 @@ void PhotoView::adopt(const ViewTransform& next, bool fit, bool user) {
     if (moved) {
         update();
         emit transformChanged();
+        refreshPointerColour();
     }
     if (zoomMoved) {
         emit zoomChanged();
@@ -172,11 +180,34 @@ void PhotoView::setImage(const QImage& image, const QRectF& region, const QImage
     imageRegion_ = region;
     updateCursor();
     update();
+    refreshPointerColour();
 }
 
 void PhotoView::setBackground(const QImage& background) {
     background_ = background;
     update();
+    refreshPointerColour();
+}
+
+void PhotoView::setClippingShown(bool shadows, bool highlights) {
+    if (shadows == clipShadows_ && highlights == clipHighlights_) {
+        return;
+    }
+    clipShadows_ = shadows;
+    clipHighlights_ = highlights;
+    if (!shadows && !highlights) {
+        imageMask_ = {};
+    }
+    update();
+}
+
+const QImage& PhotoView::maskOf(const QImage& picture, CachedMask& cache) const {
+    if (cache.key != picture.cacheKey() || cache.shadows != clipShadows_ ||
+        cache.highlights != clipHighlights_) {
+        cache = {picture.cacheKey(), clipShadows_, clipHighlights_,
+                 clippingMask(picture, clipShadows_, clipHighlights_)};
+    }
+    return cache.mask;
 }
 
 void PhotoView::resetView() {
@@ -246,6 +277,14 @@ void PhotoView::paintEvent(QPaintEvent* /*event*/) {
         painter.setRenderHint(QPainter::SmoothPixmapTransform, t.zoom() <= 1.0);
     }
     painter.drawImage(target, image_);
+    if ((clipShadows_ || clipHighlights_) && !isCropMode()) {
+        // Only the render's mask, over the render and through the same rectangle, so every mark
+        // belongs to the pixel beneath it. The fallback is never masked: it is a reduced and
+        // possibly older picture, and its marks would not belong to the render over it, nor, at
+        // its own edges, to the picture it shows then (ADR 055, section 5). Never smoothed.
+        painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
+        painter.drawImage(target, maskOf(image_, imageMask_));
+    }
 }
 
 void PhotoView::resizeEvent(QResizeEvent* event) {
@@ -293,7 +332,45 @@ void PhotoView::mousePressEvent(QMouseEvent* event) {
     QWidget::mousePressEvent(event);
 }
 
+void PhotoView::refreshPointerColour() {
+    if (pointer_ && !isCropMode()) {
+        emit pointerColourChanged(colourAt(*pointer_));
+    }
+}
+
+std::optional<QRgb> PhotoView::colourAt(QPointF position) const {
+    if (frame_.isEmpty()) {
+        return std::nullopt;
+    }
+    const QPointF point = transform().frameFromView(position * devicePixelRatioF());
+    if (point.x() < 0.0 || point.x() >= 1.0 || point.y() < 0.0 || point.y() >= 1.0) {
+        return std::nullopt;
+    }
+    const auto sample = [](const QImage& image, QPointF fraction) -> std::optional<QRgb> {
+        const int x = static_cast<int>(fraction.x() * image.width());
+        const int y = static_cast<int>(fraction.y() * image.height());
+        if (image.isNull() || x < 0 || y < 0 || x >= image.width() || y >= image.height()) {
+            return std::nullopt;
+        }
+        return image.pixel(x, y);
+    };
+    if (!image_.isNull() && imageRegion_.contains(point)) {
+        const QPointF inRender((point.x() - imageRegion_.left()) / imageRegion_.width(),
+                               (point.y() - imageRegion_.top()) / imageRegion_.height());
+        return sample(image_, inRender);
+    }
+    return sample(background_, point);
+}
+
+void PhotoView::leaveEvent(QEvent* event) {
+    QWidget::leaveEvent(event);
+    pointer_.reset();
+    emit pointerColourChanged(std::nullopt);
+}
+
 void PhotoView::mouseMoveEvent(QMouseEvent* event) {
+    pointer_ = event->position();
+    emit pointerColourChanged(colourAt(event->position()));
     if (!dragging_) {
         QWidget::mouseMoveEvent(event);
         return;

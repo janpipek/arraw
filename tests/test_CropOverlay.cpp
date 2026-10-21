@@ -9,12 +9,19 @@
 #include <QCoreApplication>
 #include <QImage>
 #include <QKeyEvent>
+#include <QLineF>
 #include <QMouseEvent>
+#include <QSignalSpy>
+#include <QTransform>
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstddef>
+#include <optional>
 #include <vector>
 
 using namespace arraw;
@@ -380,4 +387,88 @@ TEST_CASE("A placeholder shows until the render, and a turn shows at once", "[ap
     // A placeholder never replaces a render.
     fixture.overlay.setPlaceholder(preview, {});
     CHECK(fixture.overlay.image().size() == QSize(20, 30));
+}
+
+TEST_CASE("The crop frame's corners map into the shown image", "[app][crop]") {
+    SECTION("unstraightened, the corners are the crop's own, in image pixels") {
+        Fixture fixture;
+        fixture.overlay.setImage(QImage(150, 100, QImage::Format_RGB32));
+        const auto quad = fixture.overlay.cropQuadInImage();
+        // The centred half of a 300x200 frame, in an image half that size.
+        CHECK(quad[0].x() == Approx(37.5));
+        CHECK(quad[0].y() == Approx(25.0));
+        CHECK(quad[2].x() == Approx(112.5));
+        CHECK(quad[2].y() == Approx(75.0));
+    }
+
+    SECTION("straightened and flipped, the image's corners map back onto the frame") {
+        GeometrySettings geometry = centredCrop();
+        geometry.flipHorizontal = true;
+        geometry.straighten = -12.0;
+        Fixture fixture(geometry);
+        const QSize size(150, 100);
+        fixture.overlay.setImage(QImage(size, QImage::Format_RGB32));
+        const CropEditing& editing = fixture.overlay.editing();
+        const auto quad = fixture.overlay.cropQuadInImage();
+        const CropBox& crop = editing.crop();
+        const std::array<QPointF, 4> frame{
+            QPointF(crop.left, crop.top), QPointF(crop.right(), crop.top),
+            QPointF(crop.right(), crop.bottom()), QPointF(crop.left, crop.bottom())};
+        // What the overlay paints: the image, scaled to the unstraightened frame and turned
+        // about the frame's middle by the displayed angle.
+        const CropBox whole = editing.unstraightened();
+        QTransform turn;
+        turn.rotate(editing.displayedAngle());
+        const QPointF middle(editing.uprightWidth() / 2, editing.uprightHeight() / 2);
+        CHECK(editing.displayedAngle() != 0.0);
+        for (std::size_t corner = 0; corner < 4; ++corner) {
+            const QPointF scaled(quad[corner].x() * whole.width / size.width() - whole.width / 2,
+                                 quad[corner].y() * whole.height / size.height() -
+                                     whole.height / 2);
+            const QPointF upright = middle + turn.map(scaled);
+            CAPTURE(corner);
+            CHECK(upright.x() == Approx(frame[corner].x()).margin(1e-6));
+            CHECK(upright.y() == Approx(frame[corner].y()).margin(1e-6));
+        }
+    }
+}
+
+TEST_CASE("The readout inside the crop frame reads the pixel at its mapped corner, flipped and "
+          "straightened",
+          "[app][crop][readout]") {
+    GeometrySettings geometry = centredCrop();
+    geometry.flipHorizontal = true;
+    geometry.straighten = -12.0;
+    Fixture fixture(geometry);
+    // Every pixel tells its own place: red is x, green is y.
+    QImage image(150, 100, QImage::Format_RGB32);
+    for (int y = 0; y < image.height(); ++y) {
+        for (int x = 0; x < image.width(); ++x) {
+            image.setPixel(x, y, qRgb(x, y, 0));
+        }
+    }
+    fixture.overlay.setImage(image);
+    const auto quad = fixture.overlay.cropQuadInImage();
+    const CropBox& crop = fixture.overlay.editing().crop();
+    const std::array<QPointF, 4> corners{
+        QPointF(crop.left, crop.top), QPointF(crop.right(), crop.top),
+        QPointF(crop.right(), crop.bottom()), QPointF(crop.left, crop.bottom())};
+    const QPointF middle = fixture.at(crop.left + crop.width / 2, crop.top + crop.height / 2);
+
+    QSignalSpy spy(&fixture.overlay, &CropOverlay::pointerColourChanged);
+    for (std::size_t corner = 0; corner < 4; ++corner) {
+        // A few widget pixels in from the corner, towards the middle.
+        const QPointF edge = fixture.at(corners[corner].x(), corners[corner].y());
+        const QPointF inside = edge + (middle - edge) * (3.0 / QLineF(edge, middle).length());
+        QMouseEvent move(QEvent::MouseMove, inside, fixture.overlay.mapToGlobal(inside),
+                         Qt::NoButton, Qt::NoButton, {});
+        QCoreApplication::sendEvent(&fixture.overlay, &move);
+        REQUIRE(spy.count() > 0);
+        const auto colour = spy.last().at(0).value<std::optional<QRgb>>();
+        CAPTURE(corner);
+        REQUIRE(colour.has_value());
+        // Within a few image pixels of the quad's corner (the scale is 1.3 widget px per pixel).
+        CHECK(std::abs(qRed(*colour) - quad[corner].x()) < 6.0);
+        CHECK(std::abs(qGreen(*colour) - quad[corner].y()) < 6.0);
+    }
 }
