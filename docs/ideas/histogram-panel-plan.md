@@ -304,3 +304,11 @@ What parallel agents can do, each in its own worktree:
 - **The soft cap's rank:** the third tallest interior bin to start; tune on real photographs in step 6.
 - **Before/after (`\`, planned):** the histogram follows the picture shown; decided when
   before/after is designed.
+
+## Decision: 6 MP cap by skipping (2026-10-21)
+
+The count never gets an extra render. Above `outputHistogramMaxPixels` (6 MP) the counting
+function counts every `step`-th row and column (`outputHistogramStep`), crop spans honoured,
+clipped counts from the same grid; `pixels` is the number counted. Overlay and readout unchanged.
+Release: 2560 x 1600 unchanged (59-64 ms, step 1); 3840 x 2160 step 2, 31-33 ms (was 122-131 ms).
+See ADR 055, section 9.

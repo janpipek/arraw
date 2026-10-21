@@ -10,6 +10,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -17,6 +18,7 @@
 #include <mutex>
 #include <span>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 using namespace arraw;
@@ -357,4 +359,122 @@ TEST_CASE("a count that throws gets no result and the thread goes on", "[Histogr
     const auto results = collector.results();
     REQUIRE(results.size() == 1);
     CHECK(results[0].serial == serial);
+}
+
+namespace {
+
+/// Makes a picture whose red ramps along x, green along y and blue is constant.
+QImage rampPicture(int width, int height) {
+    QImage image(width, height, QImage::Format_RGBA8888);
+    for (int y = 0; y < height; ++y) {
+        auto* row = image.scanLine(y);
+        for (int x = 0; x < width; ++x) {
+            row[x * 4] = static_cast<uchar>(x * 255LL / (width - 1));
+            row[x * 4 + 1] = static_cast<uchar>(y * 255LL / (height - 1));
+            row[x * 4 + 2] = 100;
+            row[x * 4 + 3] = 255;
+        }
+    }
+    return image;
+}
+
+const std::atomic<bool> noAbandon{false};
+
+} // namespace
+
+TEST_CASE("the step keeps a count within the cap", "[HistogramCounter][stride]") {
+    CHECK(outputHistogramStep({2560, 1600}) == 1);
+    CHECK(outputHistogramStep({3000, 2000}) == 1);
+    CHECK(outputHistogramStep({3840, 2160}) == 2);
+    CHECK(outputHistogramStep({6000, 4000}) == 2);
+    for (const ImageSize size :
+         {ImageSize{7001, 5003}, ImageSize{9999, 3}, ImageSize{20000, 15000}}) {
+        const std::uint32_t step = outputHistogramStep(size);
+        CHECK((size.width + step - 1) / step * ((size.height + step - 1) / step) <=
+              outputHistogramMaxPixels);
+    }
+}
+
+TEST_CASE("an image under the cap is counted exactly", "[HistogramCounter][stride]") {
+    const QImage image = rampPicture(2400, 2000);
+    const OutputHistogram counted = app::countImageCodes(image, {}, NamedEncoding::Srgb, noAbandon);
+    const OutputHistogram full = countOutputCodes(
+        reinterpret_cast<const std::byte*>(image.constBits()), {2400, 2000},
+        static_cast<std::size_t>(image.bytesPerLine()), PixelFormat::RgbaU8, NamedEncoding::Srgb);
+    CHECK(counted.pixels == 2400u * 2000u);
+    CHECK(counted.red == full.red);
+    CHECK(counted.luma == full.luma);
+    CHECK(counted.pixels == full.pixels);
+}
+
+TEST_CASE("a strided count of a ramp stays close to the full one", "[HistogramCounter][stride]") {
+    const QImage image = rampPicture(3840, 2160);
+    const auto stride = outputHistogramStep({3840, 2160});
+    REQUIRE(stride == 2);
+    const OutputHistogram counted = app::countImageCodes(image, {}, NamedEncoding::Srgb, noAbandon);
+    const OutputHistogram full = countOutputCodes(
+        reinterpret_cast<const std::byte*>(image.constBits()), {3840, 2160},
+        static_cast<std::size_t>(image.bytesPerLine()), PixelFormat::RgbaU8, NamedEncoding::Srgb);
+    CHECK(counted.pixels == 1920u * 1080u);
+    // Each bin's share of the pixels differs from the full count's by under 0.1 percentage points.
+    for (const auto& [a, b] : {std::pair{&counted.red, &full.red},
+                               {&counted.green, &full.green},
+                               {&counted.luma, &full.luma}}) {
+        for (std::size_t bin = 0; bin < a->size(); ++bin) {
+            const double sampled = static_cast<double>((*a)[bin]) / counted.pixels;
+            const double exact = static_cast<double>((*b)[bin]) / full.pixels;
+            CHECK(std::abs(sampled - exact) < 0.001);
+        }
+    }
+}
+
+TEST_CASE("a stride honours the spans and sees a block of clipped pixels",
+          "[HistogramCounter][stride]") {
+    QImage image = rampPicture(3840, 2160);
+    image.fill(QColor(100, 100, 100));
+    // A 4 x 4 block (at least the stride) of clipped pixels, inside the spans.
+    for (int y = 1000; y < 1004; ++y) {
+        for (int x = 2000; x < 2004; ++x) {
+            image.setPixelColor(x, y, QColor(255, 100, 0));
+        }
+    }
+    std::vector<RowSpan> spans(2160, RowSpan{101, 3001});
+    spans[1000] = {2001, 2003};
+    const OutputHistogram counted =
+        app::countImageCodes(image, spans, NamedEncoding::Srgb, noAbandon);
+    // Columns 102..3000 even: 1450; the odd-start span row counts 2002 only.
+    CHECK(counted.pixels == 1080u * 1450u - 1450u + 1u);
+    CHECK(counted.highlightsClipped > 0);
+    CHECK(counted.shadowsClipped > 0);
+    CHECK(counted.highlightsClipped <= 4);
+}
+
+TEST_CASE("strided count cost at 2560x1600 and 3840x2160", "[.bench][HistogramCounter]") {
+    for (const ImageSize size : {ImageSize{2560, 1600}, ImageSize{3840, 2160}}) {
+        QImage noise(static_cast<int>(size.width), static_cast<int>(size.height),
+                     QImage::Format_RGBA8888);
+        std::uint32_t state = 12345;
+        for (int y = 0; y < noise.height(); ++y) {
+            uchar* row = noise.scanLine(y);
+            for (int i = 0; i < noise.width() * 4; ++i) {
+                state = state * 1664525U + 1013904223U;
+                row[i] = static_cast<uchar>(state >> 24);
+            }
+        }
+        for (const auto& [name, image] :
+             {std::pair{"noise", noise},
+              {"ramp", rampPicture(static_cast<int>(size.width), static_cast<int>(size.height))}}) {
+            double least = 1e9;
+            std::uint64_t pixels = 0;
+            for (int run = 0; run < 5; ++run) {
+                const auto start = std::chrono::steady_clock::now();
+                pixels = app::countImageCodes(image, {}, NamedEncoding::Srgb, noAbandon).pixels;
+                least = std::min(least, std::chrono::duration<double, std::milli>(
+                                            std::chrono::steady_clock::now() - start)
+                                            .count());
+            }
+            WARN(size.width << "x" << size.height << " " << name << ": " << least << " ms, "
+                            << pixels << " pixels");
+        }
+    }
 }

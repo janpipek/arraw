@@ -153,16 +153,18 @@ template <typename Sample> bool transparent(Sample alpha) {
 template <typename Sample>
 void countRows(const std::byte* rows, ImageSize size, std::size_t stride, std::size_t channels,
                const LumaTable& table, std::span<const RowSpan> spans,
-               const std::atomic<bool>* abandon, OutputHistogram& histogram) {
-    for (std::uint32_t y = 0; y < size.height; ++y) {
-        if (y % outputCountBandRows == 0 && abandon != nullptr &&
+               const std::atomic<bool>* abandon, std::uint32_t step, OutputHistogram& histogram) {
+    std::uint32_t rowsDone = 0;
+    for (std::uint32_t y = 0; y < size.height; y += step, ++rowsDone) {
+        if (rowsDone % outputCountBandRows == 0 && abandon != nullptr &&
             abandon->load(std::memory_order_relaxed)) {
             return;
         }
         const std::byte* row = rows + static_cast<std::size_t>(y) * stride;
-        const std::uint32_t begin = spans.empty() ? 0 : spans[y].begin;
+        const std::uint32_t first = spans.empty() ? 0 : spans[y].begin;
+        const std::uint32_t begin = (first + step - 1) / step * step;
         const std::uint32_t end = spans.empty() ? size.width : spans[y].end;
-        for (std::uint32_t x = begin; x < end; ++x) {
+        for (std::uint32_t x = begin; x < end; x += step) {
             const std::size_t at = static_cast<std::size_t>(x) * channels;
             if (channels == 4 && transparent(load<Sample>(row, at + 3))) {
                 continue;
@@ -190,10 +192,24 @@ void countRows(const std::byte* rows, ImageSize size, std::size_t stride, std::s
 
 } // namespace
 
+std::uint32_t arraw::outputHistogramStep(ImageSize size) {
+    std::uint32_t step = 1;
+    const auto counted = [&](std::uint64_t n) {
+        return (size.width + n - 1) / n * ((size.height + n - 1) / n);
+    };
+    while (counted(step) > outputHistogramMaxPixels) {
+        ++step;
+    }
+    return step;
+}
+
 OutputHistogram arraw::countOutputCodes(const std::byte* rows, ImageSize size, std::size_t stride,
                                         PixelFormat format, NamedEncoding encoding,
                                         std::span<const RowSpan> spans,
-                                        const std::atomic<bool>* abandon) {
+                                        const std::atomic<bool>* abandon, std::uint32_t step) {
+    if (step == 0) {
+        throw std::invalid_argument("A count takes a step of at least 1");
+    }
     const LumaTable& table = tableFor(encoding);
     if (!spans.empty()) {
         if (spans.size() != size.height) {
@@ -211,15 +227,17 @@ OutputHistogram arraw::countOutputCodes(const std::byte* rows, ImageSize size, s
     switch (format) {
     case PixelFormat::RgbU8:
     case PixelFormat::RgbaU8:
-        countRows<std::uint8_t>(rows, size, stride, channels, table, spans, abandon, histogram);
+        countRows<std::uint8_t>(rows, size, stride, channels, table, spans, abandon, step,
+                                histogram);
         break;
     case PixelFormat::RgbU16:
     case PixelFormat::RgbaU16:
-        countRows<std::uint16_t>(rows, size, stride, channels, table, spans, abandon, histogram);
+        countRows<std::uint16_t>(rows, size, stride, channels, table, spans, abandon, step,
+                                 histogram);
         break;
     case PixelFormat::RgbF32:
     case PixelFormat::RgbaF32:
-        countRows<float>(rows, size, stride, channels, table, spans, abandon, histogram);
+        countRows<float>(rows, size, stride, channels, table, spans, abandon, step, histogram);
         break;
     }
     return histogram;

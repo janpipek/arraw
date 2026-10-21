@@ -380,6 +380,21 @@ levers, for the user to choose:
    cost as today's R, G, B and clipping part (about a third of the count), so the saving is
    about 2.5 times, not 4, and a sampled distribution flickers a little between frames.
 
+**Decision (user, 2026-10-21): cap the counted picture at 6 MP by skipping.** The histogram counts
+the whole cropped frame from the images the GUI already has, never from an extra render. A picture
+over `outputHistogramMaxPixels` (6 000 000) is counted on a grid: every `step`-th row and column,
+`step` the smallest integer for which `ceil(w/step) * ceil(h/step)` is within the cap
+(`outputHistogramStep`). No filtering, no copy, no render. Crop spans are honoured (columns in a
+span that are multiples of `step`), the clipped counts come from the same grid as the bins so the
+triangles agree with the histogram, and `pixels` is the number actually counted. A picture at or
+under the cap is counted exactly as before (step 1). The clipping overlay and the pixel readout
+are unchanged and still cover every pixel. This supersedes lever 3 above (which kept a full pass
+for clipping): clipping is sampled too, so a clipped block smaller than `step` can be missed by the
+triangle while the overlay shows it.
+
+**Measured with the cap** (release, best of five, same machine): 2560 x 1600 is under the cap,
+unchanged at 59-64 ms; 3840 x 2160 has step 2, 2.07 M pixels counted, **31-33 ms** (was 122-131 ms).
+
 The **clipping counts are always taken over every pixel**, so the triangles always agree with the
 overlay.
 

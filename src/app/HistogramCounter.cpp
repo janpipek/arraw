@@ -46,7 +46,7 @@ OutputHistogram countImageCodes(const QImage& image, std::span<const RowSpan> sp
                              static_cast<std::uint32_t>(readable.height())};
         return countOutputCodes(reinterpret_cast<const std::byte*>(readable.constBits()), size,
                                 static_cast<std::size_t>(readable.bytesPerLine()), format, encoding,
-                                spans, &abandon);
+                                spans, &abandon, outputHistogramStep(size));
     };
     if (const auto format = pixelFormatOf(image.format())) {
         return count(image, *format);
