@@ -153,10 +153,11 @@ Steps 1 to 9 of `docs/ideas/histogram-panel-plan.md` (ADR 055), not pushed or me
 - review `docs/reviews/claude-opus-5-5_2026-10-20_histogram-panel.md` (untracked): the critical
   finding (overlay when zoomed) and the mediums are fixed.
 Open:
-- **Count cost misses the ADR's 10 ms budget by about 5x in release:** 52-60 ms at 2560x1600 and
-  105-118 ms at 3840x2160 (after a luma lookup table; was 128-272 ms). It runs on its own thread,
-  so the picture is never delayed, but the histogram lags a drag. Levers in ADR 055: count with
-  several threads, relax the budget, or sample. Decide;
+- **Count cost** (user, 2026-10-21): the 10 ms budget is missed, accepted: about 0.1 s of lag at
+  4K in a drag is fine, more is not. The counted image is capped at 6 MP by a row/column stride
+  (`outputHistogramMaxPixels`; never an extra render): release 59-64 ms at 2560x1600, 31-33 ms at
+  3840x2160. Multi-threading the count is rejected: it would take cores from the render in a
+  drag. Levers if it grows: a coarser stride only during a drag, a lower thread priority;
 - the critical fix (overlay only where a render covers) has had no second review;
 - review lows skipped: `TriangleButton` cast and the app-core include of `ThemeColors.h`,
   counting while the window is minimised;
