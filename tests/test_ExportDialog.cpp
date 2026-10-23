@@ -10,10 +10,12 @@
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QGroupBox>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QSpinBox>
 #include <QStandardItemModel>
 #include <QTest>
+#include <QTimer>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -479,13 +481,30 @@ TEST_CASE("An unreadable file offers Set Aside, which moves it after confirmatio
     CHECK(fs::exists(p.store.file()));
 
     p.confirmed = true;
+    QString reported;
+    bool foundMessage = false;
+    QTimer::singleShot(0, [&reported, &foundMessage] {
+        auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+        if (box != nullptr) {
+            reported = box->text();
+            foundMessage = true;
+            box->accept();
+        }
+    });
     aside->trigger();
     CHECK_FALSE(fs::exists(p.store.file()));
     int moved = 0;
+    fs::path movedPath;
     for (const auto& entry : fs::directory_iterator(p.directory.path())) {
-        moved += entry.path().filename().string().starts_with("export-presets.unreadable-");
+        if (entry.path().filename().string().starts_with("export-presets.unreadable-")) {
+            ++moved;
+            movedPath = entry.path();
+        }
     }
     CHECK(moved == 1);
+    CHECK(foundMessage);
+    CHECK(reported ==
+          "The presets file was moved to:\n" + QString::fromStdU16String(movedPath.u16string()));
     CHECK(saveAsOf(dialog)->isEnabled());
     CHECK_FALSE(aside->isVisible());
     CHECK(p.warnings.empty());

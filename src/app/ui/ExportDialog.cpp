@@ -584,8 +584,11 @@ void ExportDialog::setAsidePresets() {
         return;
     }
     const std::optional<std::string> keep = chosenPreset();
-    if (change(title, [&] { (void)store_->setAside(); })) {
+    std::filesystem::path destination;
+    if (change(title, [&] { destination = store_->setAside(); })) {
         reloadPresets(keep);
+        QMessageBox::information(this, title,
+                                 tr("The presets file was moved to:\n%1").arg(shown(destination)));
     }
 }
 

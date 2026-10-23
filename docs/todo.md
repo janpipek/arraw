@@ -251,9 +251,9 @@ Done (user, 2026-10-20): **export presets** (branch `export-presets`, ADR 054, p
   fixed. Python's `save(settings=)` is removed (user, 2026-10-20: a preset
   is render plus write, and `save` only writes; the recipe is `develop(size=settings.develop_size)`
   then `save`); whether Python wants an `export(photo, path, preset)` is for the Python API
-  design pass, not now. Open: a cross-process lock test; `path.string()` on Windows unchecked; the
-  app does not report the new path after Set Aside; `--no-profile` and `--resize-filter` are
-  not in presets; develop presets are separate (step 4 above).
+  design pass, not now. Open: a cross-process lock test; `path.string()` on Windows unchecked;
+  `--no-profile` and `--resize-filter` are not in presets; develop presets are separate (step 4
+  above).
 
 - **Logging throughout the app, with a level set in the app** (user, 2026-10-20). The debug
   window (`src/app/ui/DebugWindow.*`, `QtMessageCapture`) captures what Qt logs, but little
