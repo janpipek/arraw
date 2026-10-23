@@ -63,3 +63,7 @@ Version 2 also separates version from active-state presence through
 `arraw:activeStatePresent`. A marks-only or snapshot-only v2 write must preserve whether the
 sidecar had saved develop settings; `arraw:version` alone continues to imply an explicit state
 only for v1 files. The version-2 writer determines presence using the pre-write version's rule.
+
+Every Arraw sidecar write also takes the sibling `<sidecar>.lock` (`QLockFile`, 2000 ms), rereads
+the file, patches only its own fields and replaces it through `QSaveFile`. Frozen version 2
+fixtures live in `tests/fixtures/sidecars/v2/`; the version 1 fixtures are unchanged.

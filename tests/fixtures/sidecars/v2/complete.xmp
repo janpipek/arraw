@@ -1,0 +1,227 @@
+<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Arraw">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmlns:arraw="http://ns.arraw.org/develop/"
+    xmlns:acme="http://ns.example.com/acme/1.0/"
+    xmp:Rating="4"
+    xmp:Label="Blue"
+    arraw:version="2"
+    arraw:activeStatePresent="True"
+    arraw:savedBase="2"
+    arraw:snapshotNextId="4"
+    arraw:snapshotRevision="3"
+    arraw:exposure="1.25"
+    arraw:contrast="0.5"
+    arraw:demosaic="dcb"
+    arraw:lensDistortion="True"
+    arraw:lensVignetting="80"
+    arraw:lensLateralCa="False"
+    arraw:lensMaker="Canon"
+    arraw:lensModel="Canon EF-S 18-55mm f/3.5-5.6 IS II"
+    arraw:lensCropFactor="1.6"
+    arraw:lensOrigin="matched"
+    arraw:lensDatabase="2026-10-01"
+    arraw:nextLocalAdjustmentId="2"
+    acme:Owner="Someone">
+   <arraw:localAdjustments>
+    <rdf:Seq>
+     <rdf:li rdf:parseType="Resource">
+      <arraw:id>1</arraw:id>
+      <arraw:type>radial</arraw:type>
+      <arraw:name>Sky</arraw:name>
+      <arraw:enabled>True</arraw:enabled>
+      <arraw:opacity>1</arraw:opacity>
+      <arraw:invert>False</arraw:invert>
+      <arraw:centreX>0.5</arraw:centreX>
+      <arraw:centreY>0.25</arraw:centreY>
+      <arraw:radiusX>0.5</arraw:radiusX>
+      <arraw:radiusY>0.25</arraw:radiusY>
+      <arraw:angle>0</arraw:angle>
+      <arraw:feather>0.5</arraw:feather>
+      <arraw:exposure>0.5</arraw:exposure>
+     </rdf:li>
+    </rdf:Seq>
+   </arraw:localAdjustments>
+   <arraw:snapshots>
+    <rdf:Seq>
+     <rdf:li rdf:parseType="Resource"><arraw:id>1</arraw:id><arraw:name>Warm ☀</arraw:name><arraw:created>2026-09-21T14:13:20Z</arraw:created><arraw:state>{
+  "arraw": 1,
+  "settings": {
+    "exposure": 0.5,
+    "contrast": 0,
+    "shadows": 0,
+    "highlights": 0,
+    "blacks": 0,
+    "whites": 0,
+    "filmicHighlights": 25,
+    "texture": 0,
+    "clarity": 0,
+    "dehaze": 0,
+    "toneCurveLuma": [[0, 0], [1, 1]],
+    "toneCurveRed": [[0, 0], [1, 1]],
+    "toneCurveGreen": [[0, 0], [1, 1]],
+    "toneCurveBlue": [[0, 0], [1, 1]],
+    "whiteBalance": "asShot",
+    "temperature": null,
+    "tint": null,
+    "saturation": 0,
+    "vibrance": 0,
+    "hueRed": 0,
+    "saturationRed": 0,
+    "luminanceRed": 0,
+    "hueOrange": 0,
+    "saturationOrange": 0,
+    "luminanceOrange": 0,
+    "hueYellow": 0,
+    "saturationYellow": 0,
+    "luminanceYellow": 0,
+    "hueGreen": 0,
+    "saturationGreen": 0,
+    "luminanceGreen": 0,
+    "hueAqua": 0,
+    "saturationAqua": 0,
+    "luminanceAqua": 0,
+    "hueBlue": 0,
+    "saturationBlue": 0,
+    "luminanceBlue": 0,
+    "huePurple": 0,
+    "saturationPurple": 0,
+    "luminancePurple": 0,
+    "hueMagenta": 0,
+    "saturationMagenta": 0,
+    "luminanceMagenta": 0,
+    "convertToGrayscale": false,
+    "grayRed": 0,
+    "grayOrange": 0,
+    "grayYellow": 0,
+    "grayGreen": 0,
+    "grayAqua": 0,
+    "grayBlue": 0,
+    "grayPurple": 0,
+    "grayMagenta": 0,
+    "gradeShadowHue": 0,
+    "gradeShadowSaturation": 0,
+    "gradeMidtoneHue": 0,
+    "gradeMidtoneSaturation": 0,
+    "gradeHighlightHue": 0,
+    "gradeHighlightSaturation": 0,
+    "gradeBalance": 0,
+    "gradeBlending": 50,
+    "vignetteAmount": 0,
+    "vignetteMidpoint": 50,
+    "vignetteFeather": 50,
+    "grainAmount": 0,
+    "grainSize": 50,
+    "grainRoughness": 50,
+    "grainModel": "valueNoise",
+    "grainSeed": 0,
+    "luminanceNoiseReduction": 0,
+    "luminanceNoiseDetail": 50,
+    "luminanceNoiseFilter": "bilateral",
+    "colorNoiseReduction": 0,
+    "colorNoiseSmoothness": 50,
+    "rotation": "none",
+    "flipHorizontal": false,
+    "flipVertical": false,
+    "straighten": 0,
+    "cropRectangle": null,
+    "cropAspect": "free"
+  },
+  "localAdjustments": {"nextId": 1, "masks": []}
+}
+</arraw:state><arraw:negative>{"demosaic": "vng"}</arraw:negative><arraw:thumbnail>/9j/4AAQSkZJRgABAQEAZABkAAD/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAAGAAgDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDjKKKK9k/Nj//Z</arraw:thumbnail><arraw:thumbnailKey>frozen-key-1</arraw:thumbnailKey></rdf:li>
+     <rdf:li rdf:parseType="Resource"><arraw:id>2</arraw:id><arraw:parent>1</arraw:parent><arraw:name>Cool</arraw:name><arraw:created>2026-09-21T14:13:20Z</arraw:created><arraw:state>{
+  "arraw": 1,
+  "settings": {
+    "exposure": -0.5,
+    "contrast": 0,
+    "shadows": 0,
+    "highlights": 0,
+    "blacks": 0,
+    "whites": 0,
+    "filmicHighlights": 25,
+    "texture": 0,
+    "clarity": 0,
+    "dehaze": 0,
+    "toneCurveLuma": [[0, 0], [1, 1]],
+    "toneCurveRed": [[0, 0], [1, 1]],
+    "toneCurveGreen": [[0, 0], [1, 1]],
+    "toneCurveBlue": [[0, 0], [1, 1]],
+    "whiteBalance": "asShot",
+    "temperature": null,
+    "tint": null,
+    "saturation": 0,
+    "vibrance": 0,
+    "hueRed": 0,
+    "saturationRed": 0,
+    "luminanceRed": 0,
+    "hueOrange": 0,
+    "saturationOrange": 0,
+    "luminanceOrange": 0,
+    "hueYellow": 0,
+    "saturationYellow": 0,
+    "luminanceYellow": 0,
+    "hueGreen": 0,
+    "saturationGreen": 0,
+    "luminanceGreen": 0,
+    "hueAqua": 0,
+    "saturationAqua": 0,
+    "luminanceAqua": 0,
+    "hueBlue": 0,
+    "saturationBlue": 0,
+    "luminanceBlue": 0,
+    "huePurple": 0,
+    "saturationPurple": 0,
+    "luminancePurple": 0,
+    "hueMagenta": 0,
+    "saturationMagenta": 0,
+    "luminanceMagenta": 0,
+    "convertToGrayscale": false,
+    "grayRed": 0,
+    "grayOrange": 0,
+    "grayYellow": 0,
+    "grayGreen": 0,
+    "grayAqua": 0,
+    "grayBlue": 0,
+    "grayPurple": 0,
+    "grayMagenta": 0,
+    "gradeShadowHue": 0,
+    "gradeShadowSaturation": 0,
+    "gradeMidtoneHue": 0,
+    "gradeMidtoneSaturation": 0,
+    "gradeHighlightHue": 0,
+    "gradeHighlightSaturation": 0,
+    "gradeBalance": 0,
+    "gradeBlending": 50,
+    "vignetteAmount": 0,
+    "vignetteMidpoint": 50,
+    "vignetteFeather": 50,
+    "grainAmount": 0,
+    "grainSize": 50,
+    "grainRoughness": 50,
+    "grainModel": "valueNoise",
+    "grainSeed": 0,
+    "luminanceNoiseReduction": 0,
+    "luminanceNoiseDetail": 50,
+    "luminanceNoiseFilter": "bilateral",
+    "colorNoiseReduction": 0,
+    "colorNoiseSmoothness": 50,
+    "rotation": "none",
+    "flipHorizontal": false,
+    "flipVertical": false,
+    "straighten": 0,
+    "cropRectangle": null,
+    "cropAspect": "free"
+  },
+  "localAdjustments": {"nextId": 2, "masks": [
+    {"id": 1, "type": "radial", "name": "Sky", "enabled": true, "opacity": 1, "invert": false, "geometry": {"centre": [0.5, 0.5], "radius": [0.25, 0.25], "angle": 0, "feather": 0.5}, "deltas": {}}
+  ]}
+}
+</arraw:state><arraw:negative>{"demosaic": "vng"}</arraw:negative></rdf:li>
+    </rdf:Seq></arraw:snapshots>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end="w"?>

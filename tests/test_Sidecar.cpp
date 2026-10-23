@@ -176,10 +176,11 @@ TEST_CASE("A new sidecar is an XMP packet holding the settings as attributes", "
     REQUIRE(text.starts_with("<?xpacket begin="));
     REQUIRE(text.find("<?xpacket end=") != std::string::npos);
     for (const char* piece :
-         {"arraw:version=\"1\"", "arraw:exposure=\"0.1\"", "arraw:temperature=\"5500\"",
-          "arraw:flipVertical=\"True\"", "arraw:flipHorizontal=\"False\"",
-          "arraw:whiteBalance=\"asShot\"", "arraw:cropRectangle=\"0.25,0,1,0.5\"",
-          "arraw:cropAspect=\"1.5\"", "xmp:Rating=\"4\"", "xmp:Label=\"Red\""}) {
+         {"arraw:version=\"2\"", "arraw:activeStatePresent=\"True\"", "arraw:exposure=\"0.1\"",
+          "arraw:temperature=\"5500\"", "arraw:flipVertical=\"True\"",
+          "arraw:flipHorizontal=\"False\"", "arraw:whiteBalance=\"asShot\"",
+          "arraw:cropRectangle=\"0.25,0,1,0.5\"", "arraw:cropAspect=\"1.5\"", "xmp:Rating=\"4\"",
+          "xmp:Label=\"Red\""}) {
         INFO(piece);
         REQUIRE(text.find(piece) != std::string::npos);
     }
@@ -542,7 +543,7 @@ TEST_CASE("Values a sidecar gets wrong are reported and repaired", "[sidecar][di
         REQUIRE(count(log, Notice::SettingMalformed) == 4);
     }
     SECTION("a newer version is read with a warning") {
-        with(R"(arraw:version="2" arraw:exposure="0.5")");
+        with(R"(arraw:version="3" arraw:exposure="0.5")");
         REQUIRE(readSidecar(path, log)->state->settings.tone.exposure == 0.5F);
         REQUIRE(count(log, Notice::NewerSettingsVersion) == 1);
         REQUIRE(log.entries().front().subject == path);
@@ -673,7 +674,7 @@ TEST_CASE("A sidecar of a newer version is read but never written over", "[sidec
     const test::TempDir directory;
     const fs::path path = copyRaw(directory, "IMG_1.dng");
     const fs::path sidecar = directory.file("IMG_1.xmp");
-    const std::string newer = sidecarWith(R"(arraw:version="2" arraw:exposure="99")");
+    const std::string newer = sidecarWith(R"(arraw:version="3" arraw:exposure="99")");
     spit(sidecar, newer);
 
     CollectedDiagnostics log;
@@ -1003,7 +1004,9 @@ TEST_CASE("Every stored version of the sidecar is still read, and written as the
         }
         REQUIRE(std::stoi(name.substr(1)) <= sidecarVersion);
         for (const auto& stored : fs::directory_iterator(versionDirectory.path())) {
-            if (stored.path().extension() != ".xmp") {
+            // A sidecar of marks alone records no state; test_Snapshots.cpp reads those.
+            if (stored.path().extension() != ".xmp" ||
+                stored.path().filename() == "marks-only.xmp") {
                 continue;
             }
             ++files;
@@ -1036,6 +1039,36 @@ TEST_CASE("Every stored version of the sidecar is still read, and written as the
         }
     }
     CHECK(files >= 2);
+}
+
+TEST_CASE("Every stored sidecar of marks alone is rewritten by marks without recording a state",
+          "[sidecar][versions]") {
+    const fs::path root = test::fixture("sidecars");
+    std::size_t files = 0;
+    for (const auto& versionDirectory : fs::directory_iterator(root)) {
+        const fs::path stored = versionDirectory.path() / "marks-only.xmp";
+        if (!versionDirectory.is_directory() || !fs::exists(stored)) {
+            continue;
+        }
+        ++files;
+        INFO(stored.string());
+        const test::TempDir directory;
+        const fs::path path = copyRaw(directory, "IMG_1.dng");
+        fs::copy_file(stored, directory.file("IMG_1.xmp"));
+        const auto before = readSidecar(path);
+        REQUIRE(before);
+        CHECK_FALSE(before->state);
+
+        writeSidecarMarks(path, {.rating = 5});
+        const auto after = readSidecar(path);
+        REQUIRE(after);
+        CHECK_FALSE(after->state);
+        CHECK(after->marks.rating == 5);
+        CHECK_THAT(slurp(directory.file("IMG_1.xmp")),
+                   Catch::Matchers::ContainsSubstring("arraw:version=\"" +
+                                                      std::to_string(sidecarVersion) + "\""));
+    }
+    CHECK(files >= 1);
 }
 
 TEST_CASE("A sidecar of a newer version is read with a warning, and refused for marks too",

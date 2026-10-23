@@ -312,6 +312,8 @@ add_library(arraw STATIC
         include/SettingsJson.h
         src/core/SettingsJson.cpp
         include/PhotoMarks.h
+        include/Snapshots.h
+        src/core/Snapshots.cpp
         include/Sidecar.h
         src/core/Sidecar.cpp
         src/core/ImageBuffer.cpp

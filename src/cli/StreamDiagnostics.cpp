@@ -69,6 +69,8 @@ std::string nameOf(Notice notice) {
         return "brush_strokes_trimmed";
     case Notice::SidecarUnreadable:
         return "sidecar_unreadable";
+    case Notice::SnapshotDamaged:
+        return "snapshot_damaged";
     case Notice::ExifUnreadable:
         return "exif_unreadable";
     case Notice::PreviewUnreadable:

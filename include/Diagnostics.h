@@ -174,6 +174,12 @@ enum class Notice {
     /// @brief The export presets file cannot be read, so it is treated as holding no presets and
     /// is never written over: the reason.
     ExportPresetsUnreadable,
+
+    /// @brief Part of a photograph's snapshot list cannot be used and was left out or repaired
+    /// when read: the position in the list (from 1, empty when about the list), the snapshot's
+    /// id (empty when unreadable), then why in words. The sidecar keeps what it holds until a
+    /// snapshot edit, which refuses a list it cannot keep whole.
+    SnapshotDamaged,
 };
 
 /// @brief One detail of a diagnostic, kept as a value rather than as prose.

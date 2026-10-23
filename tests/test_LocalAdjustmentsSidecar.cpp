@@ -580,7 +580,7 @@ TEST_CASE("A newer sidecar's list is read, and then the sidecar is not written b
           "[local][sidecar]") {
     Workbench bench;
     const std::string newer =
-        sidecarWith(R"(arraw:version="2")", item(linearFields(1, field("futureThing", "1"))));
+        sidecarWith(R"(arraw:version="3")", item(linearFields(1, field("futureThing", "1"))));
     spit(bench.sidecar, newer);
     CollectedDiagnostics log;
     const DevelopState state = bench.read(log);

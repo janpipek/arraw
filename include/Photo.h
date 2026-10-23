@@ -132,6 +132,8 @@ private:
 
 /// @brief Opens a photograph as a document, reading no pixels.
 ///
+/// The photograph of ::arraw::openDocument, for callers that do not need its snapshots.
+///
 /// Reads what the file declares — its dimensions and the encoding its pixels
 /// will arrive in — and pairs it with the state and marks of its sidecar
 /// (see ::arraw::readSidecar). Without a sidecar, or with one that records no

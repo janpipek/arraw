@@ -3,29 +3,43 @@
 #include "LocalAdjustmentCodec.h"
 #include "RawImport.h"
 #include "SettingCodec.h"
+#include "SidecarLimits.h"
 
 #include <BrushStrokes.h>
 #include <NegativeSettings.h>
+#include <SettingsJson.h>
 #include <ShortestDecimal.h>
+#include <Snapshots.h>
 
 #include <QByteArray>
+#include <QDateTime>
 #include <QDomDocument>
 #include <QDomElement>
 #include <QDomNamedNodeMap>
 #include <QDomNodeList>
 #include <QDomProcessingInstruction>
 #include <QFile>
+#include <QLockFile>
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QString>
+#include <QStringConverter>
 #include <QStringList>
+#include <QTextStream>
+#include <QTimeZone>
 
 #include <algorithm>
 #include <array>
 #include <cctype>
 #include <charconv>
+#include <chrono>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <functional>
 #include <limits>
+#include <map>
+#include <set>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -556,6 +570,28 @@ bool isLocalAdjustmentProperty(std::string_view key) {
            key == "nextLocalAdjustmentId";
 }
 
+/// @brief Whether a key is one of the version-2 properties of snapshots and of the presence of the
+/// active state (ADR 056).
+bool isSnapshotProperty(std::string_view key) {
+    return key == "activeStatePresent" || key == "savedBase" || key == "snapshots" ||
+           key == "snapshotNextId" || key == "snapshotRevision";
+}
+
+/// @brief Reads `arraw:activeStatePresent`; nothing when it is absent or not `True` or `False`.
+std::optional<bool> activeStateMarkerIn(const std::vector<QDomElement>& descriptions) {
+    const auto found = occurrencesOf(descriptions, arrawProperty("activeStatePresent"));
+    if (found.empty() || !found.back().simple) {
+        return std::nullopt;
+    }
+    if (found.back().text.compare("True"_L1, Qt::CaseInsensitive) == 0) {
+        return true;
+    }
+    if (found.back().text.compare("False"_L1, Qt::CaseInsensitive) == 0) {
+        return false;
+    }
+    return std::nullopt;
+}
+
 /// @brief Reads a field's text as every value it could stand for.
 FieldValue fieldOfText(const QString& raw) {
     FieldValue field;
@@ -739,7 +775,8 @@ void readUnknownKeys(const std::vector<QDomElement>& descriptions, DiagnosticLog
         for (const Resolved& property : propertiesOf(description)) {
             const std::string key = property.local.toStdString();
             if (property.ns == ns && key != "version" && !isNegativeProperty(key) &&
-                !isLocalAdjustmentProperty(key) && findDescriptor(key) == nullptr) {
+                !isLocalAdjustmentProperty(key) && !isSnapshotProperty(key) &&
+                findDescriptor(key) == nullptr) {
                 log.record({.notice = Notice::SettingUnknown,
                             .severity = Severity::Warning,
                             .subject = subject,
@@ -995,6 +1032,359 @@ bool hasSibling(const std::filesystem::path& photo, std::span<const std::string_
     return false;
 }
 
+// ---- Snapshots (ADR 056)
+
+/// @brief Reads a whole text of decimal digits as an unsigned number.
+std::optional<std::uint64_t> decimalIn(const QString& text) {
+    const std::string trimmed = text.trimmed().toStdString();
+    if (trimmed.empty() || !std::ranges::all_of(trimmed, [](unsigned char character) {
+            return std::isdigit(character) != 0;
+        })) {
+        return std::nullopt;
+    }
+    std::uint64_t value = 0;
+    const auto result = std::from_chars(trimmed.data(), trimmed.data() + trimmed.size(), value);
+    if (result.ec != std::errc{} || result.ptr != trimmed.data() + trimmed.size()) {
+        return std::nullopt;
+    }
+    return value;
+}
+
+/// @brief Spells a time as the ISO 8601 UTC date XMP uses.
+QString spellTime(std::chrono::sys_seconds time) {
+    return QDateTime::fromSecsSinceEpoch(time.time_since_epoch().count(), QTimeZone::UTC)
+        .toString(Qt::ISODate);
+}
+
+/// @brief Reads a time; nothing when it is not a date or lies outside what a snapshot may carry.
+std::optional<std::chrono::sys_seconds> timeIn(const QString& text) {
+    const QDateTime parsed = QDateTime::fromString(text.trimmed(), Qt::ISODate);
+    if (!parsed.isValid()) {
+        return std::nullopt;
+    }
+    const std::int64_t seconds = parsed.toSecsSinceEpoch();
+    if (seconds < 0 || seconds > 253402300799) {
+        return std::nullopt;
+    }
+    return std::chrono::sys_seconds{std::chrono::seconds{seconds}};
+}
+
+/// @brief The text of an occurrence as the file has it, not trimmed.
+QString rawText(const Occurrence& occurrence) {
+    return occurrence.element.isNull() ? occurrence.holder.attribute(occurrence.name)
+                                       : occurrence.element.text();
+}
+
+/// @brief Finds the element that holds the fields of a list item: the item, or the
+/// `rdf:Description` nested in it by tools that rewrite `rdf:parseType="Resource"`.
+QDomElement fieldHolder(const QDomElement& item) {
+    const QString ns = arrawProperty("").ns;
+    const auto holdsArraw = [&](const QDomElement& element) {
+        const auto properties = propertiesOf(element);
+        return std::ranges::any_of(properties,
+                                   [&](const Resolved& property) { return property.ns == ns; });
+    };
+    if (holdsArraw(item)) {
+        return item;
+    }
+    for (QDomElement child = item.firstChildElement(); !child.isNull();
+         child = child.nextSiblingElement()) {
+        if (isNamed(child, rdfNamespace, "Description"_L1)) {
+            if (const QDomElement inner = fieldHolder(child); holdsArraw(inner)) {
+                return inner;
+            }
+        }
+    }
+    return item;
+}
+
+/// @brief Finds a field of a list item; the last of it when the file repeats it.
+std::optional<Occurrence> fieldOf(const QDomElement& holder, std::string_view key) {
+    const auto found = occurrencesOf({holder}, arrawProperty(key));
+    if (found.empty()) {
+        return std::nullopt;
+    }
+    return found.back();
+}
+
+/// @brief Replaces a field of a list item by a child element, or removes it.
+///
+/// Fields are elements, not attributes, because states and thumbnails are long and an attribute
+/// value is normalised by XML readers.
+void setField(QDomElement holder, std::string_view key, const std::optional<QString>& value) {
+    for (const Occurrence& occurrence : occurrencesOf({holder}, arrawProperty(key))) {
+        remove(occurrence);
+    }
+    if (!value) {
+        return;
+    }
+    const Property property = arrawProperty(key);
+    QDomElement field =
+        holder.ownerDocument().createElement(prefixOn(holder, property) + ':' + property.local);
+    field.appendChild(holder.ownerDocument().createTextNode(*value));
+    holder.appendChild(field);
+}
+
+/// @brief Where the snapshot list stands in a document.
+struct SnapshotList {
+    bool present = false;           ///< Whether the file has `arraw:snapshots`.
+    bool usable = true;             ///< Whether its container is one the writer can edit in place.
+    QDomElement property;           ///< The `arraw:snapshots` element, null when absent.
+    QDomElement sequence;           ///< Its `rdf:Seq`, null when there is none yet.
+    std::vector<QDomElement> items; ///< The `rdf:li` of the sequence, in order.
+};
+
+/// @brief One list item as read.
+struct SnapshotNode {
+    QDomElement item;        ///< The `rdf:li`.
+    QDomElement holder;      ///< Where its fields are.
+    std::uint64_t rawId = 0; ///< Its id when readable, even if the node is not usable.
+    bool usable = false;     ///< Whether it became a ::arraw::Snapshot.
+};
+
+/// @brief What the snapshot properties of a sidecar say.
+struct SnapshotRead {
+    SnapshotCollection collection;
+    std::optional<SnapshotId> savedBase;
+    bool damaged = false;
+    SnapshotList list;
+    std::vector<SnapshotNode> nodes;
+};
+
+/// @brief Reports a snapshot problem.
+void reportDamage(DiagnosticLog& log, const std::filesystem::path& subject, std::size_t position,
+                  std::uint64_t id, std::string why) {
+    log.record({.notice = Notice::SnapshotDamaged,
+                .severity = Severity::Warning,
+                .subject = subject,
+                .values = {position == 0 ? std::string() : std::to_string(position),
+                           id == 0 ? std::string() : std::to_string(id), std::move(why)}});
+}
+
+/// @brief Finds the snapshot list of a document.
+SnapshotList locateList(const std::vector<QDomElement>& descriptions) {
+    SnapshotList list;
+    const auto found = occurrencesOf(descriptions, arrawProperty("snapshots"));
+    if (found.empty()) {
+        return list;
+    }
+    list.present = true;
+    list.usable = found.size() == 1 && !found.back().element.isNull();
+    if (found.back().element.isNull()) {
+        return list;
+    }
+    list.property = found.back().element;
+    list.sequence = sequenceIn(list.property);
+    if (list.sequence.isNull()) {
+        // An empty property is an empty list, as XMP tools may drop an empty container.
+        list.usable = list.usable && list.property.firstChildElement().isNull() &&
+                      list.property.text().trimmed().isEmpty();
+        return list;
+    }
+    for (QDomElement item = list.sequence.firstChildElement(); !item.isNull();
+         item = item.nextSiblingElement()) {
+        if (isNamed(item, rdfNamespace, "li"_L1)) {
+            list.items.push_back(item);
+        }
+    }
+    return list;
+}
+
+/// @brief Reads one node into a snapshot; the reason in @p why when it cannot be.
+std::optional<Snapshot> readNode(SnapshotNode& node, std::size_t position, std::string& why,
+                                 DiagnosticLog& log, const std::filesystem::path& subject) {
+    const QDomElement holder = node.holder;
+    Snapshot snapshot;
+    const auto id = fieldOf(holder, "id");
+    const auto idValue = id && id->simple ? decimalIn(id->text) : std::nullopt;
+    if (!idValue || *idValue == 0) {
+        why = "its id is not a positive whole number";
+        return std::nullopt;
+    }
+    node.rawId = *idValue;
+    if (*idValue == std::numeric_limits<std::uint64_t>::max()) {
+        // No counter can lie above it, so no collection holding it could be valid.
+        why = "its id is too large";
+        return std::nullopt;
+    }
+    snapshot.id = SnapshotId{*idValue};
+    if (const auto parent = fieldOf(holder, "parent")) {
+        const auto value = parent->simple ? decimalIn(parent->text) : std::nullopt;
+        if (value && *value != 0 && *value != *idValue) {
+            snapshot.parent = SnapshotId{*value};
+        } else {
+            reportDamage(log, subject, position, *idValue,
+                         "its parent is unreadable, so it is a root");
+        }
+    }
+    const auto name = fieldOf(holder, "name");
+    if (!name || !name->simple) {
+        why = "it has no name";
+        return std::nullopt;
+    }
+    snapshot.name = rawText(*name).toStdString();
+    const auto created = fieldOf(holder, "created");
+    const auto time = created && created->simple ? timeIn(created->text) : std::nullopt;
+    if (!time) {
+        why = "its time is not a date";
+        return std::nullopt;
+    }
+    snapshot.created = *time;
+    const auto state = fieldOf(holder, "state");
+    const auto negative = fieldOf(holder, "negative");
+    if (!state || !state->simple || !negative || !negative->simple) {
+        why = "it lacks its state or its negative";
+        return std::nullopt;
+    }
+    try {
+        snapshot.state = applyStateJson(rawText(*state).toStdString(), DevelopState{}, log);
+        snapshot.negative = applyNegativeJson(rawText(*negative).toStdString(), {}, log);
+        // The name is checked with everything else, but the thumbnail alone may be lost.
+        validate(snapshot);
+    } catch (const std::exception& error) {
+        why = error.what();
+        return std::nullopt;
+    }
+    const auto thumbnail = fieldOf(holder, "thumbnail");
+    const auto key = fieldOf(holder, "thumbnailKey");
+    if (thumbnail || key) {
+        try {
+            if (!thumbnail || !key || !thumbnail->simple || !key->simple) {
+                throw std::invalid_argument("a thumbnail needs its bytes and its render key");
+            }
+            const auto bytes = QByteArray::fromBase64Encoding(
+                thumbnail->text.toLatin1(), QByteArray::AbortOnBase64DecodingErrors);
+            if (!bytes) {
+                throw std::invalid_argument("its thumbnail is not base64");
+            }
+            SnapshotThumbnail decoded;
+            decoded.renderKey = rawText(*key).toStdString();
+            decoded.jpeg.resize(static_cast<std::size_t>(bytes.decoded.size()));
+            std::memcpy(decoded.jpeg.data(), bytes.decoded.constData(), decoded.jpeg.size());
+            validate(decoded);
+            snapshot.thumbnail = std::move(decoded);
+        } catch (const std::exception& error) {
+            reportDamage(log, subject, position, *idValue,
+                         std::string("its thumbnail was dropped: ") + error.what());
+        }
+    }
+    return snapshot;
+}
+
+/// @brief Reads the snapshots, the counters and the saved base, tolerantly.
+SnapshotRead readSnapshotsIn(const std::vector<QDomElement>& descriptions, DiagnosticLog& log,
+                             const std::filesystem::path& subject) {
+    SnapshotRead read;
+    read.list = locateList(descriptions);
+    std::uint64_t highest = 0;
+    if (read.list.present && !read.list.usable) {
+        read.damaged = true;
+        reportDamage(log, subject, 0, 0,
+                     "the list is not a single sequence of snapshots, so none is listed");
+    }
+    std::set<std::uint64_t> seen;
+    // A list that is not one sequence lists nothing, whichever of its occurrences held items.
+    const std::size_t items = read.list.usable ? read.list.items.size() : 0;
+    for (std::size_t i = 0; i < items; ++i) {
+        SnapshotNode node;
+        node.item = read.list.items[i];
+        node.holder = fieldHolder(node.item);
+        std::string why;
+        std::optional<Snapshot> snapshot;
+        if (read.collection.entries.size() >= maximumSnapshots) {
+            why = "the list is past " + std::to_string(maximumSnapshots) + " snapshots";
+            if (const auto id = fieldOf(node.holder, "id"); id && id->simple) {
+                node.rawId = decimalIn(id->text).value_or(0);
+            }
+        } else {
+            snapshot = readNode(node, i + 1, why, log, subject);
+        }
+        highest = std::max(highest, node.rawId);
+        if (snapshot && !seen.insert(snapshot->id.value).second) {
+            why = "its id is used by an earlier snapshot";
+            snapshot.reset();
+        }
+        if (snapshot) {
+            node.usable = true;
+            read.collection.entries.push_back(std::move(*snapshot));
+        } else {
+            read.damaged = true;
+            reportDamage(log, subject, i + 1, node.rawId,
+                         "it cannot be used and was left out: " + why);
+        }
+        read.nodes.push_back(node);
+    }
+
+    // Parents that are not there make roots; a cycle is cut where it closes.
+    std::map<std::uint64_t, std::size_t> index;
+    for (std::size_t i = 0; i < read.collection.entries.size(); ++i) {
+        index[read.collection.entries[i].id.value] = i;
+    }
+    for (Snapshot& snapshot : read.collection.entries) {
+        if (snapshot.parent && !index.contains(snapshot.parent->value)) {
+            reportDamage(log, subject, 0, snapshot.id.value,
+                         "its parent " + std::to_string(snapshot.parent->value) +
+                             " does not exist, so it is a root");
+            snapshot.parent.reset();
+        }
+    }
+    std::map<std::uint64_t, int> state; // 1 on the walk being made, 2 finished
+    for (const Snapshot& start : read.collection.entries) {
+        std::vector<std::uint64_t> walk;
+        Snapshot* at = &read.collection.entries[index[start.id.value]];
+        while (at != nullptr && state[at->id.value] == 0) {
+            state[at->id.value] = 1;
+            walk.push_back(at->id.value);
+            Snapshot* next =
+                at->parent ? &read.collection.entries[index[at->parent->value]] : nullptr;
+            if (next != nullptr && state[next->id.value] == 1) {
+                reportDamage(log, subject, 0, at->id.value,
+                             "its parent " + std::to_string(next->id.value) +
+                                 " leads back to it, so it is a root");
+                at->parent.reset();
+                next = nullptr;
+            }
+            at = next;
+        }
+        for (const std::uint64_t id : walk) {
+            state[id] = 2;
+        }
+    }
+
+    std::optional<std::uint64_t> storedNext;
+    std::optional<std::uint64_t> storedRevision;
+    std::optional<std::uint64_t> storedBase;
+    for (const std::string_view key : {"snapshotNextId", "snapshotRevision", "savedBase"}) {
+        const auto found = occurrencesOf(descriptions, arrawProperty(key));
+        if (found.empty()) {
+            continue;
+        }
+        const auto value = found.back().simple ? decimalIn(found.back().text) : std::nullopt;
+        if (!value) {
+            reportUnreadable(key, "a whole number", log, subject);
+        } else if (key == "snapshotNextId") {
+            storedNext = value;
+        } else if (key == "snapshotRevision") {
+            storedRevision = value;
+        } else {
+            storedBase = value;
+        }
+    }
+    read.collection.revision = storedRevision.value_or(0);
+    const std::uint64_t floor =
+        highest == std::numeric_limits<std::uint64_t>::max() ? highest : highest + 1;
+    read.collection.nextId = std::max<std::uint64_t>({storedNext.value_or(1), floor, 1});
+    if (storedBase && *storedBase != 0) {
+        if (index.contains(*storedBase)) {
+            read.savedBase = SnapshotId{*storedBase};
+        } else {
+            reportDamage(log, subject, 0, *storedBase,
+                         "the saved base does not exist, so there is none");
+        }
+    }
+    return read;
+}
+
 } // namespace
 
 std::optional<std::string_view> arraw::xmpNamespaceOwner(std::string_view uri) {
@@ -1041,26 +1431,42 @@ std::optional<SidecarContents> arraw::readSidecar(const std::filesystem::path& p
 
     SidecarContents contents;
     readVersion(descriptions, log, photo);
+    const int version = versionIn(descriptions).value_or(1);
     // Settings are applied onto the neutral defaults, never a kind's: a key
     // the file leaves out means what it meant when the file was written.
     DevelopState state;
-    bool recorded = !occurrencesOf(descriptions, arrawProperty("version")).empty();
+    const bool declared = !occurrencesOf(descriptions, arrawProperty("version")).empty();
+    bool keys = false;
     for (const FieldDescriptor& descriptor : developSettingDescriptors) {
         const auto found = occurrencesOf(descriptions, arrawProperty(descriptor.key));
         if (found.empty()) {
             continue;
         }
-        recorded = true;
+        keys = true;
         if (found.back().simple) {
             applyText(descriptor, found.back().text, state.settings, log, photo);
         } else {
             reportMalformed(descriptor, log, photo);
         }
     }
-    recorded = readLocalAdjustmentsIn(descriptions, state, log, photo) || recorded;
+    keys = readLocalAdjustmentsIn(descriptions, state, log, photo) || keys;
+    bool recorded = declared || keys; // version 1: a version alone is an explicit state.
+    if (version >= 2) {
+        // Version 2 says whether the state is saved; damaged, only the active keys tell (ADR 056).
+        if (const auto marker = activeStateMarkerIn(descriptions)) {
+            recorded = *marker;
+        } else {
+            reportUnreadable("activeStatePresent", "True or False", log, photo);
+            recorded = keys;
+        }
+    }
     if (recorded) {
         contents.state = std::move(state);
     }
+    SnapshotRead snapshots = readSnapshotsIn(descriptions, log, photo);
+    contents.snapshots = std::move(snapshots.collection);
+    contents.savedBase = snapshots.savedBase;
+    contents.snapshotsDamaged = snapshots.damaged;
     contents.negative = negativeIn(descriptions, log, photo);
     readUnknownKeys(descriptions, log, photo);
     contents.marks = marksIn(descriptions, log, photo);
@@ -1142,25 +1548,92 @@ void setLocalAdjustments(const std::vector<QDomElement>& descriptions, QDomEleme
     home.appendChild(list);
 }
 
-/// @brief Edits or creates the sidecar of a photograph.
+/// @brief A sidecar open for editing under its lock.
+struct Document {
+    std::filesystem::path path;            ///< The sidecar file.
+    QDomDocument dom;                      ///< Its latest content.
+    std::vector<QDomElement> descriptions; ///< Its `rdf:Description`s.
+    QDomElement home;                      ///< The one arraw's attributes go on.
+};
+
+/// @brief What a sidecar says about whether it records develop settings, before a write.
+struct Presence {
+    int version = 1;      ///< Version the file declares, 1 when it declares none.
+    bool present = false; ///< Whether it records develop settings, by its version's rule.
+};
+
+/// @brief Whether the file has any of the active develop properties.
+bool hasActiveKeys(const std::vector<QDomElement>& descriptions) {
+    const bool setting =
+        std::ranges::any_of(developSettingDescriptors, [&](const auto& descriptor) {
+            return !occurrencesOf(descriptions, arrawProperty(descriptor.key)).empty();
+        });
+    return setting || !occurrencesOf(descriptions, arrawProperty("localAdjustments")).empty() ||
+           !occurrencesOf(descriptions, arrawProperty("nextLocalAdjustmentId")).empty();
+}
+
+/// @brief Tells whether the file records develop settings, by the rule of the version it declares.
+Presence presenceBefore(const std::vector<QDomElement>& descriptions) {
+    Presence presence;
+    presence.version = versionIn(descriptions).value_or(1);
+    if (presence.version >= 2) {
+        const auto marker = activeStateMarkerIn(descriptions);
+        presence.present = marker.value_or(hasActiveKeys(descriptions));
+    } else {
+        presence.present = !occurrencesOf(descriptions, arrawProperty("version")).empty() ||
+                           hasActiveKeys(descriptions);
+    }
+    return presence;
+}
+
+/// @brief Holds a sidecar's lock file, `<sidecar>.lock`, for the life of the object.
+class SidecarLock {
+public:
+    /// @throws SidecarLockTimeout if another writer keeps the lock past the timeout.
+    /// @throws std::runtime_error if the lock file cannot be made.
+    explicit SidecarLock(const std::filesystem::path& sidecar)
+        : file_(qtPath(sidecar) + QStringLiteral(".lock")) {
+        if (file_.tryLock(detail::sidecarLockTimeout)) {
+            return;
+        }
+        if (file_.error() == QLockFile::LockFailedError) {
+            throw SidecarLockTimeout(sidecar, file_.fileName().toStdString());
+        }
+        throw std::runtime_error("cannot lock sidecar " + sidecar.string() +
+                                 (file_.error() == QLockFile::PermissionError
+                                      ? ": no permission to make its lock file"
+                                      : ": its lock file cannot be made"));
+    }
+
+private:
+    QLockFile file_;
+};
+
+/// @brief Edits or creates the sidecar of a photograph under its lock.
+///
+/// Takes the lock, rereads the latest file, lets @p change patch it, stamps version 2 and the
+/// presence of the active state, and replaces the file atomically. When @p change returns false
+/// nothing is stamped or written.
 /// @param photo Path of the photograph.
-/// @param state Develop state to write; null to leave the settings of an
-/// existing sidecar alone (a new one then records none).
-/// @param negative Negative settings to write; null to leave the key alone.
-/// @param marks Marks to write.
-void writeSidecarFor(const std::filesystem::path& photo, const DevelopState* state,
-                     const NegativeSettings* negative, const PhotoMarks& marks) {
-    const std::filesystem::path path = sidecarPath(photo);
+/// @param activeWrite Whether @p change writes the active develop settings.
+/// @param change Edit to make; may throw, in which case the file is left alone.
+void updateSidecar(const std::filesystem::path& photo, bool activeWrite,
+                   const std::function<bool(Document&)>& change) {
+    Document document;
+    document.path = sidecarPath(photo);
+    const std::filesystem::path& path = document.path;
+    const SidecarLock lock(path);
     std::error_code error;
     const bool exists = std::filesystem::is_regular_file(path, error);
-    QDomDocument document =
-        exists ? parse(readBytes(path), path) : parse(QByteArray(newSidecar), path);
+    document.dom = exists ? parse(readBytes(path), path) : parse(QByteArray(newSidecar), path);
+    QDomDocument& dom = document.dom;
 
-    const std::vector<QDomElement> packets = packetsOf(document);
+    const std::vector<QDomElement> packets = packetsOf(dom);
     if (packets.empty()) {
         throw std::runtime_error("sidecar " + path.string() + " is not XMP, so it was left alone");
     }
-    std::vector<QDomElement> descriptions = descriptionsOf(document);
+    document.descriptions = descriptionsOf(dom);
+    std::vector<QDomElement>& descriptions = document.descriptions;
     // Reading clamped its values to this version's ranges and dropped what it did not
     // understand, so writing them back would damage what a newer arraw put there (ADR 051).
     if (const auto version = versionIn(descriptions); version && *version > sidecarVersion) {
@@ -1169,11 +1642,11 @@ void writeSidecarFor(const std::filesystem::path& photo, const DevelopState* sta
                                  std::to_string(sidecarVersion) +
                                  " this arraw writes, so it was left alone");
     }
-    declareUtf8(document);
+    declareUtf8(dom);
     if (descriptions.empty()) {
         const QString prefix = splitName(packets.front().tagName()).first;
         const QString qualified = prefix.isEmpty() ? QString() : prefix + ':';
-        QDomElement created = document.createElement(qualified + "Description");
+        QDomElement created = dom.createElement(qualified + "Description");
         created.setAttribute(qualified + "about", QString());
         QDomElement packet = packets.front();
         packet.appendChild(created);
@@ -1186,10 +1659,49 @@ void writeSidecarFor(const std::filesystem::path& photo, const DevelopState* sta
         return std::ranges::any_of(properties,
                                    [&](const Resolved& property) { return property.ns == ns; });
     });
-    const QDomElement home = holder != descriptions.end() ? *holder : descriptions.front();
+    document.home = holder != descriptions.end() ? *holder : descriptions.front();
+    // Declared once here, so that list items below reuse the prefix instead of each declaring it.
+    prefixOn(document.home, arrawProperty(""));
 
+    // Presence is the pre-write version's rule, taken before anything is stamped.
+    const Presence before = exists ? presenceBefore(descriptions) : Presence{};
+    if (!change(document)) {
+        return;
+    }
+    setProperty(descriptions, document.home, arrawProperty("version"),
+                QString::number(sidecarVersion));
+    if (activeWrite) {
+        setProperty(descriptions, document.home, arrawProperty("activeStatePresent"), "True"_L1);
+    } else if (before.version < 2) {
+        // An upgrade, or a new file: keep what the old rule said. A version 2 file keeps its
+        // marker as it is, a damaged one included (ADR 056).
+        setProperty(descriptions, document.home, arrawProperty("activeStatePresent"),
+                    before.present ? "True"_L1 : "False"_L1);
+    }
+
+    QSaveFile file(qtPath(path));
+    if (!file.open(QIODevice::WriteOnly)) {
+        throw std::runtime_error("cannot write sidecar " + path.string() + ": " +
+                                 file.errorString().toStdString());
+    }
+    const QByteArray bytes = dom.toByteArray(-1);
+    if (file.write(bytes) != bytes.size()) {
+        throw std::runtime_error("cannot write sidecar " + path.string() + ": " +
+                                 file.errorString().toStdString());
+    }
+    if (!file.commit()) {
+        throw std::runtime_error("cannot write sidecar " + path.string() + ": " +
+                                 file.errorString().toStdString());
+    }
+}
+
+/// @brief Writes the active settings, the negative and the marks the caller owns.
+void patchActive(Document& document, const DevelopState* state, const NegativeSettings* negative,
+                 const PhotoMarks* marksToWrite) {
+    const std::vector<QDomElement>& descriptions = document.descriptions;
+    const QDomElement home = document.home;
+    const std::filesystem::path& path = document.path;
     if (state != nullptr) {
-        setProperty(descriptions, home, arrawProperty("version"), QString::number(sidecarVersion));
         for (const FieldDescriptor& descriptor : developSettingDescriptors) {
             setProperty(descriptions, home, arrawProperty(descriptor.key),
                         spell(encode(descriptor, state->settings)));
@@ -1245,50 +1757,277 @@ void writeSidecarFor(const std::filesystem::path& photo, const DevelopState* sta
                    lens ? std::optional{QString::fromStdString(lens->database)} : std::nullopt);
         }
     }
-    // Marks are standard XMP that other tools write too, and some of what they
-    // write is no mark arraw has (a rating of 9, a label named "Rot"). So a mark
-    // is written only when it differs from what reading the file gave: an
-    // unchanged mark leaves the file's own text alone, whatever it says.
-    const PhotoMarks onFile = marksIn(descriptions, discardedDiagnostics(), path);
-    if (marks.rating != onFile.rating) {
-        setProperty(descriptions, home, xmpProperty("Rating"_L1), QString::number(marks.rating));
-    }
-    if (marks.label != onFile.label) {
-        std::optional<QString> label;
-        if (marks.label) {
-            const auto named = std::ranges::find_if(
-                colorLabelNames, [&](const auto& entry) { return entry.first == *marks.label; });
-            if (named != colorLabelNames.end()) {
-                label = QString::fromUtf8(named->second.data(),
-                                          static_cast<qsizetype>(named->second.size()));
-            }
+    if (marksToWrite != nullptr) {
+        const PhotoMarks& marks = *marksToWrite;
+        // Marks are standard XMP that other tools write too, and some of what they
+        // write is no mark arraw has (a rating of 9, a label named "Rot"). So a mark
+        // is written only when it differs from what reading the file gave: an
+        // unchanged mark leaves the file's own text alone, whatever it says.
+        const PhotoMarks onFile = marksIn(descriptions, discardedDiagnostics(), path);
+        if (marks.rating != onFile.rating) {
+            setProperty(descriptions, home, xmpProperty("Rating"_L1),
+                        QString::number(marks.rating));
         }
-        setProperty(descriptions, home, xmpProperty("Label"_L1), label);
+        if (marks.label != onFile.label) {
+            std::optional<QString> label;
+            if (marks.label) {
+                const auto named = std::ranges::find_if(colorLabelNames, [&](const auto& entry) {
+                    return entry.first == *marks.label;
+                });
+                if (named != colorLabelNames.end()) {
+                    label = QString::fromUtf8(named->second.data(),
+                                              static_cast<qsizetype>(named->second.size()));
+                }
+            }
+            setProperty(descriptions, home, xmpProperty("Label"_L1), label);
+        }
     }
+}
 
-    QSaveFile file(qtPath(path));
-    if (!file.open(QIODevice::WriteOnly)) {
-        throw std::runtime_error("cannot write sidecar " + path.string() + ": " +
-                                 file.errorString().toStdString());
+/// @brief Writes the settings, negative and marks of a photograph, and optionally the saved base.
+void writeActive(const Photo& photo, bool setBase, std::optional<SnapshotId> base) {
+    const DevelopState state = photo.state();
+    const NegativeSettings negative = photo.negative();
+    const PhotoMarks marks = photo.marks();
+    updateSidecar(photo.path(), true, [&](Document& document) {
+        patchActive(document, &state, &negative, &marks);
+        if (setBase) {
+            if (base) {
+                const SnapshotRead read =
+                    readSnapshotsIn(document.descriptions, discardedDiagnostics(), document.path);
+                if (read.collection.find(*base) == nullptr) {
+                    throw SnapshotBaseMissing(*base, document.path);
+                }
+            }
+            setProperty(document.descriptions, document.home, arrawProperty("savedBase"),
+                        base ? std::optional{QString::number(base->value)} : std::nullopt);
+        }
+        return true;
+    });
+}
+
+/// @brief Spells a snapshot's thumbnail fields onto a node, or removes them.
+void setThumbnailFields(QDomElement holder, const std::optional<SnapshotThumbnail>& thumbnail) {
+    if (!thumbnail) {
+        setField(holder, "thumbnail", std::nullopt);
+        setField(holder, "thumbnailKey", std::nullopt);
+        return;
     }
-    file.write(document.toByteArray(-1));
-    if (!file.commit()) {
-        throw std::runtime_error("cannot write sidecar " + path.string() + ": " +
-                                 file.errorString().toStdString());
+    const QByteArray bytes(reinterpret_cast<const char*>(thumbnail->jpeg.data()),
+                           static_cast<qsizetype>(thumbnail->jpeg.size()));
+    setField(holder, "thumbnail", QString::fromLatin1(bytes.toBase64()));
+    setField(holder, "thumbnailKey", QString::fromStdString(thumbnail->renderKey));
+}
+
+/// @brief Counts the bytes of the serialized snapshot list, as UTF-8.
+std::size_t serializedBytes(const QDomElement& element) {
+    QByteArray bytes;
+    QTextStream stream(&bytes);
+    stream.setEncoding(QStringConverter::Utf8);
+    element.save(stream, -1);
+    stream.flush();
+    return static_cast<std::size_t>(bytes.size());
+}
+
+/// @brief Refuses a snapshot list that serializes past the limit.
+void checkSubtreeSize(const SnapshotRead& read) {
+    if (!read.list.property.isNull() &&
+        serializedBytes(read.list.property) > detail::snapshotSubtreeLimit) {
+        throw std::invalid_argument("the snapshots would take more than " +
+                                    std::to_string(detail::snapshotSubtreeLimit) +
+                                    " bytes of the sidecar");
     }
+}
+
+/// @brief Takes a structural edit of the snapshot list through the lock.
+///
+/// Checks the revision and the list's container under the lock, lets @p apply patch the nodes and
+/// returns the id it addressed; then raises the revision and the counter, rereads, and validates
+/// what a reader would now get. Content the reader left out stays in the file, as nodes are
+/// patched in place; a container that cannot be edited in place refuses the edit.
+SnapshotUpdate
+editSnapshots(const std::filesystem::path& photo, std::uint64_t expectedRevision,
+              const std::function<SnapshotId(Document&, const SnapshotRead&)>& apply) {
+    SnapshotUpdate result;
+    updateSidecar(photo, false, [&](Document& document) {
+        const SnapshotRead read =
+            readSnapshotsIn(document.descriptions, discardedDiagnostics(), document.path);
+        if (!read.list.usable) {
+            throw std::runtime_error("sidecar " + document.path.string() +
+                                     " holds a snapshot list that cannot be edited without losing "
+                                     "data, so it was left alone");
+        }
+        if (read.collection.revision != expectedRevision) {
+            throw SnapshotRevisionConflict(expectedRevision, read.collection.revision);
+        }
+        result.id = apply(document, read);
+        setProperty(document.descriptions, document.home, arrawProperty("snapshotRevision"),
+                    QString::number(read.collection.revision + 1));
+        setProperty(document.descriptions, document.home, arrawProperty("snapshotNextId"),
+                    QString::number(std::max(read.collection.nextId, result.id.value + 1)));
+        SnapshotRead after =
+            readSnapshotsIn(document.descriptions, discardedDiagnostics(), document.path);
+        validate(after.collection);
+        checkSubtreeSize(after);
+        result.collection = std::move(after.collection);
+        result.savedBase = after.savedBase;
+        return true;
+    });
+    return result;
+}
+
+/// @brief Finds the node of a usable snapshot.
+const SnapshotNode& nodeOf(const SnapshotRead& read, SnapshotId id) {
+    const auto found = std::ranges::find_if(read.nodes, [&](const SnapshotNode& node) {
+        return node.usable && node.rawId == id.value;
+    });
+    if (found == read.nodes.end()) {
+        throw std::invalid_argument("there is no snapshot " + std::to_string(id.value));
+    }
+    return *found;
 }
 
 } // namespace
 
+SidecarLockTimeout::SidecarLockTimeout(const std::filesystem::path& sidecar,
+                                       const std::string& lockFile)
+    : std::runtime_error("sidecar " + sidecar.string() +
+                         " is locked by another writer (lock file " + lockFile +
+                         "); gave up after " + std::to_string(detail::sidecarLockTimeout) +
+                         " ms, so nothing was written") {}
+
 void arraw::writeSidecar(const Photo& photo) {
-    const DevelopState state = photo.state();
-    const NegativeSettings negative = photo.negative();
-    writeSidecarFor(photo.path(), &state, &negative, photo.marks());
+    writeActive(photo, false, std::nullopt);
+}
+
+void arraw::writeSidecar(const Photo& photo, std::optional<SnapshotId> savedBase) {
+    writeActive(photo, true, savedBase);
 }
 
 void arraw::writeSidecarMarks(const std::filesystem::path& photo, const PhotoMarks& marks) {
     if (marks.rating < rejectedRating || marks.rating > highestRating) {
         throw std::invalid_argument("rating must be from -1 to 5");
     }
-    writeSidecarFor(photo, nullptr, nullptr, marks);
+    updateSidecar(photo, false, [&](Document& document) {
+        patchActive(document, nullptr, nullptr, &marks);
+        return true;
+    });
+}
+
+SnapshotUpdate arraw::addSnapshot(const std::filesystem::path& photo,
+                                  std::uint64_t expectedRevision, Snapshot draft) {
+    // Checked before the lock; the id is the real one only under it.
+    draft.id = SnapshotId{std::numeric_limits<std::uint64_t>::max()};
+    validate(draft);
+    return editSnapshots(
+        photo, expectedRevision, [&](Document& document, const SnapshotRead& read) {
+            if (read.list.items.size() >= maximumSnapshots) {
+                throw std::invalid_argument(
+                    "a photograph keeps at most " + std::to_string(maximumSnapshots) +
+                    " snapshots, and this sidecar's list has " +
+                    std::to_string(read.list.items.size()) + " entries, " +
+                    std::to_string(read.collection.entries.size()) + " of them usable");
+            }
+            if (draft.parent && read.collection.find(*draft.parent) == nullptr) {
+                throw std::invalid_argument("the parent " + std::to_string(draft.parent->value) +
+                                            " is not a snapshot of this photograph");
+            }
+            if (read.collection.nextId == std::numeric_limits<std::uint64_t>::max()) {
+                throw std::invalid_argument("the sidecar has no snapshot id left to give");
+            }
+            draft.id = SnapshotId{read.collection.nextId};
+            QDomDocument dom = document.home.ownerDocument();
+            QDomElement sequence = read.list.sequence;
+            if (sequence.isNull()) {
+                QDomElement property = read.list.property;
+                if (property.isNull()) {
+                    const Property listProperty = arrawProperty("snapshots");
+                    property =
+                        dom.createElement(prefixOn(document.home, listProperty) + ":snapshots");
+                    document.home.appendChild(property);
+                }
+                const QString rdf =
+                    prefixOn(document.home, {QString(rdfNamespace), "rdf"_L1, QString()});
+                sequence = dom.createElement(rdf + ":Seq");
+                property.appendChild(sequence);
+            }
+            const QString rdf =
+                prefixOn(document.home, {QString(rdfNamespace), "rdf"_L1, QString()});
+            QDomElement item = dom.createElement(rdf + ":li");
+            item.setAttribute(rdf + ":parseType", "Resource"_L1);
+            sequence.appendChild(item);
+            setField(item, "id", QString::number(draft.id.value));
+            setField(item, "parent",
+                     draft.parent ? std::optional{QString::number(draft.parent->value)}
+                                  : std::nullopt);
+            setField(item, "name", QString::fromStdString(draft.name));
+            setField(item, "created", spellTime(draft.created));
+            setField(item, "state", QString::fromStdString(stateToJson(draft.state)));
+            setField(item, "negative", QString::fromStdString(negativeToJson(draft.negative)));
+            setThumbnailFields(item, draft.thumbnail);
+            return draft.id;
+        });
+}
+
+SnapshotUpdate arraw::renameSnapshot(const std::filesystem::path& photo,
+                                     std::uint64_t expectedRevision, SnapshotId id,
+                                     std::string name) {
+    return editSnapshots(photo, expectedRevision, [&](Document&, const SnapshotRead& read) {
+        const SnapshotNode& node = nodeOf(read, id);
+        Snapshot renamed = *read.collection.find(id);
+        renamed.name = std::move(name);
+        validate(renamed);
+        setField(node.holder, "name", QString::fromStdString(renamed.name));
+        return id;
+    });
+}
+
+SnapshotUpdate arraw::deleteSnapshot(const std::filesystem::path& photo,
+                                     std::uint64_t expectedRevision, SnapshotId id) {
+    return editSnapshots(
+        photo, expectedRevision, [&](Document& document, const SnapshotRead& read) {
+            const SnapshotNode& node = nodeOf(read, id);
+            const std::optional<SnapshotId> parent = read.collection.find(id)->parent;
+            const QString parentText = parent ? QString::number(parent->value) : QString();
+            // Children, as the reader sees them, take the parent; unusable nodes stay as they are.
+            for (const Snapshot& child : read.collection.entries) {
+                if (child.parent == id) {
+                    setField(nodeOf(read, child.id).holder, "parent",
+                             parent ? std::optional{parentText} : std::nullopt);
+                }
+            }
+            if (read.savedBase == id) {
+                setProperty(document.descriptions, document.home, arrawProperty("savedBase"),
+                            parent ? std::optional{parentText} : std::nullopt);
+            }
+            QDomElement item = node.item;
+            item.parentNode().removeChild(item);
+            return id;
+        });
+}
+
+bool arraw::setSnapshotThumbnail(const std::filesystem::path& photo, SnapshotId id,
+                                 SnapshotThumbnail thumbnail,
+                                 const SnapshotKeyFunction& currentKey) {
+    validate(thumbnail);
+    bool written = false;
+    updateSidecar(photo, false, [&](Document& document) {
+        const SnapshotRead read =
+            readSnapshotsIn(document.descriptions, discardedDiagnostics(), document.path);
+        if (!read.list.usable) {
+            throw std::runtime_error("sidecar " + document.path.string() +
+                                     " holds a snapshot list that cannot be edited without losing "
+                                     "data, so it was left alone");
+        }
+        const Snapshot* snapshot = read.collection.find(id);
+        if (snapshot == nullptr || currentKey(*snapshot) != thumbnail.renderKey) {
+            return false;
+        }
+        setThumbnailFields(nodeOf(read, id).holder, std::move(thumbnail));
+        checkSubtreeSize(
+            readSnapshotsIn(document.descriptions, discardedDiagnostics(), document.path));
+        written = true;
+        return true;
+    });
+    return written;
 }

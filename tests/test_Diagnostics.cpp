@@ -6,7 +6,9 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <string>
 #include <string_view>
+#include <utility>
 
 using namespace arraw;
 using Catch::Matchers::ContainsSubstring;
@@ -97,4 +99,15 @@ TEST_CASE("The GPU probe's notices say what went wrong with the device", "[diagn
                                         std::string("7"), std::string("-0"), std::string("0")}};
     REQUIRE(describe(changed) == "the round trip changed 3 samples; the first, channel G of pixel "
                                  "(5, 7), went in as -0 and came back as 0");
+}
+
+TEST_CASE("A damaged snapshot notice names the entry and the reason", "[diagnostics]") {
+    const auto notice = [](std::string position, std::string id) {
+        return Diagnostic{.notice = Notice::SnapshotDamaged,
+                          .severity = Severity::Warning,
+                          .values = {std::move(position), std::move(id), "its id is lost"}};
+    };
+    CHECK(describe(notice("7", "12")) == "snapshot 7 (id 12): its id is lost");
+    CHECK(describe(notice("7", "")) == "snapshot 7: its id is lost");
+    CHECK(describe(notice("", "")) == "the snapshot list: its id is lost");
 }

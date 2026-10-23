@@ -364,7 +364,7 @@ and committed:
 
 0. **[x] Architecture.** Record the decisions, initial bounds, verification requirements, and
    implementation sequence (this ADR and proposal).
-1. **[ ] Model and persistence.** Add snapshot value types and `OpenDocument`; sidecar v2 with
+1. **[x] Model and persistence.** Add snapshot value types and `OpenDocument`; sidecar v2 with
    `activeStatePresent`, JSON snapshot nodes, tolerant reads, strict writes, targeted CRUD, shared
    `QLockFile`/`QSaveFile`, and frozen v2 fixtures. Verify v1/v2 compatibility, RAW defaults,
    foreign XMP preservation, atomicity, revision conflicts, lock timeout, and concurrent writes.

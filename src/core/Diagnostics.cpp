@@ -103,6 +103,14 @@ std::string arraw::describe(const Diagnostic& diagnostic) {
     case Notice::BrushStrokesTrimmed:
         return "mask " + valueAt(diagnostic, 0) + " (id " + valueAt(diagnostic, 1) +
                "): " + valueAt(diagnostic, 3);
+    case Notice::SnapshotDamaged: {
+        std::string who = valueAt(diagnostic, 0).empty() ? "the snapshot list"
+                                                         : "snapshot " + valueAt(diagnostic, 0);
+        if (!valueAt(diagnostic, 1).empty()) {
+            who += " (id " + valueAt(diagnostic, 1) + ")";
+        }
+        return who + ": " + valueAt(diagnostic, 2);
+    }
     case Notice::SidecarUnreadable:
         return valueAt(diagnostic, 0) + "; opened with default settings and no marks";
     case Notice::ExifUnreadable:

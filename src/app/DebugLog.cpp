@@ -76,6 +76,8 @@ QString noticeName(Notice notice) {
         return QStringLiteral("NewerSettingsVersion");
     case Notice::SidecarUnreadable:
         return QStringLiteral("SidecarUnreadable");
+    case Notice::SnapshotDamaged:
+        return QStringLiteral("SnapshotDamaged");
     case Notice::ExifUnreadable:
         return QStringLiteral("ExifUnreadable");
     case Notice::NoPhotographs:

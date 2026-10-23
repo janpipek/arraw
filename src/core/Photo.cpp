@@ -1,7 +1,6 @@
 #include "Photo.h"
 
 #include <DevelopState.h>
-#include <Sidecar.h>
 
 #include <stdexcept>
 #include <utility>
@@ -29,27 +28,4 @@ Photo::Photo(std::filesystem::path path, ImageMetadata metadata)
 DecodeOptions arraw::decodeOptionsFor(const Photo& photo, bool halfSize) {
     return canonical({.halfSize = halfSize, .demosaic = photo.negative().demosaic},
                      photo.metadata());
-}
-
-Photo arraw::openPhoto(const std::filesystem::path& path, DiagnosticLog& log) {
-    ImageMetadata metadata = readImageMetadata(path, log);
-    try {
-        if (auto sidecar = readSidecar(path, log)) {
-            // A sidecar of marks alone, or another tool's, records no state.
-            DevelopState state =
-                sidecar->state ? *sidecar->state : defaultStateFor(metadata.encoding);
-            const NegativeSettings negative =
-                sidecar->negative.value_or(defaultNegativeFor(metadata));
-            return {path, std::move(metadata), negative, std::move(state), sidecar->marks};
-        }
-    } catch (const std::runtime_error& error) {
-        // An unreadable sidecar costs the photograph its state, not its
-        // life. Nothing is lost by opening it bare: writeSidecar refuses to
-        // replace a file it cannot read.
-        log.record({.notice = Notice::SidecarUnreadable,
-                    .severity = Severity::Error,
-                    .subject = path,
-                    .values = {std::string(error.what())}});
-    }
-    return {path, std::move(metadata)};
 }

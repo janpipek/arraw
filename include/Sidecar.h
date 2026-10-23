@@ -5,10 +5,14 @@
 #include <NegativeSettings.h>
 #include <Photo.h>
 #include <PhotoMarks.h>
+#include <Snapshots.h>
 
 #include <array>
+#include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -25,8 +29,42 @@ inline constexpr std::string_view sidecarNamespace = "http://ns.arraw.org/develo
 /// @brief Prefix the develop settings get when a sidecar has to declare their namespace.
 inline constexpr std::string_view sidecarPrefix = "arraw";
 
-/// @brief Newest version of the sidecar's develop settings this arraw reads and writes.
-inline constexpr int sidecarVersion = 1;
+/// @brief Newest version of the sidecar this arraw reads and writes.
+///
+/// Version 2 adds snapshots and `arraw:activeStatePresent`, and every write of this arraw is
+/// version 2 (ADR 056, ADR 051's amendment).
+inline constexpr int sidecarVersion = 2;
+
+/// @brief Time a writer waits for another writer's lock on a sidecar, in milliseconds.
+inline constexpr int sidecarLockTimeoutMilliseconds = 2000;
+
+/// @brief The sidecar's lock could not be taken in time, so nothing was written.
+class SidecarLockTimeout : public std::runtime_error {
+public:
+    /// @brief Makes the error.
+    /// @param sidecar Path of the sidecar that stayed locked.
+    /// @param lockFile Path of the lock file that was held.
+    SidecarLockTimeout(const std::filesystem::path& sidecar, const std::string& lockFile);
+};
+
+/// @brief The saved base of a Save no longer names a snapshot of the sidecar, so nothing was
+/// written.
+///
+/// Another process deleted it after the caller last read the list. The caller reads the sidecar
+/// again, remaps its base and saves once more.
+class SnapshotBaseMissing : public std::invalid_argument {
+public:
+    /// @brief Makes the error.
+    /// @param base Snapshot the caller named.
+    /// @param sidecar Path of the sidecar that lacks it.
+    SnapshotBaseMissing(SnapshotId base, const std::filesystem::path& sidecar)
+        : std::invalid_argument("the saved base " + std::to_string(base.value) +
+                                " is not a snapshot of " + sidecar.string()),
+          base(base) {}
+
+    /// @brief Snapshot the caller named.
+    SnapshotId base;
+};
 
 /// @brief A namespace other tools left properties in, as a sidecar shows it.
 struct ForeignNamespace {
@@ -64,6 +102,23 @@ struct SidecarContents {
 
     /// @brief Culling marks, none for whatever the sidecar does not say.
     PhotoMarks marks;
+
+    /// @brief Snapshots the sidecar lists, empty when it lists none (ADR 056).
+    ///
+    /// Read tolerantly: a node that cannot be used is left out, an invalid thumbnail is dropped,
+    /// a parent that is missing makes a root, an edge that closes a cycle is cut, and `nextId` is
+    /// raised above every id read, each with ::arraw::Notice::SnapshotDamaged.
+    SnapshotCollection snapshots;
+
+    /// @brief Snapshot the saved active recipe is based on, when it exists in
+    /// ::arraw::SidecarContents::snapshots.
+    std::optional<SnapshotId> savedBase;
+
+    /// @brief Whether the snapshot list holds something this reading left out or repaired
+    /// (a node that cannot be used, a list that is not a sequence), other than a thumbnail.
+    ///
+    /// The snapshot writers keep such content verbatim, or refuse the edit when they cannot.
+    bool snapshotsDamaged = false;
 
     /// @brief Program that wrote the sidecar, from `xmp:CreatorTool`.
     std::optional<std::string> creatorTool;
@@ -143,6 +198,16 @@ inline constexpr auto xmpNamespaceOwners = std::to_array<XmpNamespaceOwner>({
 /// is none of these gives ::arraw::Notice::SettingMalformed and off; a record with no model or no
 /// positive crop factor gives it and no recorded lens; an unknown origin gives it and `matched`.
 ///
+/// **Version 2** (ADR 056) adds `arraw:activeStatePresent` (`True` or `False`: whether the file
+/// records develop settings; version 1 files keep their rule that `arraw:version` alone does), and
+/// the snapshots: `arraw:savedBase`, `arraw:snapshotNextId`, `arraw:snapshotRevision` and
+/// `arraw:snapshots`, an `rdf:Seq` of items with the fields `id`, `parent`, `name`, `created`
+/// (ISO 8601), `state` and `negative` (the JSON documents of ::arraw::stateToJson and
+/// ::arraw::negativeToJson), `thumbnail` (base64 JPEG) and `thumbnailKey`. A version 2 file whose
+/// marker is missing or malformed is reported (::arraw::Notice::SettingMalformed) and records a
+/// state only if it has active develop keys. Snapshot reading is tolerant: see
+/// ::arraw::SidecarContents::snapshots.
+///
 /// Every `rdf:Description` is searched. The develop settings are the
 /// `arraw:` properties, as attributes or as simple child elements, applied onto
 /// defaults through the same codec as the JSON document, so a value out of
@@ -177,6 +242,11 @@ readSidecar(const std::filesystem::path& photo, DiagnosticLog& log = discardedDi
 
 /// @brief Writes the develop settings and marks of a photograph into its sidecar.
 ///
+/// Like every sidecar writer it takes `<sidecar>.lock` (a QLockFile) for up to
+/// ::arraw::sidecarLockTimeoutMilliseconds, rereads the latest file, patches only the fields it
+/// owns and replaces the file atomically; it writes version 2. The snapshot list and the saved base
+/// are left as the file has them (see the overload that sets the base).
+///
 /// An existing sidecar is edited rather than replaced: everything arraw does
 /// not own, such as `crs:` settings, other namespaces, unknown elements and
 /// unknown `arraw:` attributes, is kept. Every settings key and `arraw:version`
@@ -203,22 +273,106 @@ readSidecar(const std::filesystem::path& photo, DiagnosticLog& log = discardedDi
 /// @throws std::runtime_error if the existing sidecar is not XMP, or is of a
 /// newer ::arraw::sidecarVersion (writing would destroy what a newer arraw wrote), naming it,
 /// in which case it is left alone, or if the file cannot be written.
+/// @throws ::arraw::SidecarLockTimeout if another writer holds the lock for too long.
 void writeSidecar(const Photo& photo);
+
+/// @brief Writes a photograph as ::arraw::writeSidecar does, and the saved working base with it.
+/// @param photo Photograph whose settings and marks to write.
+/// @param savedBase Snapshot the saved recipe is based on, or nothing for none; it must exist in
+/// the sidecar's list when the lock is held.
+/// @throws ::arraw::SnapshotBaseMissing (an std::invalid_argument) if @p savedBase names no
+/// snapshot of the sidecar; nothing is written, not even the settings.
+/// @throws std::runtime_error as the overload without a base.
+void writeSidecar(const Photo& photo, std::optional<SnapshotId> savedBase);
 
 /// @brief Writes only the marks of a photograph into its sidecar.
 ///
-/// As ::arraw::writeSidecar does for the marks, and leaves the develop settings,
-/// `arraw:version` and everything foreign as the file has them. Without a
-/// sidecar a new one is created that holds the marks alone, so it records no
-/// develop state and the photograph still starts from what its kind does
-/// (::arraw::defaultStateFor). This is how a session writes a rating without
-/// saving the edits it has not saved (ADR 030).
+/// As ::arraw::writeSidecar does for the marks, and leaves the develop settings, the snapshots,
+/// `arraw:version` and everything foreign as the file has them. Without a sidecar a new one is
+/// created that holds the marks alone, so it records no develop state and the photograph still
+/// starts from what its kind does (::arraw::defaultStateFor). This is how a session writes a
+/// rating without saving the edits it has not saved (ADR 030). Version 2 is written whatever the
+/// file was; whether it records develop settings is kept in `arraw:activeStatePresent` from the
+/// rule of the version it had, so a RAW with no saved settings is not turned into one with
+/// explicit neutral settings.
 /// @param photo Path of the photograph.
 /// @param marks Marks to write.
 /// @throws std::invalid_argument if the rating of @p marks is outside -1 to 5.
 /// @throws std::runtime_error as ::arraw::writeSidecar does: for an existing
 /// sidecar that is not XMP or is of a newer version, which is left alone, or
 /// that cannot be read, and for a file that cannot be written.
+/// @throws ::arraw::SidecarLockTimeout if another writer holds the lock for too long.
 void writeSidecarMarks(const std::filesystem::path& photo, const PhotoMarks& marks);
+
+/// @brief What a snapshot edit gives back.
+struct SnapshotUpdate {
+    /// @brief The collection as it now stands in the sidecar.
+    SnapshotCollection collection;
+
+    /// @brief The saved base as it now stands.
+    std::optional<SnapshotId> savedBase;
+
+    /// @brief The snapshot added, or the one renamed or deleted.
+    SnapshotId id;
+};
+
+/// @brief Adds a snapshot to the sidecar, without saving anything else.
+///
+/// Rereads the sidecar under its lock, checks the revision, allocates the id from the counter in
+/// the file, appends the node and raises the counter and the revision. The active settings, the
+/// negative, the marks and the saved base stay as they are; without a sidecar one is created that
+/// records no develop state. The node's id in @p draft is ignored.
+/// @param photo Path of the photograph.
+/// @param expectedRevision Revision of the collection the caller saw.
+/// @param draft Snapshot to add: parent, name, time, recipe and thumbnail.
+/// @return The collection after the edit and the new id.
+/// @throws std::invalid_argument if @p draft is invalid, its parent does not exist, the list is
+/// full, or the subtree would pass ::arraw::maximumSnapshotSubtreeBytes.
+/// @throws ::arraw::SnapshotRevisionConflict if the revision in the file is not
+/// @p expectedRevision.
+/// @throws std::runtime_error if the snapshot list holds content this arraw cannot keep whole, or
+/// as ::arraw::writeSidecar.
+SnapshotUpdate addSnapshot(const std::filesystem::path& photo, std::uint64_t expectedRevision,
+                           Snapshot draft);
+
+/// @brief Renames a snapshot in the sidecar; as ::arraw::addSnapshot otherwise.
+/// @param photo Path of the photograph.
+/// @param expectedRevision Revision of the collection the caller saw.
+/// @param id Snapshot to rename.
+/// @param name New name.
+/// @throws std::invalid_argument if the name is invalid or no snapshot has the id.
+/// @throws ::arraw::SnapshotRevisionConflict and std::runtime_error as ::arraw::addSnapshot.
+SnapshotUpdate renameSnapshot(const std::filesystem::path& photo, std::uint64_t expectedRevision,
+                              SnapshotId id, std::string name);
+
+/// @brief Deletes a snapshot from the sidecar; as ::arraw::addSnapshot otherwise.
+///
+/// Its children take its parent, or become roots; a saved base that was the snapshot becomes its
+/// parent. Settings are not touched.
+/// @param photo Path of the photograph.
+/// @param expectedRevision Revision of the collection the caller saw.
+/// @param id Snapshot to delete.
+/// @throws std::invalid_argument if no snapshot has the id.
+/// @throws ::arraw::SnapshotRevisionConflict and std::runtime_error as ::arraw::addSnapshot.
+SnapshotUpdate deleteSnapshot(const std::filesystem::path& photo, std::uint64_t expectedRevision,
+                              SnapshotId id);
+
+/// @brief Gives the render key a snapshot's thumbnail ought to carry, as the caller makes keys.
+using SnapshotKeyFunction = std::function<std::string(const Snapshot&)>;
+
+/// @brief Attaches or replaces the thumbnail of one snapshot.
+///
+/// Under the lock, finds the node as the file has it now; unless it exists and
+/// @p currentKey gives its stored recipe the key @p thumbnail carries, nothing is written. Does not
+/// change the revision or any other node, so it never undoes a structural change made meanwhile.
+/// @param photo Path of the photograph.
+/// @param id Snapshot the thumbnail is of.
+/// @param thumbnail Thumbnail to store.
+/// @param currentKey Gives the render key of a stored snapshot.
+/// @return Whether the thumbnail was written.
+/// @throws std::invalid_argument if @p thumbnail is invalid.
+/// @throws std::runtime_error as ::arraw::addSnapshot.
+bool setSnapshotThumbnail(const std::filesystem::path& photo, SnapshotId id,
+                          SnapshotThumbnail thumbnail, const SnapshotKeyFunction& currentKey);
 
 } // namespace arraw
