@@ -181,8 +181,6 @@ and a position, `goTo`, origins and `describeChange` (ADR 022 amended); a
 `HistoryModel` and a History dock on the left, where a click navigates;
 Python binds `EditSession` with `with session.edit():`. Reviewed in
 `docs/reviews/claude-opus-5-5_2026-10-08_session-history.md`. Low leftovers:
-- `groupDisplayName` belongs in `SettingPresentation`, not `HistoryModel.h`
-  (the panel includes the model's header for it) (N1);
 - `with session.edit():` commits an edit the block itself began, with the
   scope's origin (L7, second half);
 - no window test for the curve's own pending drag then its Reset (N2), nor

@@ -17,6 +17,33 @@
 
 namespace arraw::app {
 
+/// Keeps the existing translation context so current catalog entries still apply.
+QString groupDisplayName(SettingGroup group) {
+    switch (group) {
+    case SettingGroup::Color:
+        return QCoreApplication::translate("arraw::app::HistoryModel", "Colour");
+    case SettingGroup::Tone:
+        return QCoreApplication::translate("arraw::app::HistoryModel", "Tone");
+    case SettingGroup::Geometry:
+        return QCoreApplication::translate("arraw::app::HistoryModel", "Crop");
+    case SettingGroup::Hsl:
+        return QCoreApplication::translate("arraw::app::HistoryModel", "HSL / Colour Mix");
+    case SettingGroup::BlackAndWhite:
+        return QCoreApplication::translate("arraw::app::HistoryModel", "Black & White");
+    case SettingGroup::ToneCurve:
+        return QCoreApplication::translate("arraw::app::HistoryModel", "Tone Curve");
+    case SettingGroup::ColorGrading:
+        return QCoreApplication::translate("arraw::app::HistoryModel", "Colour Grading");
+    case SettingGroup::Effects:
+        return QCoreApplication::translate("arraw::app::HistoryModel", "Effects");
+    case SettingGroup::Detail:
+        return QCoreApplication::translate("arraw::app::HistoryModel", "Noise Reduction");
+    case SettingGroup::Presence:
+        return QCoreApplication::translate("arraw::app::HistoryModel", "Presence");
+    }
+    return {};
+}
+
 QString demosaicDisplayName(Demosaic demosaic) {
     switch (demosaic) {
     case Demosaic::Linear:

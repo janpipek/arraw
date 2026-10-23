@@ -3,7 +3,6 @@
 #include "CollapsibleSection.h"
 #include "CropEditing.h"
 #include "CurveEditor.h"
-#include "HistoryModel.h"
 #include "MasksPanel.h"
 #include "SettingPresentation.h"
 #include "SettingSlider.h"

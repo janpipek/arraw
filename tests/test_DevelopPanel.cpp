@@ -1,5 +1,5 @@
 #include "CurveEditing.h"
-#include "HistoryModel.h"
+#include "SettingPresentation.h"
 #include "ui/CollapsibleSection.h"
 #include "ui/CurveEditor.h"
 #include "ui/DevelopPanel.h"

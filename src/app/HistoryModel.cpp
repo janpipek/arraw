@@ -157,32 +157,6 @@ QString wordLocal(const DevelopState& before, const DevelopState& after, const L
 
 } // namespace
 
-QString groupDisplayName(SettingGroup group) {
-    switch (group) {
-    case SettingGroup::Color:
-        return QCoreApplication::translate("arraw::app::HistoryModel", "Colour");
-    case SettingGroup::Tone:
-        return QCoreApplication::translate("arraw::app::HistoryModel", "Tone");
-    case SettingGroup::Geometry:
-        return QCoreApplication::translate("arraw::app::HistoryModel", "Crop");
-    case SettingGroup::Hsl:
-        return QCoreApplication::translate("arraw::app::HistoryModel", "HSL / Colour Mix");
-    case SettingGroup::BlackAndWhite:
-        return QCoreApplication::translate("arraw::app::HistoryModel", "Black & White");
-    case SettingGroup::ToneCurve:
-        return QCoreApplication::translate("arraw::app::HistoryModel", "Tone Curve");
-    case SettingGroup::ColorGrading:
-        return QCoreApplication::translate("arraw::app::HistoryModel", "Colour Grading");
-    case SettingGroup::Effects:
-        return QCoreApplication::translate("arraw::app::HistoryModel", "Effects");
-    case SettingGroup::Detail:
-        return QCoreApplication::translate("arraw::app::HistoryModel", "Noise Reduction");
-    case SettingGroup::Presence:
-        return QCoreApplication::translate("arraw::app::HistoryModel", "Presence");
-    }
-    return {};
-}
-
 HistoryModel::HistoryModel(QObject* parent) : QAbstractListModel(parent) {}
 
 void HistoryModel::setHistory(const std::vector<HistoryStep>& history, std::size_t position,

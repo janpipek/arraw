@@ -13,11 +13,6 @@
 
 namespace arraw::app {
 
-/// @brief Localised name of a settings group, as the develop panel titles it.
-/// @param group Group to name.
-/// @return The name; the Colour group also holds the white balance.
-[[nodiscard]] QString groupDisplayName(SettingGroup group);
-
 /// @brief Steps of an edit session's history as a list, newest on top.
 ///
 /// Holds a copy of the history (states are cheap to copy), fed by

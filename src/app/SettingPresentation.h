@@ -12,6 +12,11 @@
 
 namespace arraw::app {
 
+/// @brief Gives the localised name of a settings group.
+/// @param group Group to name.
+/// @return The name; the Colour group also holds the white balance.
+[[nodiscard]] QString groupDisplayName(SettingGroup group);
+
 /// @brief Names a demosaic the way a photographer knows it.
 /// @param demosaic Algorithm to name.
 /// @return Its name for the window, or an empty string if it is not an enumerator.

@@ -1,4 +1,5 @@
 #include "HistoryModel.h"
+#include "SettingPresentation.h"
 #include "support/LocalAdjustmentStates.h"
 
 #include <DevelopState.h>
