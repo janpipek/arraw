@@ -1,6 +1,6 @@
 Name:           arraw
 # A snapshot is a post-release build: the caret sorts it above the release it follows.
-%global base_version 0.4.1
+%global base_version 0.4.2
 Version:        %{base_version}%{?snapshot:^%{snapshot}}
 Release:        1%{?dist}
 Summary:        RAW photo editor with a GPU preview
@@ -84,6 +84,10 @@ appstreamcli validate --no-net \
 %{_datadir}/icons/hicolor/scalable/apps/io.github.janpipek.arraw.svg
 
 %changelog
+* Wed Oct 21 2026 Jan Pipek <janpipek@users.noreply.github.com> - 0.4.2-1
+- Add a histogram panel with a clipping overlay
+- Add output_histogram to the Python bindings
+
 * Tue Oct 20 2026 Jan Pipek <janpipek@users.noreply.github.com> - 0.4.1-1
 - Add lens corrections from lensfun: distortion, vignetting (an amount) and lateral chromatic aberration
 - Add the choice of demosaic algorithm, kept with the photograph's settings
