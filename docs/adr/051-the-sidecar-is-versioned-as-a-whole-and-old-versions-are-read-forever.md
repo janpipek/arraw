@@ -48,3 +48,18 @@ confirmed") and no test that an old file is still read. These decisions are made
   2", now mean `sidecarVersion` 2.
 - The first real bump needs a migration only when old data cannot be read as it is; the reader
   keeps one code path per rule, not per version, until then.
+
+## Amendment: version 2 for snapshots (2026-10-23)
+
+ADR 056 deliberately raises the sidecar to version 2 on **every successful Arraw sidecar
+write**, including marks-only and thumbnail writes. This supersedes the earlier rule above that
+an optional key alone does not justify a bump, and the earlier marks-only behavior that left
+`arraw:version` unchanged. The project is not yet at a release where preserving older writers
+matters to its single user. Older Arraw builds may read what they understand, but cannot write a
+sidecar once this build has written it. The v1 reader and frozen v1 fixtures remain so existing
+photographs open correctly.
+
+Version 2 also separates version from active-state presence through
+`arraw:activeStatePresent`. A marks-only or snapshot-only v2 write must preserve whether the
+sidecar had saved develop settings; `arraw:version` alone continues to imply an explicit state
+only for v1 files. The version-2 writer determines presence using the pre-write version's rule.

@@ -352,20 +352,78 @@ matching arraw settings, never automatic. To scope in an ADR before any code:
 - **Not part of it:** the negative's demosaic and lens corrections have no `crs:` twin; the
   lens profile can only be matched through lensfun by name.
 
-## Snapshots, along the history (user, 2026-10-20; deferred, design leaves room)
+## Snapshots, along the history (user, 2026-10-20 and 2026-10-23; accepted)
 
 Named whole develop states of one image, for A/B comparison (`docs/desired-features.md`,
 `docs/ideas/architecture-roadmap.md` "Room for Snapshots", `looks-and-history-plan.md`).
-The history already keeps whole states and the sidecar is versioned (ADR 051), so what is left
-is a decision, then the work. To scope:
-- **Model:** a list of {name, DevelopState, negative, time} in the `EditSession`; taking one is
-  not an undoable step, restoring one is a single history step (origin "Snapshot: name").
-- **Persistence:** in the sidecar (a new optional key, so no version bump if absence means
-  none) or beside it; the size of a state with brush strokes is the cost to measure.
-- **UI:** a Snapshots list above History in the left dock, "Create Snapshot…" (a shortcut),
-  compare by clicking, rename, delete; maybe a split A/B view later.
-- **Surfaces:** CLI (`info`, `export --snapshot NAME`), Python, copy/paste (a snapshot is not a
-  copy section), the film strip (show "has snapshots"?).
+The accepted architecture is a tree of immutable, full-state snapshots. See
+[ADR 056](adr/056-snapshots-are-per-photo-looks-with-independent-history-and-sidecar-storage.md)
+and the [architecture proposal](ideas/snapshots-architecture-proposal.md). Implementation is
+tracked as five reviewable gates; do not begin a later gate before the previous one is reviewed
+and committed:
+
+0. **[x] Architecture.** Record the decisions, initial bounds, verification requirements, and
+   implementation sequence (this ADR and proposal).
+1. **[ ] Model and persistence.** Add snapshot value types and `OpenDocument`; sidecar v2 with
+   `activeStatePresent`, JSON snapshot nodes, tolerant reads, strict writes, targeted CRUD, shared
+   `QLockFile`/`QSaveFile`, and frozen v2 fixtures. Verify v1/v2 compatibility, RAW defaults,
+   foreign XMP preservation, atomicity, revision conflicts, lock timeout, and concurrent writes.
+2. **[ ] Session history.** Add working/saved base IDs to `EditSession` and history; implement
+   Create anchoring, exact Restore steps, rename/delete remapping, and dirty/save/discard/undo/redo
+   behavior. Verify that Create preserves redo and Undo never removes a durable snapshot.
+3. **[ ] Thumbnails.** Render explicit snapshot recipes at low priority, validate/cache bounded
+   JPEGs, and patch only the matching node by ID and render key. Verify stale results, size bounds,
+   and that completion does not alter active edits or dirty state.
+4. **[ ] GUI.** Add one `SnapshotModel` tree above History, preview without session mutation, explicit
+   Restore, and create/rename/delete actions. Verify preview versus restore, edit disabling, and
+   refresh after external changes.
+5. **[ ] CLI and Python.** Extend `info`, add `export --snapshot ID`, and bind the same document,
+   collection, and session operations. Verify text/JSON parity, unknown IDs, option conflicts,
+   repeated exports, and Python parity.
+
+Initial bounds (provisional pending measurement): 32 snapshots per photo; nonempty names up to
+256 UTF-8 bytes; thumbnails at most 256x256 and 64 KiB JPEG; serialized UTF-8 XMP snapshot
+subtree at most 128 MiB, including escaping and base64. IDs/revisions are decimal strings in
+JSON. Sidecar writers wait up to 2000 ms for the
+shared lock and report failure without an unlocked fallback.
+
+Product behavior:
+
+- **Model:** each snapshot has a stable ID, optional parent ID, name, time, `DevelopState` and
+  negative. Its parent records which snapshot the working look was based on when captured;
+  differences along an edge are computed for display, not stored as the snapshot. Leave room for
+  rebasing or merging later without making either part of the first version.
+- **History:** each step carries the working base snapshot ID alongside state and negative.
+  Restore adds an undoable step with the restored snapshot as base; later edits keep that base.
+  Create Snapshot immediately writes a new child and makes it the base of the current history
+  position without adding a step; Undo reaches the preceding edit and its base, never deleting
+  an already written snapshot. Ordinary Save writes the active settings and base without making
+  a snapshot. Creating one leaves the saved active settings and base untouched, so reopening can
+  show an older look/base and the new node.
+- **Persistence:** snapshots and the saved working base belong in the XMP sidecar. Raise the
+  sidecar to version 2 on every Arraw sidecar write, including marks-only writes. Older builds
+  then refuse writes even to photos without snapshots; the user accepts this. Amend ADR 051 and
+  add frozen version-2 fixtures. In v2, track whether saved active develop settings are present
+  separately from the version key so a marks-only RAW keeps its normal defaults. Measure the size
+  of repeated brush states. Embed a small rendered thumbnail per snapshot (at most 256x256); a
+  missing or damaged one is regenerated without fuss or changing its settings.
+  Deleting a snapshot that was the saved base moves that base to its parent (or no base) without
+  changing the saved settings.
+- **UI:** a tree above History with thumbnails; clicking previews without changing the session,
+  and Restore explicitly switches the working look. Create, rename and delete write the
+  snapshot collection immediately. Deleting a snapshot reparents its children to the deleted
+  node's parent; if it had none, they become roots. Their full looks stay unchanged and edge
+  differences are recomputed. If it was the working base, keep the working settings and use its
+  parent as the base, or no base when it had no parent; remap references in session history too.
+  Snapshot thumbnail completion patches only its node and never saves pending develop edits. A
+  split A/B view can follow.
+- **CLI:** `info` lists snapshots, including stable IDs, names and parents, in text and JSON;
+  `export --snapshot ID` renders that snapshot's full settings and negative. Repeated exports
+  of one input with distinct output paths enable scripted batch exports of its versions. A
+  name may be accepted only if it resolves uniquely. A one-command multi-snapshot export is a
+  separate design question.
+- **Other surfaces:** Python uses the same model; copy/paste does not treat a snapshot as a copy
+  section. A film strip badge can follow.
 - **Relation to presets:** a snapshot is per image and keeps everything; a preset is shared and
   carries chosen sections. "Save snapshot as preset" is the bridge.
 
