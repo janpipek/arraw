@@ -9,6 +9,7 @@
 #include <LensResolution.h>
 #include <Photo.h>
 #include <Sidecar.h>
+#include <SnapshotThumbnails.h>
 
 #include <algorithm>
 #include <exception>
@@ -142,10 +143,12 @@ QImage developThumbnail(const fs::path& primary, const DevelopState& state,
 
 ThumbnailWorker::ThumbnailWorker(ThumbnailCache cache,
                                  std::function<void(ThumbnailResult)> onResult, bool pruneAtStart,
-                                 LensDatabaseSource lensDatabase)
+                                 LensDatabaseSource lensDatabase,
+                                 std::function<void(SnapshotThumbnailResult)> onSnapshotResult)
     : cache_(std::move(cache)),
       lensDatabase_(lensDatabase ? std::move(lensDatabase) : systemLensDatabase()),
-      onResult_(std::move(onResult)), pruner_([this, pruneAtStart](const std::stop_token&) {
+      onResult_(std::move(onResult)), onSnapshotResult_(std::move(onSnapshotResult)),
+      pruner_([this, pruneAtStart](const std::stop_token&) {
           if (pruneAtStart) {
               lowerThreadPriority();
               try {
@@ -229,9 +232,33 @@ void ThumbnailWorker::invalidate(const fs::path& primary) {
     wake_.notify_one();
 }
 
+std::uint64_t ThumbnailWorker::beginSnapshots() {
+    const std::scoped_lock lock(mutex_);
+    snapshots_.clear();
+    return ++snapshotGeneration_;
+}
+
+bool ThumbnailWorker::requestSnapshotThumbnail(const fs::path& primary, SnapshotRecipe recipe,
+                                               std::uint64_t generation) {
+    {
+        const std::scoped_lock lock(mutex_);
+        // Under the lock, so that a generation cannot change between the check and the push.
+        if (generation != snapshotGeneration_.load()) {
+            return false;
+        }
+        std::erase_if(snapshots_, [&](const SnapshotJob& queued) {
+            return queued.primary == primary && queued.recipe.id == recipe.id;
+        });
+        snapshots_.push_back({primary, std::move(recipe), generation});
+    }
+    wake_.notify_one();
+    return true;
+}
+
 std::size_t ThumbnailWorker::pendingJobs() const {
     const std::scoped_lock lock(mutex_);
-    return urgent_.size() + embedded_.size() + developed_.size() + (running_ ? 1 : 0);
+    return urgent_.size() + embedded_.size() + snapshots_.size() + developed_.size() +
+           (running_ ? 1 : 0);
 }
 
 ThumbnailWorker::Job ThumbnailWorker::takeFrom(std::deque<fs::path>& queue, ThumbnailKind kind) {
@@ -240,7 +267,7 @@ ThumbnailWorker::Job ThumbnailWorker::takeFrom(std::deque<fs::path>& queue, Thum
     if (chosen == queue.end()) {
         chosen = queue.begin();
     }
-    Job job{std::move(*chosen), kind};
+    Job job{std::move(*chosen), kind, std::nullopt};
     queue.erase(chosen);
     return job;
 }
@@ -250,19 +277,26 @@ std::optional<ThumbnailWorker::Job> ThumbnailWorker::next(const std::stop_token&
     std::unique_lock lock(mutex_);
     running_ = false;
     if (!wake_.wait(lock, stop, [&] {
-            return !urgent_.empty() || !embedded_.empty() || !developed_.empty();
+            return !urgent_.empty() || !embedded_.empty() || !snapshots_.empty() ||
+                   !developed_.empty();
         })) {
         return std::nullopt;
     }
     generation = generation_.load();
     running_ = true;
     if (!urgent_.empty()) {
-        Job job{std::move(urgent_.front()), ThumbnailKind::Developed};
+        Job job{std::move(urgent_.front()), ThumbnailKind::Developed, std::nullopt};
         urgent_.pop_front();
         return job;
     }
     if (!embedded_.empty()) {
         return takeFrom(embedded_, ThumbnailKind::Embedded);
+    }
+    if (!snapshots_.empty()) {
+        SnapshotJob snapshot = std::move(snapshots_.front());
+        snapshots_.pop_front();
+        fs::path primary = snapshot.primary;
+        return Job{std::move(primary), ThumbnailKind::Developed, std::move(snapshot)};
     }
     return takeFrom(developed_, ThumbnailKind::Developed);
 }
@@ -270,8 +304,12 @@ std::optional<ThumbnailWorker::Job> ThumbnailWorker::next(const std::stop_token&
 void ThumbnailWorker::run(const std::stop_token& stop) {
     lowerThreadPriority();
     std::uint64_t generation = 0;
-    while (const auto job = next(stop, generation)) {
-        execute(*job, generation);
+    while (!stop.stop_requested()) {
+        const auto job = next(stop, generation);
+        if (!job) {
+            break;
+        }
+        execute(*job, generation, stop);
     }
 }
 
@@ -292,7 +330,54 @@ QImage embeddedPreviewImage(const ThumbnailCache& cache, const std::filesystem::
     return image;
 }
 
-void ThumbnailWorker::execute(const Job& job, std::uint64_t generation) {
+void ThumbnailWorker::executeSnapshot(const SnapshotJob& job, const std::stop_token& stop) {
+    // Nothing may escape the thread, or the process terminates. A failure leaves the snapshot
+    // as it is: no thumbnail is delivered and nothing else is touched.
+    try {
+        const auto obsolete = [&] {
+            return stop.stop_requested() || job.generation != snapshotGeneration_.load();
+        };
+        if (obsolete()) {
+            return;
+        }
+        const auto key = snapshotThumbnailKey(job.primary, job.recipe.state, job.recipe.negative);
+        if (!key) {
+            return;
+        }
+        std::optional<SnapshotThumbnail> thumbnail = cache_.loadSnapshot(*key);
+        if (!thumbnail) {
+            LensCorrection lens;
+            if (job.recipe.negative.lens.any()) {
+                if (obsolete()) {
+                    return;
+                }
+                // The recipe's own lens settings, not the sidecar's.
+                const Photo photo = openPhoto(job.primary).with(job.recipe.negative);
+                lens = lensCorrectionFor(photo, lensDatabase_());
+                if (obsolete()) {
+                    return;
+                }
+            }
+            thumbnail = renderSnapshotThumbnail(job.primary, job.recipe, lens, obsolete);
+            if (!thumbnail) {
+                return; // Cancelled.
+            }
+            cache_.storeSnapshot(*thumbnail);
+        }
+        if (!obsolete() && onSnapshotResult_) {
+            onSnapshotResult_({job.primary, job.recipe.id, std::move(*thumbnail), job.generation});
+        }
+    } catch (const std::exception&) {
+        // The snapshot keeps its placeholder; a later request tries again.
+    }
+}
+
+void ThumbnailWorker::execute(const Job& job, std::uint64_t generation,
+                              const std::stop_token& stop) {
+    if (job.snapshot) {
+        executeSnapshot(*job.snapshot, stop);
+        return;
+    }
     // Nothing may escape the thread, or the process terminates.
     try {
         QImage image;

@@ -3,6 +3,9 @@
 #include "LensSupport.h"
 #include "ThumbnailCache.h"
 
+#include <SnapshotThumbnails.h>
+#include <Snapshots.h>
+
 #include <QImage>
 
 #include <atomic>
@@ -38,6 +41,18 @@ struct ThumbnailResult {
     std::uint64_t generation = 0;
 };
 
+/// @brief One snapshot thumbnail the worker made.
+struct SnapshotThumbnailResult {
+    /// Shot's primary file.
+    std::filesystem::path primary;
+    /// Snapshot it is of.
+    SnapshotId id;
+    /// The thumbnail: validated, within the size and byte limits, with its render key.
+    SnapshotThumbnail thumbnail;
+    /// ::arraw::app::ThumbnailWorker::snapshotGeneration when the job was queued.
+    std::uint64_t generation = 0;
+};
+
 /// @brief Gives a file's embedded camera preview, upright, at most
 /// ::arraw::app::ThumbnailCache::maxEdge on a side.
 ///
@@ -64,6 +79,17 @@ struct ThumbnailResult {
 /// drops its embedded one, as the developed picture is about to replace it. A new folder
 /// (::arraw::app::ThumbnailWorker::setShots) drops all queued jobs and the result of a running one
 /// is not delivered. Uses no Qt signals, so it works without an event loop.
+///
+/// Snapshot thumbnails (ADR 056, decision 9) are a third kind of job, apart from the shots above.
+/// Each is made from an explicit, immutable ::arraw::SnapshotRecipe the caller hands over, never
+/// from the sidecar, and is served after the embedded jobs and before the developed ones. They
+/// belong to a *snapshot generation* the caller starts with
+/// ::arraw::app::ThumbnailWorker::beginSnapshots when it opens another photograph, and a result
+/// of an older one is never delivered. A new folder leaves them alone.
+///
+/// Threading: one mutex guards the queues; the two generations are atomics that the worker thread
+/// reads between the steps of a job. The result callbacks run on the worker thread and own their
+/// data; the caller marshals them to the thread that owns its session.
 class ThumbnailWorker {
 public:
     /// @brief Starts the thread, and the one-off pruning of the cache beside it.
@@ -75,8 +101,17 @@ public:
     /// @param lensDatabase Gives the lens database for a shot whose saved settings turn a lens
     /// correction on; called on the worker thread, where the first load may take a second. Empty
     /// for ::arraw::app::systemLensDatabase.
+    /// @param onSnapshotResult Receives each snapshot thumbnail, on the worker thread, only while
+    /// its snapshot generation is current at the check, which is not atomic with the delivery: a
+    /// consumer that posts the result to another thread must compare
+    /// ::arraw::app::SnapshotThumbnailResult::generation with
+    /// ::arraw::app::ThumbnailWorker::snapshotGeneration and the primary with its session's path
+    /// there. It should call ::arraw::EditSession::applySnapshotThumbnail under a try block and
+    /// then ::arraw::app::FilmStrip::noteOwnWrite for the photograph, so that its own write is not
+    /// taken for an external change. Must not throw. Empty to drop them.
     ThumbnailWorker(ThumbnailCache cache, std::function<void(ThumbnailResult)> onResult,
-                    bool pruneAtStart = true, LensDatabaseSource lensDatabase = {});
+                    bool pruneAtStart = true, LensDatabaseSource lensDatabase = {},
+                    std::function<void(SnapshotThumbnailResult)> onSnapshotResult = {});
 
     ThumbnailWorker(const ThumbnailWorker&) = delete;
     ThumbnailWorker& operator=(const ThumbnailWorker&) = delete;
@@ -111,6 +146,30 @@ public:
     /// @param primary Primary file.
     void invalidate(const std::filesystem::path& primary);
 
+    /// @brief Starts a new snapshot generation, for another photograph or a fresh start.
+    ///
+    /// Drops every queued snapshot job, and the one running is not delivered.
+    /// @return The new snapshot generation.
+    std::uint64_t beginSnapshots();
+
+    /// @brief Queues the thumbnail of a snapshot, rendered from the recipe given here.
+    ///
+    /// Asking again for a snapshot that is still queued replaces the earlier request. The
+    /// thumbnail is looked up in the cache by ::arraw::snapshotThumbnailKey first.
+    /// @param primary Photograph the snapshot belongs to.
+    /// @param recipe Immutable recipe to render; copied.
+    /// @param generation Snapshot generation the caller got from
+    /// ::arraw::app::ThumbnailWorker::beginSnapshots.
+    /// @return False, with nothing queued, when @p generation is not the current one.
+    bool requestSnapshotThumbnail(const std::filesystem::path& primary, SnapshotRecipe recipe,
+                                  std::uint64_t generation);
+
+    /// @brief Gives the current snapshot generation.
+    /// @return The generation.
+    [[nodiscard]] std::uint64_t snapshotGeneration() const noexcept {
+        return snapshotGeneration_.load();
+    }
+
     /// @brief Gives the current generation, which a new folder increments.
     /// @return The generation.
     [[nodiscard]] std::uint64_t generation() const noexcept {
@@ -122,10 +181,19 @@ public:
     [[nodiscard]] std::size_t pendingJobs() const;
 
 private:
+    /// @brief A snapshot thumbnail to make.
+    struct SnapshotJob {
+        std::filesystem::path primary;
+        SnapshotRecipe recipe;
+        std::uint64_t generation = 0;
+    };
+
     /// @brief One thing to make.
     struct Job {
         std::filesystem::path primary;
         ThumbnailKind kind = ThumbnailKind::Embedded;
+        /// Set for a snapshot job, which then ignores @ref kind.
+        std::optional<SnapshotJob> snapshot;
     };
 
     /// @brief Serves jobs until asked to stop.
@@ -136,7 +204,10 @@ private:
     [[nodiscard]] std::optional<Job> next(const std::stop_token& stop, std::uint64_t& generation);
 
     /// @brief Makes one job's thumbnail and delivers it.
-    void execute(const Job& job, std::uint64_t generation);
+    void execute(const Job& job, std::uint64_t generation, const std::stop_token& stop);
+
+    /// @brief Makes one snapshot thumbnail and delivers it.
+    void executeSnapshot(const SnapshotJob& job, const std::stop_token& stop);
 
     /// @brief Pops the first job of a queue that is visible, else the first.
     /// @pre The queue is not empty.
@@ -148,6 +219,10 @@ private:
     LensDatabaseSource lensDatabase_;
     /// Receiver of results, called on the worker thread.
     std::function<void(ThumbnailResult)> onResult_;
+    /// Receiver of snapshot results, called on the worker thread; may be empty.
+    std::function<void(SnapshotThumbnailResult)> onSnapshotResult_;
+    /// Snapshot generation.
+    std::atomic<std::uint64_t> snapshotGeneration_{0};
     /// Folder generation.
     std::atomic<std::uint64_t> generation_{0};
 
@@ -161,6 +236,8 @@ private:
     std::deque<std::filesystem::path> embedded_;
     /// Shots whose developed thumbnail is still to do.
     std::deque<std::filesystem::path> developed_;
+    /// Snapshot thumbnails still to do, of the current snapshot generation.
+    std::deque<SnapshotJob> snapshots_;
     /// Shots queued in this generation, so that adding twice does nothing.
     std::unordered_set<std::filesystem::path> known_;
     /// Shots on screen.

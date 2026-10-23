@@ -463,6 +463,35 @@ public:
     /// @throws std::runtime_error if the sidecar cannot be read; nothing changes.
     void refreshSnapshots();
 
+    /// @brief Lists the snapshots whose thumbnail is missing, invalid (the reader drops those) or
+    /// made for another recipe or file than the snapshot's now (ADR 056, decision 9).
+    ///
+    /// Each wants a regeneration; until it arrives the caller shows a placeholder. Reads the
+    /// file's name and size only; changes nothing.
+    /// @return The IDs, in the collection's order.
+    [[nodiscard]] std::vector<SnapshotId> snapshotsNeedingThumbnails() const;
+
+    /// @brief Stores a rendered thumbnail on its snapshot, if it is still the one wanted.
+    ///
+    /// Works out the render key the snapshot's recipe has now (::arraw::snapshotThumbnailKey) and
+    /// writes through ::arraw::setSnapshotThumbnail with it, so the thumbnail is accepted only if
+    /// the snapshot still exists in the sidecar and the thumbnail was made for exactly this
+    /// recipe and file. Only that node's thumbnail changes, in the sidecar and in snapshots(): the
+    /// structural revision, the active settings, the history, the bases and the dirty state are
+    /// not touched, and pending edits are not saved. Called from the thread that owns the session,
+    /// like the other snapshot operations; it takes the sidecar lock (up to
+    /// ::arraw::sidecarLockTimeoutMilliseconds). The write changes the sidecar's stamp: the caller
+    /// must tell the folder watcher (::arraw::app::FilmStrip::noteOwnWrite) after a true return,
+    /// or the write is reported as an external change.
+    /// @param id Snapshot the thumbnail is of.
+    /// @param thumbnail Thumbnail to store.
+    /// @return False, with nothing changed, if the session knows no such snapshot, the key does
+    /// not match, or the sidecar's snapshot is gone or its thumbnail changed meanwhile.
+    /// @throws std::invalid_argument if @p thumbnail is invalid.
+    /// @throws std::runtime_error, ::arraw::SidecarLockTimeout as ::arraw::setSnapshotThumbnail;
+    /// nothing changed, and the settings never are.
+    bool applySnapshotThumbnail(SnapshotId id, SnapshotThumbnail thumbnail);
+
     /// @brief Writes the photograph to its sidecar and makes that the saved state.
     ///
     /// Writes the settings, the negative and the working base together, and of the marks only

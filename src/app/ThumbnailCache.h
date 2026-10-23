@@ -3,6 +3,7 @@
 #include <DevelopState.h>
 #include <LensCorrection.h>
 #include <NegativeSettings.h>
+#include <Snapshots.h>
 
 #include <QImage>
 
@@ -83,6 +84,22 @@ public:
     /// @param thumbnail Image to keep; a null one is ignored.
     /// @return Whether the entry was written. A cache that cannot write is not an error.
     bool store(const std::string& key, const QImage& thumbnail) const;
+
+    /// @brief Reads an entry that is a bounded snapshot thumbnail, as its bytes, and marks it as
+    /// just used.
+    ///
+    /// For keys of ::arraw::snapshotThumbnailKey. The bytes are checked against
+    /// ::arraw::validate(const SnapshotThumbnail&); an entry that fails is deleted.
+    /// @param key Key from ::arraw::snapshotThumbnailKey.
+    /// @return The thumbnail with @p key as its render key, or nothing if there is none or it is
+    /// damaged or out of bounds.
+    [[nodiscard]] std::optional<SnapshotThumbnail> loadSnapshot(const std::string& key) const;
+
+    /// @brief Writes a snapshot thumbnail's JPEG as it is, replacing any, atomically.
+    /// @param thumbnail Thumbnail to keep; its render key names the entry. An invalid one is
+    /// ignored.
+    /// @return Whether the entry was written. A cache that cannot write is not an error.
+    bool storeSnapshot(const SnapshotThumbnail& thumbnail) const;
 
     /// @brief Deletes the least recently used entries until the cache fits its cap.
     ///

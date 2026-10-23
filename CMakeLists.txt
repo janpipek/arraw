@@ -314,6 +314,8 @@ add_library(arraw STATIC
         include/PhotoMarks.h
         include/Snapshots.h
         src/core/Snapshots.cpp
+        include/SnapshotThumbnails.h
+        src/core/SnapshotThumbnails.cpp
         include/Sidecar.h
         src/core/Sidecar.cpp
         src/core/ImageBuffer.cpp

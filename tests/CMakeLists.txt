@@ -113,6 +113,7 @@ add_executable(arraw-tests
         test_ShotModel.cpp
         test_Sidecar.cpp
         test_Snapshots.cpp
+        test_SnapshotThumbnails.cpp
         test_SampleConversion.cpp
         test_Sample.cpp
         test_RoundTrip.cpp

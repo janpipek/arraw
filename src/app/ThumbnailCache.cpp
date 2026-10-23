@@ -12,7 +12,9 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
+#include <stdexcept>
 #include <system_error>
 #include <vector>
 
@@ -172,6 +174,65 @@ bool ThumbnailCache::store(const std::string& key, const QImage& thumbnail) cons
         return false;
     }
     if (!image.save(&file, "JPEG", jpegQuality)) {
+        file.cancelWriting();
+        return false;
+    }
+    return file.commit();
+}
+
+std::optional<SnapshotThumbnail> ThumbnailCache::loadSnapshot(const std::string& key) const {
+    if (key.size() < 2) {
+        return std::nullopt;
+    }
+    const fs::path path = pathOf(key);
+    QFile file(qtString(path));
+    if (!file.exists()) {
+        return std::nullopt;
+    }
+    // Larger than the limit is damaged by definition; one byte more is read to tell.
+    const QByteArray bytes = file.open(QIODevice::ReadOnly)
+                                 ? file.read(maximumSnapshotThumbnailBytes + 1)
+                                 : QByteArray{};
+    file.close();
+    SnapshotThumbnail thumbnail;
+    const auto* begin = reinterpret_cast<const std::byte*>(bytes.constData());
+    thumbnail.jpeg.assign(begin, begin + bytes.size());
+    thumbnail.renderKey = key;
+    try {
+        validate(thumbnail);
+        // The header alone does not tell a body that is cut off.
+        if (QImage image; !image.loadFromData(bytes, "JPEG") || image.isNull()) {
+            throw std::invalid_argument("The cached snapshot thumbnail does not decode");
+        }
+    } catch (const std::invalid_argument&) {
+        std::error_code ignored;
+        fs::remove(path, ignored);
+        return std::nullopt;
+    }
+    touch(qtString(path));
+    return thumbnail;
+}
+
+bool ThumbnailCache::storeSnapshot(const SnapshotThumbnail& thumbnail) const {
+    try {
+        validate(thumbnail);
+    } catch (const std::invalid_argument&) {
+        return false;
+    }
+    if (thumbnail.renderKey.size() < 2) {
+        return false;
+    }
+    const fs::path path = pathOf(thumbnail.renderKey);
+    std::error_code error;
+    fs::create_directories(path.parent_path(), error);
+    if (error) {
+        return false;
+    }
+    QSaveFile file(qtString(path));
+    if (!file.open(QIODevice::WriteOnly) ||
+        file.write(reinterpret_cast<const char*>(thumbnail.jpeg.data()),
+                   static_cast<qint64>(thumbnail.jpeg.size())) !=
+            static_cast<qint64>(thumbnail.jpeg.size())) {
         file.cancelWriting();
         return false;
     }

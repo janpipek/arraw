@@ -3,6 +3,7 @@
 #include <LensResolution.h>
 #include <LocalAdjustmentEdits.h>
 #include <Sidecar.h>
+#include <SnapshotThumbnails.h>
 
 #include <algorithm>
 #include <chrono>
@@ -239,6 +240,36 @@ void EditSession::adopt(SnapshotCollection fresh) {
 void EditSession::refreshSnapshots() {
     const std::optional<SidecarContents> contents = readSidecar(photo_.path());
     adopt(contents ? contents->snapshots : SnapshotCollection{});
+}
+
+std::vector<SnapshotId> EditSession::snapshotsNeedingThumbnails() const {
+    std::vector<SnapshotId> wanted;
+    for (const Snapshot& snapshot : snapshots_.entries) {
+        if (!hasCurrentThumbnail(photo_.path(), snapshot)) {
+            wanted.push_back(snapshot.id);
+        }
+    }
+    return wanted;
+}
+
+bool EditSession::applySnapshotThumbnail(SnapshotId id, SnapshotThumbnail thumbnail) {
+    validate(thumbnail);
+    const auto found = std::ranges::find(snapshots_.entries, id, &Snapshot::id);
+    if (found == snapshots_.entries.end()) {
+        return false;
+    }
+    // From the recipe the session holds, worked out before the call (ADR 056, decision 6).
+    const auto key = snapshotThumbnailKey(photo_.path(), found->state, found->negative);
+    if (!key || *key != thumbnail.renderKey) {
+        return false;
+    }
+    if (!setSnapshotThumbnail(photo_.path(), id, thumbnail, *key)) {
+        return false;
+    }
+    // The file now holds exactly this; keeping the copy equal to it is also what lets a reader
+    // of the sidecar tell this session's own write from someone else's change.
+    found->thumbnail = std::move(thumbnail);
+    return true;
 }
 
 void EditSession::refreshAfterConflict() noexcept {

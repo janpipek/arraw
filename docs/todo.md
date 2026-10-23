@@ -371,7 +371,7 @@ and committed:
 2. **[x] Session history.** Add working/saved base IDs to
    `EditSession` and history; implement Create anchoring, exact Restore steps, rename/delete remapping, and dirty/save/discard/undo/redo
    behavior. Verify that Create preserves redo and Undo never removes a durable snapshot.
-3. **[ ] Thumbnails.** Render explicit snapshot recipes at low priority, validate/cache bounded
+3. **[x] Thumbnails.** Render explicit snapshot recipes at low priority, validate/cache bounded
    JPEGs, and patch only the matching node by ID and render key. Verify stale results, size bounds,
    and that completion does not alter active edits or dirty state.
 4. **[ ] GUI.** Add one `SnapshotModel` tree above History, preview without session mutation, explicit
