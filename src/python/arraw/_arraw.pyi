@@ -2528,6 +2528,8 @@ class EditOrigin(enum.Enum):
 
     CROP = 5
 
+    RESTORE = 6
+
 class HistoryStep:
     """One entry of an edit history: the state it left, and why."""
 

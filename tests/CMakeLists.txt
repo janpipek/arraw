@@ -108,6 +108,7 @@ add_executable(arraw-tests
         test_OklabHue.cpp
         test_SettingPresentation.cpp
         test_SettingsJson.cpp
+        test_SessionSnapshots.cpp
         test_Shot.cpp
         test_ShotModel.cpp
         test_Sidecar.cpp

@@ -38,6 +38,12 @@ inline constexpr int sidecarVersion = 2;
 /// @brief Time a writer waits for another writer's lock on a sidecar, in milliseconds.
 inline constexpr int sidecarLockTimeoutMilliseconds = 2000;
 
+/// @brief Age after which a writer breaks another writer's lock on a sidecar, in milliseconds.
+///
+/// A lock file whose owner is gone, or that is not refreshed, is taken over after this long. Set
+/// explicitly rather than left to Qt's default.
+inline constexpr int sidecarStaleLockMilliseconds = 5000;
+
 /// @brief The sidecar's lock could not be taken in time, so nothing was written.
 class SidecarLockTimeout : public std::runtime_error {
 public:
@@ -304,6 +310,53 @@ void writeSidecar(const Photo& photo, std::optional<SnapshotId> savedBase);
 /// @throws ::arraw::SidecarLockTimeout if another writer holds the lock for too long.
 void writeSidecarMarks(const std::filesystem::path& photo, const PhotoMarks& marks);
 
+/// @brief The marks a writer means to change, and no others.
+///
+/// A session that writes the whole of its marks would put back a rating another process set
+/// since the session read the file. Naming the changed marks lets a stale session leave the rest
+/// alone. A mark named here is still written only when it differs from what the file says now.
+struct MarkChanges {
+    /// @brief New rating, or nothing to leave the file's rating alone.
+    std::optional<int> rating = std::nullopt;
+
+    /// @brief New label, or nothing to leave the file's label alone. An engaged empty optional
+    /// clears the label.
+    std::optional<std::optional<ColorLabel>> label = std::nullopt;
+
+    /// @brief Whether it names no mark.
+    [[nodiscard]] bool empty() const noexcept {
+        return !rating && !label;
+    }
+};
+
+/// @brief Lists the marks that differ between two sets.
+/// @param from Marks the caller last knew the file to hold.
+/// @param to Marks the caller wants.
+/// @return The rating if it differs and the label if it differs.
+[[nodiscard]] MarkChanges changedMarks(const PhotoMarks& from, const PhotoMarks& to);
+
+/// @brief Writes a photograph as ::arraw::writeSidecar does, the saved working base with it, and
+/// only the marks named.
+///
+/// For a session's ordinary Save: the marks of @p photo are ignored, and just @p marks reach the
+/// file, so a rating another process wrote since the session read the file survives.
+/// @param photo Photograph whose settings to write.
+/// @param savedBase Snapshot the saved recipe is based on, or nothing for none.
+/// @param marks Marks to change.
+/// @throws ::arraw::SnapshotBaseMissing if @p savedBase names no snapshot of the sidecar; nothing
+/// is written.
+/// @throws std::invalid_argument if a rating of @p marks is outside -1 to 5.
+/// @throws std::runtime_error as ::arraw::writeSidecar.
+void writeSidecar(const Photo& photo, std::optional<SnapshotId> savedBase,
+                  const MarkChanges& marks);
+
+/// @brief Writes only the named marks of a photograph, as ::arraw::writeSidecarMarks does.
+/// @param photo Path of the photograph.
+/// @param marks Marks to change; nothing is written (not even a sidecar made) when it is empty.
+/// @throws std::invalid_argument if a rating of @p marks is outside -1 to 5.
+/// @throws std::runtime_error as ::arraw::writeSidecarMarks.
+void writeSidecarMarkChanges(const std::filesystem::path& photo, const MarkChanges& marks);
+
 /// @brief What a snapshot edit gives back.
 struct SnapshotUpdate {
     /// @brief The collection as it now stands in the sidecar.
@@ -357,22 +410,22 @@ SnapshotUpdate renameSnapshot(const std::filesystem::path& photo, std::uint64_t 
 SnapshotUpdate deleteSnapshot(const std::filesystem::path& photo, std::uint64_t expectedRevision,
                               SnapshotId id);
 
-/// @brief Gives the render key a snapshot's thumbnail ought to carry, as the caller makes keys.
-using SnapshotKeyFunction = std::function<std::string(const Snapshot&)>;
-
 /// @brief Attaches or replaces the thumbnail of one snapshot.
 ///
 /// Under the lock, finds the node as the file has it now; unless it exists and
-/// @p currentKey gives its stored recipe the key @p thumbnail carries, nothing is written. Does not
-/// change the revision or any other node, so it never undoes a structural change made meanwhile.
+/// @p expectedKey is the render key @p thumbnail carries, nothing is written. The caller works out
+/// @p expectedKey before the call, from the recipe it holds for the snapshot now, so no caller
+/// code runs under the lock. A thumbnail made for a recipe the caller has since replaced is
+/// dropped this way. Does not change the revision or any other node, so it never undoes a
+/// structural change made meanwhile.
 /// @param photo Path of the photograph.
 /// @param id Snapshot the thumbnail is of.
 /// @param thumbnail Thumbnail to store.
-/// @param currentKey Gives the render key of a stored snapshot.
+/// @param expectedKey Render key the snapshot's thumbnail ought to carry now.
 /// @return Whether the thumbnail was written.
 /// @throws std::invalid_argument if @p thumbnail is invalid.
 /// @throws std::runtime_error as ::arraw::addSnapshot.
 bool setSnapshotThumbnail(const std::filesystem::path& photo, SnapshotId id,
-                          SnapshotThumbnail thumbnail, const SnapshotKeyFunction& currentKey);
+                          SnapshotThumbnail thumbnail, std::string_view expectedKey);
 
 } // namespace arraw

@@ -13,4 +13,7 @@ inline std::size_t snapshotSubtreeLimit = maximumSnapshotSubtreeBytes;
 /// @brief Time a writer waits for the sidecar lock, in milliseconds; lowered only by tests.
 inline int sidecarLockTimeout = sidecarLockTimeoutMilliseconds;
 
+/// @brief Age after which the sidecar lock is stale, in milliseconds; lowered only by tests.
+inline int sidecarStaleLock = sidecarStaleLockMilliseconds;
+
 } // namespace arraw::detail

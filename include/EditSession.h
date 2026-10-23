@@ -5,6 +5,7 @@
 #include <NegativeSettings.h>
 #include <Photo.h>
 #include <SettingDescriptors.h>
+#include <Snapshots.h>
 
 #include <cstddef>
 #include <optional>
@@ -22,12 +23,13 @@ class LensDatabase;
 /// Front ends word a step from this, the detail and ::arraw::describeChange, so
 /// the list never claims a change the states do not show (ADR 022).
 enum class EditOrigin {
-    Opened, ///< The first step: the photograph as opened, or after discardChanges().
-    Edit,   ///< An ordinary edit, worded from ::arraw::describeChange.
-    Paste,  ///< Paste Settings.
-    Preset, ///< A preset applied; the detail is the preset's name.
-    Reset,  ///< A reset to defaults.
-    Crop,   ///< A crop-mode session committed as one step.
+    Opened,  ///< The first step: the photograph as opened, or after discardChanges().
+    Edit,    ///< An ordinary edit, worded from ::arraw::describeChange.
+    Paste,   ///< Paste Settings.
+    Preset,  ///< A preset applied; the detail is the preset's name.
+    Reset,   ///< A reset to defaults.
+    Crop,    ///< A crop-mode session committed as one step.
+    Restore, ///< A snapshot restored; the detail is its name at the time.
 };
 
 /// @brief One entry of an edit history: the state it left the photograph in, and why.
@@ -48,6 +50,12 @@ struct HistoryStep {
     /// Only ::arraw::EditSession::setNegative, the two-part ::arraw::EditSession::setState and
     /// ::arraw::EditSession::updateNegative change it from one step to the next.
     NegativeSettings negative;
+
+    /// @brief Snapshot the working look was based on after the step, if any (ADR 056).
+    ///
+    /// Beside the state and the negative, so that undo and redo return the base too.
+    /// ::arraw::EditSession::createSnapshot sets it on the current step without making a new one.
+    std::optional<SnapshotId> baseSnapshot = std::nullopt;
 
     friend bool operator==(const HistoryStep&, const HistoryStep&) = default;
 };
@@ -171,14 +179,37 @@ struct ChangeDescription {
 /// setMarks().
 class EditSession {
 public:
-    /// @brief Starts editing a photograph, with a history of just its opening state.
+    /// @brief Starts editing a photograph with the snapshots its sidecar lists (ADR 056).
+    ///
+    /// History is just the opening state, with the saved base as its base. The session owns the
+    /// collection from here on and keeps it current as it creates, renames and deletes.
+    /// @param document Document to edit, from ::arraw::openDocument, which is taken to be what
+    /// its sidecar holds (or defaults, when there is none).
+    /// @param lensDatabase Database the session records lens matches in, as setLensDatabase().
+    explicit EditSession(OpenDocument document, const LensDatabase* lensDatabase = nullptr)
+        : photo_(document.photo), saved_(std::move(document.photo)),
+          snapshots_(std::move(document.snapshots)), base_(document.savedBase),
+          savedBase_(document.savedBase),
+          history_{{saved_.state(), EditOrigin::Opened, {}, saved_.negative(), document.savedBase}},
+          lensDatabase_(lensDatabase) {}
+
+    /// @brief Starts editing a photograph that is known to have no snapshots.
+    ///
+    /// The same as the overload over a document with an empty collection and no base. A snapshot
+    /// operation on a photograph whose sidecar does list some meets a revision conflict and
+    /// refreshes the collection (see createSnapshot()).
+    ///
+    /// The session does not know the saved base the sidecar holds, so save() leaves it alone
+    /// until the session creates a snapshot or restores one; use the overload over a document to
+    /// have it kept.
     /// @param photo Document to edit, usually from ::arraw::openPhoto, which is
     /// taken to be what its sidecar holds (or defaults, when there is none).
     /// @param lensDatabase Database the session records lens matches in, as setLensDatabase().
     explicit EditSession(Photo photo, const LensDatabase* lensDatabase = nullptr)
-        : photo_(photo), saved_(std::move(photo)),
-          history_{{saved_.state(), EditOrigin::Opened, {}, saved_.negative()}},
-          lensDatabase_(lensDatabase) {}
+        : EditSession(OpenDocument{std::move(photo), SnapshotCollection{}, std::nullopt},
+                      lensDatabase) {
+        baseKnown_ = false;
+    }
 
     /// @brief Sets the lens database the session records matches in.
     ///
@@ -336,37 +367,138 @@ public:
         return saved_;
     }
 
-    /// @brief Whether the develop state or the negative, an open edit included, differs from
-    /// the saved one.
+    /// @brief Whether the develop state, the negative or the working base, an open edit
+    /// included, differs from the saved one.
     ///
-    /// Marks never count: they are written as they change (see setMarks()).
+    /// A change of base with identical pixels counts: it needs saving. Marks never count: they
+    /// are written as they change (see setMarks()).
     [[nodiscard]] bool hasUnsavedChanges() const {
-        return photo_.state() != saved_.state() || photo_.negative() != saved_.negative();
+        return photo_.state() != saved_.state() || photo_.negative() != saved_.negative() ||
+               base_ != savedBase_;
     }
 
+    /// @brief Snapshots of the photograph, as the session last read them from its sidecar or
+    /// wrote them.
+    ///
+    /// The reference, and any pointer into it (from find()), is invalidated by the next create,
+    /// rename, delete or refresh, and by a revision conflict: copy what must outlive them.
+    [[nodiscard]] const SnapshotCollection& snapshots() const noexcept {
+        return snapshots_;
+    }
+
+    /// @brief Snapshot the current look is based on, if any.
+    [[nodiscard]] std::optional<SnapshotId> baseSnapshot() const noexcept {
+        return base_;
+    }
+
+    /// @brief Snapshot the saved recipe is based on, if any.
+    [[nodiscard]] std::optional<SnapshotId> savedBaseSnapshot() const noexcept {
+        return savedBase_;
+    }
+
+    /// @brief Captures the current look as a new snapshot, written to the sidecar at once.
+    ///
+    /// Blocking: the write waits up to the lock timeout and parses the sidecar, so call it, like
+    /// renameSnapshot(), deleteSnapshot() and refreshSnapshots(), from the thread that owns the
+    /// session and expect it to take time.
+    ///
+    /// A gesture under way is settled first, as save() does, with the lens match recorded. The
+    /// snapshot holds the whole state and negative, takes the working base as its parent and a
+    /// new ID from the sidecar. It is written with ::arraw::addSnapshot, so the saved settings and
+    /// saved base on disk stay as they are. Then the new ID becomes the base of the current
+    /// history position: no step is added and capturing drops nothing that could be redone
+    /// (settling a gesture that changed something is an ordinary step, which does), so undo reaches
+    /// the preceding edit and its earlier base, and redo returns to this position with the new
+    /// base. The snapshot stays when the position is undone. If the write fails, nothing changes,
+    /// an open edit included.
+    /// @param name Name of the snapshot, 1 to ::arraw::maximumSnapshotNameBytes bytes.
+    /// @return The new snapshot's ID.
+    /// @throws std::invalid_argument if the name is invalid, or the list is full.
+    /// @throws ::arraw::SnapshotRevisionConflict if the sidecar's snapshots changed since the
+    /// session read them; the collection is then read again (and references to snapshots that are
+    /// gone are remapped), but the capture is not retried.
+    /// @throws std::runtime_error, ::arraw::SidecarLockTimeout as ::arraw::addSnapshot.
+    SnapshotId createSnapshot(std::string name);
+
+    /// @brief Switches the working look to a snapshot, as one undoable step.
+    ///
+    /// The step carries the snapshot's exact state and negative, bypassing lens rematching, and
+    /// its ID as the base; the origin is ::arraw::EditOrigin::Restore and the detail the name. It
+    /// is a step even when the rendering is unchanged, if the base differs. When both the look
+    /// and the base already are the snapshot's there is no step. An open edit is committed first;
+    /// a new step drops what could be redone.
+    /// @param id Snapshot to restore.
+    /// @throws std::invalid_argument if the session knows no such snapshot; nothing changes.
+    void restoreSnapshot(SnapshotId id);
+
+    /// @brief Renames a snapshot, writing the sidecar at once.
+    ///
+    /// Not a history step, and the rendering and the dirty state do not change. The collection is
+    /// then the one the sidecar returns.
+    /// @param id Snapshot to rename.
+    /// @param name New name.
+    /// @throws std::invalid_argument if the name is invalid or the session knows no such snapshot.
+    /// @throws ::arraw::SnapshotRevisionConflict as createSnapshot().
+    /// @throws std::runtime_error, ::arraw::SidecarLockTimeout as ::arraw::renameSnapshot.
+    void renameSnapshot(SnapshotId id, std::string name);
+
+    /// @brief Deletes a snapshot, writing the sidecar at once.
+    ///
+    /// Its children take its parent (or become roots), and every reference to it, the working
+    /// base, the saved base, the open edit's and those of the history steps, becomes its parent
+    /// or no base. Not a history step; the rendering is untouched. Undo does not bring it back.
+    /// @param id Snapshot to delete.
+    /// @throws std::invalid_argument if the session knows no such snapshot.
+    /// @throws ::arraw::SnapshotRevisionConflict as createSnapshot().
+    /// @throws std::runtime_error, ::arraw::SidecarLockTimeout as ::arraw::deleteSnapshot.
+    void deleteSnapshot(SnapshotId id);
+
+    /// @brief Reads the snapshots again from the sidecar, for a change another process made.
+    ///
+    /// References to snapshots that are gone (the working base, the saved base, the open edit's
+    /// and the history's) become the nearest surviving ancestor in the collection the session
+    /// held, or no base. The rendering and the dirty state of the settings do not change.
+    /// The read takes no lock: every writer replaces the file atomically, so it sees one whole
+    /// version.
+    /// @throws std::runtime_error if the sidecar cannot be read; nothing changes.
+    void refreshSnapshots();
+
     /// @brief Writes the photograph to its sidecar and makes that the saved state.
+    ///
+    /// Writes the settings, the negative and the working base together, and of the marks only
+    /// those the session changed and has not written (none, as setMarks() writes at once), so a
+    /// rating another process set since the session read the file is not put back. The snapshot
+    /// collection on disk is left as it is. If another process deleted the base meanwhile, the
+    /// collection is read again, the base remapped to the nearest survivor, and the save is tried
+    /// once more; should that fail too, the refresh stands (the collection and the references to
+    /// snapshots stay remapped) though nothing was saved.
+    ///
+    /// A session built from a bare Photo does not know the saved base, and leaves it as the file
+    /// has it (and writes all its marks, as it always did) until it changes the base.
     ///
     /// An open edit is committed first. History is kept: saving is not an edit. With an open edit
     /// that is due a lens record, the file holds the photograph as the commit leaves it, with the
     /// match recorded, so nothing is unsaved straight after.
-    /// @throws std::runtime_error as ::arraw::writeSidecar does; nothing changes.
+    /// @throws std::runtime_error as ::arraw::writeSidecar does; nothing is saved or changed.
+    /// @throws ::arraw::SnapshotBaseMissing if the base is gone again on the second try.
     void save();
 
     /// @brief Sets the marks, writing them to the sidecar at once.
     ///
-    /// Writes the saved photograph with the new marks, so develop edits not yet
-    /// saved stay out of the file, then updates saved() and photo(). This is
-    /// not an undo step (ADR 021, 022).
+    /// Writes only the marks that differ from the saved ones, so develop edits not yet saved stay
+    /// out of the file and so does a rating or recipe another process wrote since the session
+    /// read it. Then updates saved() and photo(). This is not an undo step (ADR 021, 022).
     /// @param marks Marks the photograph carries from now on.
     /// @throws std::invalid_argument if @p marks are not valid.
     /// @throws std::runtime_error as ::arraw::writeSidecar does.
     /// Either way nothing changes.
     void setMarks(PhotoMarks marks);
 
-    /// @brief Returns the develop state and the negative to the saved ones, dropping history and
-    /// any open edit.
+    /// @brief Returns the develop state, the negative and the working base to the saved ones,
+    /// dropping history and any open edit.
     ///
-    /// History starts again from the saved state, as an Opened step.
+    /// History starts again from the saved state and base, as an Opened step. Snapshots written
+    /// to the sidecar stay.
     void discardChanges();
 
 private:
@@ -375,10 +507,23 @@ private:
     /// Photograph as the sidecar holds it.
     Photo saved_;
 
+    /// Snapshots, as last read from or written to the sidecar.
+    SnapshotCollection snapshots_;
+
+    /// Snapshot the current look is based on.
+    std::optional<SnapshotId> base_;
+
+    /// Snapshot the saved recipe is based on.
+    std::optional<SnapshotId> savedBase_;
+
+    /// Whether savedBase_ is what the sidecar holds; false for a session built from a bare Photo.
+    bool baseKnown_ = true;
+
     /// What an open edit started from.
     struct Baseline {
-        DevelopState state;        ///< Develop state at begin().
-        NegativeSettings negative; ///< Negative settings at begin().
+        DevelopState state;             ///< Develop state at begin().
+        NegativeSettings negative;      ///< Negative settings at begin().
+        std::optional<SnapshotId> base; ///< Working base at begin().
     };
 
     /// Gives @p after with the lens match recorded when its lens settings differ from @p before.
@@ -386,6 +531,23 @@ private:
 
     /// Makes @p next, which already carries any record, the photograph and ends the open edit.
     void commitPhoto(Photo next, EditOrigin origin, std::string detail);
+
+    /// Makes the collection the session holds @p fresh and remaps every reference to a snapshot
+    /// it no longer lists.
+    void adopt(SnapshotCollection fresh);
+
+    /// Gives the nearest ancestor of @p id, in the collection held now, that @p fresh still lists.
+    [[nodiscard]] std::optional<SnapshotId> survivor(std::optional<SnapshotId> id,
+                                                     const SnapshotCollection& fresh) const;
+
+    /// Replaces every reference to @p gone with @p instead.
+    void replaceBase(SnapshotId gone, std::optional<SnapshotId> instead);
+
+    /// Reads the collection again after a conflict, ignoring a failure to read.
+    void refreshAfterConflict() noexcept;
+
+    /// Drops the steps after the position and appends one.
+    void appendStep(HistoryStep step);
 
     /// Tells whether the open edit is back where it began. Requires an open edit.
     [[nodiscard]] bool baselineIsCurrent() const noexcept;

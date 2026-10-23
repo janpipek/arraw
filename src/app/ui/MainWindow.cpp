@@ -1336,7 +1336,7 @@ void MainWindow::updateHistoryDock() {
     }
     const EditSession& session = open_->session;
     historyModel_->setHistory(session.history(), session.position(), session.saved().state(),
-                              session.saved().negative());
+                              session.saved().negative(), session.savedBaseSnapshot());
     const QModelIndex current = historyModel_->index(historyModel_->rowOfIndex(session.position()));
     historyView_->setCurrentIndex(current);
     historyView_->scrollTo(current);
@@ -1787,9 +1787,9 @@ void MainWindow::openFile(const std::filesystem::path& path) {
     const detail::TimingSpan timing("window.openFile");
     try {
         DebugDiagnostics log(debugLog_.diagnostics);
-        Photo photo = [&] {
+        OpenDocument document = [&] {
             const detail::TimingSpan metadataTiming("window.open.metadata");
-            return openPhoto(path, log);
+            return openDocument(path, log);
         }();
         // Asked once the file is known to open, so that cancelling the dialog
         // or choosing a bad file leaves the current photograph and its edits.
@@ -1818,7 +1818,7 @@ void MainWindow::openFile(const std::filesystem::path& path) {
                     8000);
             }
         }
-        showPhoto(std::move(photo));
+        showPhoto(std::move(document));
         // The shot that holds the file, as its primary or as a companion; the file the user
         // chose stays the one developed. While the strip is listed, it becomes active when it
         // arrives.
@@ -1884,14 +1884,14 @@ void MainWindow::activateShot(const QString& primary) {
     const detail::TimingSpan timing("window.activateShot");
     try {
         DebugDiagnostics log(debugLog_.diagnostics);
-        Photo photo = [&] {
+        OpenDocument document = [&] {
             const detail::TimingSpan metadataTiming("window.open.metadata");
-            return openPhoto(path, log);
+            return openDocument(path, log);
         }();
         if (!confirmLeavingPhoto()) {
             return; // The strip keeps its active shot and selection.
         }
-        showPhoto(std::move(photo));
+        showPhoto(std::move(document));
         filmStrip_->setActive(path);
     } catch (const std::exception& error) {
         QMessageBox::warning(this, tr("Cannot Open Photograph"),
@@ -1994,11 +1994,25 @@ void MainWindow::sidecarChangedOnDisk(const QString& primary) {
     }
     try {
         DebugDiagnostics log(debugLog_.diagnostics);
-        Photo photo = openPhoto(path, log);
+        OpenDocument document = openDocument(path, log);
+        const Photo& photo = document.photo;
         const Photo& saved = open_->session.saved();
+        // Thumbnails are the app's own writes and do not count as a change.
+        const auto withoutThumbnails = [](SnapshotCollection collection) {
+            for (Snapshot& snapshot : collection.entries) {
+                snapshot.thumbnail.reset();
+            }
+            return collection;
+        };
         if (photo.state() == saved.state() && photo.negative() == saved.negative() &&
-            photo.marks() == saved.marks()) {
-            return; // Touched, not changed: keep the history.
+            photo.marks() == saved.marks() &&
+            document.savedBase == open_->session.savedBaseSnapshot()) {
+            if (withoutThumbnails(document.snapshots) !=
+                withoutThumbnails(open_->session.snapshots())) {
+                // Only the list changed: the session reads it again and keeps its history.
+                open_->session.refreshSnapshots();
+            }
+            return; // Touched, or the list alone changed: keep the history.
         }
         // The pixels are the same file's; only the settings and marks are read again, and the
         // view stays where it is.
@@ -2006,7 +2020,7 @@ void MainWindow::sidecarChangedOnDisk(const QString& primary) {
         const DecodeOptions decodedOptions = open_->decodedOptions;
         auto cameraPreview = std::move(open_->cameraPreview);
         auto lastCropImage = std::move(open_->lastCropImage);
-        open_.emplace(OpenPhoto{EditSession(std::move(photo), lensDatabase_), std::move(decoded),
+        open_.emplace(OpenPhoto{EditSession(std::move(document), lensDatabase_), std::move(decoded),
                                 decodedOptions, std::move(cameraPreview),
                                 std::move(lastCropImage)});
         refreshPanel(); // Re-decodes if the sidecar's negative is not the shown pixels'.
@@ -2779,7 +2793,7 @@ void MainWindow::followWithThumbnail(const PreviewResult& result) {
     filmStrip_->setLiveThumbnail(path, *result.thumbnail);
 }
 
-void MainWindow::showPhoto(Photo photo) {
+void MainWindow::showPhoto(OpenDocument document) {
     const detail::TimingSpan timing("window.showPhoto");
     if (photoView_->isCropMode()) {
         // Only when nothing asked first; the edit belongs to the session being replaced.
@@ -2792,9 +2806,9 @@ void MainWindow::showPhoto(Photo photo) {
     setPicking(false);
     // The shot just left shows its saved settings again, not the edits that were abandoned.
     filmStrip_->releaseLiveThumbnail();
-    const std::filesystem::path path = photo.path();
-    const DecodeOptions decodeOptions = decodeOptionsFor(photo, false);
-    open_.emplace(OpenPhoto{EditSession(std::move(photo), lensDatabase_), nullptr, decodeOptions,
+    const std::filesystem::path path = document.photo.path();
+    const DecodeOptions decodeOptions = decodeOptionsFor(document.photo, false);
+    open_.emplace(OpenPhoto{EditSession(std::move(document), lensDatabase_), nullptr, decodeOptions,
                             std::nullopt, std::nullopt});
     redecodeRequest_ = 0;
     failedOptions_.reset();

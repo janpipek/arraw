@@ -26,7 +26,10 @@ chooses a small value model, independent snapshot persistence, and explicit hist
    redo returns to the captured entry/base. Undo never deletes a snapshot. Rename and delete are
    durable metadata operations and do not become undoable history steps. Delete reparents children
    to the deleted node's parent (or makes them roots) and remaps current, saved, baseline and
-   history references to that parent or no base. Ordinary Save writes the active recipe and base;
+   history references to that parent or no base. Ordinary Save writes the active recipe and base,
+   and of the marks only those the session itself changed (marks are written at once, so none), so
+   a stale session does not put back a rating another process set; it remaps a base another
+   process deleted and retries once;
    Discard restores the saved recipe and base, while durable snapshot metadata remains.
 4. **Sidecar version 2 carries snapshots.** Read v1 and v2. Every successful Arraw sidecar write
    writes v2, including marks-only and thumbnail writes. This deliberately means older builds
@@ -43,10 +46,13 @@ chooses a small value model, independent snapshot persistence, and explicit hist
    active Save repairs it with complete settings and `True`.
 6. **All sidecar writers coordinate and replace atomically.** Ordinary Save, marks-only writes,
    structural snapshot operations, and thumbnail writes acquire a sibling `QLockFile` for up to
-   2000 ms, reread the latest XMP, patch only the fields they own, and commit through `QSaveFile`.
+   2000 ms (a lock older than 5000 ms is stale and taken over), reread the latest XMP, patch only
+   the fields they own, and commit through `QSaveFile`.
    Timeout or I/O failure leaves the prior file unchanged and reports a clear error. Structural
    changes check the collection revision under lock and allocate IDs there. A thumbnail patch
-   checks that the ID still exists and its captured render key still matches; it does not advance
+   checks that the ID still exists and that the render key the caller expects now (a plain string,
+   worked out before the call, so no caller code runs under the lock) is the one the thumbnail
+   carries; it does not advance
    the structural revision or overwrite newer collection changes.
 7. **Damaged snapshot data does not hide a readable photograph.** Readers report and skip unusable
    nodes, discard invalid thumbnails, cut cycle edges, root entries with missing parents, clear a

@@ -46,7 +46,8 @@ void bindSession(nb::module_& module) {
         .value("PASTE", EditOrigin::Paste)
         .value("PRESET", EditOrigin::Preset)
         .value("RESET", EditOrigin::Reset)
-        .value("CROP", EditOrigin::Crop);
+        .value("CROP", EditOrigin::Crop)
+        .value("RESTORE", EditOrigin::Restore);
 
     nb::class_<HistoryStep>(module, "HistoryStep",
                             "One entry of an edit history: the state it left, and why.")

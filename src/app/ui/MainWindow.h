@@ -569,8 +569,8 @@ private:
     /// the crop mode, the geometry commands, the zoom, the picker and the export.
     /// Marks can be set throughout. Opening another photograph meanwhile cancels the
     /// decode, and the window never shows a result of one photograph for another.
-    /// @param photo Photograph to show, already read with its sidecar.
-    void showPhoto(Photo photo);
+    /// @param document Photograph to show, already read with its sidecar and snapshots.
+    void showPhoto(OpenDocument document);
 
     /// @brief Takes the pixels of the photograph being opened, or of a re-decode, or reports why
     /// there are none.

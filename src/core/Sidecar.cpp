@@ -1593,6 +1593,7 @@ public:
     /// @throws std::runtime_error if the lock file cannot be made.
     explicit SidecarLock(const std::filesystem::path& sidecar)
         : file_(qtPath(sidecar) + QStringLiteral(".lock")) {
+        file_.setStaleLockTime(detail::sidecarStaleLock);
         if (file_.tryLock(detail::sidecarLockTimeout)) {
             return;
         }
@@ -1697,7 +1698,7 @@ void updateSidecar(const std::filesystem::path& photo, bool activeWrite,
 
 /// @brief Writes the active settings, the negative and the marks the caller owns.
 void patchActive(Document& document, const DevelopState* state, const NegativeSettings* negative,
-                 const PhotoMarks* marksToWrite) {
+                 const MarkChanges* marksToWrite) {
     const std::vector<QDomElement>& descriptions = document.descriptions;
     const QDomElement home = document.home;
     const std::filesystem::path& path = document.path;
@@ -1758,22 +1759,22 @@ void patchActive(Document& document, const DevelopState* state, const NegativeSe
         }
     }
     if (marksToWrite != nullptr) {
-        const PhotoMarks& marks = *marksToWrite;
         // Marks are standard XMP that other tools write too, and some of what they
         // write is no mark arraw has (a rating of 9, a label named "Rot"). So a mark
         // is written only when it differs from what reading the file gave: an
-        // unchanged mark leaves the file's own text alone, whatever it says.
+        // unchanged mark leaves the file's own text alone, whatever it says. A mark the
+        // caller does not name is not touched at all.
         const PhotoMarks onFile = marksIn(descriptions, discardedDiagnostics(), path);
-        if (marks.rating != onFile.rating) {
+        if (marksToWrite->rating && *marksToWrite->rating != onFile.rating) {
             setProperty(descriptions, home, xmpProperty("Rating"_L1),
-                        QString::number(marks.rating));
+                        QString::number(*marksToWrite->rating));
         }
-        if (marks.label != onFile.label) {
+        if (marksToWrite->label && *marksToWrite->label != onFile.label) {
+            const std::optional<ColorLabel>& wanted = *marksToWrite->label;
             std::optional<QString> label;
-            if (marks.label) {
-                const auto named = std::ranges::find_if(colorLabelNames, [&](const auto& entry) {
-                    return entry.first == *marks.label;
-                });
+            if (wanted) {
+                const auto named = std::ranges::find_if(
+                    colorLabelNames, [&](const auto& entry) { return entry.first == *wanted; });
                 if (named != colorLabelNames.end()) {
                     label = QString::fromUtf8(named->second.data(),
                                               static_cast<qsizetype>(named->second.size()));
@@ -1784,11 +1785,23 @@ void patchActive(Document& document, const DevelopState* state, const NegativeSe
     }
 }
 
+/// @brief Names every mark of a set.
+MarkChanges allOf(const PhotoMarks& marks) {
+    return {.rating = marks.rating, .label = marks.label};
+}
+
+/// @brief Refuses a rating that is not a rating.
+void checkRating(const MarkChanges& marks) {
+    if (marks.rating && (*marks.rating < rejectedRating || *marks.rating > highestRating)) {
+        throw std::invalid_argument("rating must be from -1 to 5");
+    }
+}
+
 /// @brief Writes the settings, negative and marks of a photograph, and optionally the saved base.
-void writeActive(const Photo& photo, bool setBase, std::optional<SnapshotId> base) {
+void writeActive(const Photo& photo, bool setBase, std::optional<SnapshotId> base,
+                 const MarkChanges& marks) {
     const DevelopState state = photo.state();
     const NegativeSettings negative = photo.negative();
-    const PhotoMarks marks = photo.marks();
     updateSidecar(photo.path(), true, [&](Document& document) {
         patchActive(document, &state, &negative, &marks);
         if (setBase) {
@@ -1876,13 +1889,29 @@ editSnapshots(const std::filesystem::path& photo, std::uint64_t expectedRevision
     return result;
 }
 
+/// @brief Says, for an error message, that the list holds entries that cannot be read.
+///
+/// Empty when every entry is usable. Such entries stay in the file and count toward the limit;
+/// there is no way to discard them yet.
+std::string unreadableNote(const SnapshotRead& read) {
+    const auto unreadable = static_cast<std::size_t>(
+        std::ranges::count_if(read.nodes, [](const SnapshotNode& node) { return !node.usable; }));
+    if (unreadable == 0 && !read.damaged) {
+        return {};
+    }
+    return "; the list also holds " + std::to_string(unreadable) +
+           " unreadable entries (damaged or written by something else), which are kept as they are "
+           "and count toward the limit";
+}
+
 /// @brief Finds the node of a usable snapshot.
 const SnapshotNode& nodeOf(const SnapshotRead& read, SnapshotId id) {
     const auto found = std::ranges::find_if(read.nodes, [&](const SnapshotNode& node) {
         return node.usable && node.rawId == id.value;
     });
     if (found == read.nodes.end()) {
-        throw std::invalid_argument("there is no snapshot " + std::to_string(id.value));
+        throw std::invalid_argument("there is no usable snapshot " + std::to_string(id.value) +
+                                    unreadableNote(read));
     }
     return *found;
 }
@@ -1897,16 +1926,38 @@ SidecarLockTimeout::SidecarLockTimeout(const std::filesystem::path& sidecar,
                          " ms, so nothing was written") {}
 
 void arraw::writeSidecar(const Photo& photo) {
-    writeActive(photo, false, std::nullopt);
+    writeActive(photo, false, std::nullopt, allOf(photo.marks()));
 }
 
 void arraw::writeSidecar(const Photo& photo, std::optional<SnapshotId> savedBase) {
-    writeActive(photo, true, savedBase);
+    writeActive(photo, true, savedBase, allOf(photo.marks()));
+}
+
+void arraw::writeSidecar(const Photo& photo, std::optional<SnapshotId> savedBase,
+                         const MarkChanges& marks) {
+    checkRating(marks);
+    writeActive(photo, true, savedBase, marks);
+}
+
+MarkChanges arraw::changedMarks(const PhotoMarks& from, const PhotoMarks& to) {
+    MarkChanges changes;
+    if (from.rating != to.rating) {
+        changes.rating = to.rating;
+    }
+    if (from.label != to.label) {
+        changes.label = to.label;
+    }
+    return changes;
 }
 
 void arraw::writeSidecarMarks(const std::filesystem::path& photo, const PhotoMarks& marks) {
-    if (marks.rating < rejectedRating || marks.rating > highestRating) {
-        throw std::invalid_argument("rating must be from -1 to 5");
+    writeSidecarMarkChanges(photo, allOf(marks));
+}
+
+void arraw::writeSidecarMarkChanges(const std::filesystem::path& photo, const MarkChanges& marks) {
+    checkRating(marks);
+    if (marks.empty()) {
+        return;
     }
     updateSidecar(photo, false, [&](Document& document) {
         patchActive(document, nullptr, nullptr, &marks);
@@ -1922,11 +1973,12 @@ SnapshotUpdate arraw::addSnapshot(const std::filesystem::path& photo,
     return editSnapshots(
         photo, expectedRevision, [&](Document& document, const SnapshotRead& read) {
             if (read.list.items.size() >= maximumSnapshots) {
-                throw std::invalid_argument(
-                    "a photograph keeps at most " + std::to_string(maximumSnapshots) +
-                    " snapshots, and this sidecar's list has " +
-                    std::to_string(read.list.items.size()) + " entries, " +
-                    std::to_string(read.collection.entries.size()) + " of them usable");
+                throw std::invalid_argument("a photograph keeps at most " +
+                                            std::to_string(maximumSnapshots) +
+                                            " snapshots, and this sidecar's list has " +
+                                            std::to_string(read.list.items.size()) + " entries, " +
+                                            std::to_string(read.collection.entries.size()) +
+                                            " of them usable" + unreadableNote(read));
             }
             if (draft.parent && read.collection.find(*draft.parent) == nullptr) {
                 throw std::invalid_argument("the parent " + std::to_string(draft.parent->value) +
@@ -2007,8 +2059,7 @@ SnapshotUpdate arraw::deleteSnapshot(const std::filesystem::path& photo,
 }
 
 bool arraw::setSnapshotThumbnail(const std::filesystem::path& photo, SnapshotId id,
-                                 SnapshotThumbnail thumbnail,
-                                 const SnapshotKeyFunction& currentKey) {
+                                 SnapshotThumbnail thumbnail, std::string_view expectedKey) {
     validate(thumbnail);
     bool written = false;
     updateSidecar(photo, false, [&](Document& document) {
@@ -2020,7 +2071,7 @@ bool arraw::setSnapshotThumbnail(const std::filesystem::path& photo, SnapshotId 
                                      "data, so it was left alone");
         }
         const Snapshot* snapshot = read.collection.find(id);
-        if (snapshot == nullptr || currentKey(*snapshot) != thumbnail.renderKey) {
+        if (snapshot == nullptr || expectedKey != thumbnail.renderKey) {
             return false;
         }
         setThumbnailFields(nodeOf(read, id).holder, std::move(thumbnail));

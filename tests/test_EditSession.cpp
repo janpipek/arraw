@@ -296,8 +296,8 @@ TEST_CASE("Marks are written at once and unsaved edits stay out of the file", "[
     const auto contents = readSidecar(path);
     REQUIRE(contents);
     REQUIRE(contents->marks == marks);
-    // The saved document is written with the marks: its state, not the unsaved one.
-    REQUIRE(contents->state == session.saved().state());
+    // Only the marks are written: the unsaved edit stays out, and so does any recipe.
+    REQUIRE_FALSE(contents->state);
     // Not an undo step: undoing takes back the exposure and keeps the marks.
     session.undo();
     REQUIRE(session.photo().marks() == marks);

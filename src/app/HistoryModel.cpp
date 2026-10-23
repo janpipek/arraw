@@ -160,12 +160,14 @@ QString wordLocal(const DevelopState& before, const DevelopState& after, const L
 HistoryModel::HistoryModel(QObject* parent) : QAbstractListModel(parent) {}
 
 void HistoryModel::setHistory(const std::vector<HistoryStep>& history, std::size_t position,
-                              const DevelopState& saved, const NegativeSettings& savedNegative) {
+                              const DevelopState& saved, const NegativeSettings& savedNegative,
+                              std::optional<SnapshotId> savedBase) {
     beginResetModel();
     history_ = history;
     position_ = position;
     saved_ = saved;
     savedNegative_ = savedNegative;
+    savedBase_ = savedBase;
     endResetModel();
 }
 
@@ -195,7 +197,8 @@ QVariant HistoryModel::data(const QModelIndex& index, int role) const {
         return step > position_;
     case SavedRole:
         return saved_ && history_[step].state == *saved_ &&
-               history_[step].negative == savedNegative_;
+               history_[step].negative == savedNegative_ &&
+               history_[step].baseSnapshot == savedBase_;
     default:
         return {};
     }
@@ -233,6 +236,8 @@ QString HistoryModel::textOf(std::size_t index) const {
     }
     case EditOrigin::Crop:
         return tr("Crop");
+    case EditOrigin::Restore:
+        return tr("Restore snapshot: %1").arg(QString::fromStdString(step.detail));
     case EditOrigin::Edit:
         break;
     }

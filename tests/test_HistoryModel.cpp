@@ -12,6 +12,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <optional>
 #include <vector>
 
 using namespace arraw;
@@ -48,7 +49,7 @@ TEST_CASE("Each origin has its own wording", "[app][history]") {
         .then([](DevelopSettings&) {}, EditOrigin::Reset)
         .then([](DevelopSettings& s) { s.geometry.flipHorizontal = true; }, EditOrigin::Crop);
     HistoryModel model;
-    model.setHistory(built.steps, 4, DevelopState{}, {});
+    model.setHistory(built.steps, 4, DevelopState{}, {}, std::nullopt);
 
     CHECK(textAt(model, 0) == "Opened");
     CHECK(textAt(model, 1) == "Paste Settings");
@@ -63,7 +64,7 @@ TEST_CASE("An edit of one setting names it with its value", "[app][history]") {
         .then([](DevelopSettings& s) { s.tone.exposure = -1.25F; })
         .then([](DevelopSettings& s) { s.color.saturation = 12.0F; });
     HistoryModel model;
-    model.setHistory(built.steps, 3, DevelopState{}, {});
+    model.setHistory(built.steps, 3, DevelopState{}, {}, std::nullopt);
 
     CHECK(textAt(model, 1) == "Exposure +0.50 EV");
     CHECK(textAt(model, 2) == "Exposure -1.25 EV");
@@ -74,7 +75,7 @@ TEST_CASE("An edit of one setting without a number gives just its name", "[app][
     Built built;
     built.then([](DevelopSettings& s) { s.geometry.flipVertical = true; });
     HistoryModel model;
-    model.setHistory(built.steps, 1, DevelopState{}, {});
+    model.setHistory(built.steps, 1, DevelopState{}, {}, std::nullopt);
 
     const QString text = textAt(model, 1);
     CHECK_FALSE(text.isEmpty());
@@ -90,7 +91,7 @@ TEST_CASE("The straighten is worded as the panel shows it", "[app][history]") {
     const std::vector<HistoryStep> steps{{flipped, EditOrigin::Opened, {}},
                                          {straightened, EditOrigin::Edit, {}}};
     HistoryModel model;
-    model.setHistory(steps, 1, flipped, {});
+    model.setHistory(steps, 1, flipped, {}, std::nullopt);
 
     CHECK(textAt(model, 1).contains("+2.0"));
     CHECK_FALSE(textAt(model, 1).contains("-2.0"));
@@ -107,7 +108,7 @@ TEST_CASE("A reset names the group it reset", "[app][history]") {
             },
             EditOrigin::Reset);
     HistoryModel model;
-    model.setHistory(built.steps, 3, DevelopState{}, {});
+    model.setHistory(built.steps, 3, DevelopState{}, {}, std::nullopt);
 
     CHECK(textAt(model, 2) == "Reset Tone Curve");
     // Two groups at once: nothing to name.
@@ -121,7 +122,7 @@ TEST_CASE("An edit of several settings in one group names the group", "[app][his
         s.tone.contrast = 20.0F;
     });
     HistoryModel model;
-    model.setHistory(built.steps, 1, DevelopState{}, {});
+    model.setHistory(built.steps, 1, DevelopState{}, {}, std::nullopt);
 
     CHECK(textAt(model, 1) == groupDisplayName(SettingGroup::Tone));
     CHECK(textAt(model, 1) == "Tone");
@@ -140,7 +141,7 @@ TEST_CASE("An edit across groups counts its settings", "[app][history]") {
             s.geometry.flipHorizontal = true;
         });
     HistoryModel model;
-    model.setHistory(built.steps, 2, DevelopState{}, {});
+    model.setHistory(built.steps, 2, DevelopState{}, {}, std::nullopt);
 
     CHECK(textAt(model, 1) == "2 settings");
     CHECK(textAt(model, 2) == "3 settings");
@@ -150,7 +151,7 @@ TEST_CASE("An edit that changes nothing is worded plainly", "[app][history]") {
     Built built;
     built.then([](DevelopSettings&) {});
     HistoryModel model;
-    model.setHistory(built.steps, 1, DevelopState{}, {});
+    model.setHistory(built.steps, 1, DevelopState{}, {}, std::nullopt);
 
     CHECK(textAt(model, 1) == "Edit");
 }
@@ -161,7 +162,7 @@ TEST_CASE("Rows run newest first and map to history indices", "[app][history]") 
         s.tone.contrast = 10.0F;
     });
     HistoryModel model;
-    model.setHistory(built.steps, 2, DevelopState{}, {});
+    model.setHistory(built.steps, 2, DevelopState{}, {}, std::nullopt);
 
     REQUIRE(model.rowCount() == 3);
     CHECK(model.index(2).data(Qt::DisplayRole).toString() == "Opened");
@@ -179,7 +180,7 @@ TEST_CASE("Rows say whether they are current, redoable or saved", "[app][history
     });
     HistoryModel model;
     // Gone back to the first edit, which is what is on disk.
-    model.setHistory(built.steps, 1, built.steps[1].state, built.steps[1].negative);
+    model.setHistory(built.steps, 1, built.steps[1].state, built.steps[1].negative, std::nullopt);
 
     const auto flag = [&](std::size_t index, int role) {
         return model.index(model.rowOfIndex(index)).data(role).toBool();
@@ -200,7 +201,7 @@ TEST_CASE("Rows say whether they are current, redoable or saved", "[app][history
 TEST_CASE("Clearing the model leaves no rows", "[app][history]") {
     Built built;
     HistoryModel model;
-    model.setHistory(built.steps, 0, DevelopState{}, {});
+    model.setHistory(built.steps, 0, DevelopState{}, {}, std::nullopt);
     CHECK(model.rowCount() == 1);
     model.clear();
     CHECK(model.rowCount() == 0);
@@ -229,7 +230,7 @@ struct BuiltStates {
 
     QString textOfLast() const {
         HistoryModel model;
-        model.setHistory(steps, steps.size() - 1, DevelopState{}, {});
+        model.setHistory(steps, steps.size() - 1, DevelopState{}, {}, std::nullopt);
         return textAt(model, steps.size() - 1);
     }
 };
@@ -298,7 +299,7 @@ TEST_CASE("Every local control has wording", "[app][history][local]") {
         BuiltStates built{withLocalAdjustmentAdded(DevelopState{}, LinearMask{})};
         built.then(withLocalDelta(built.last(), idOf(built.last(), 0), row.key, 10.0));
         HistoryModel model;
-        model.setHistory(built.steps, 1, DevelopState{}, {});
+        model.setHistory(built.steps, 1, DevelopState{}, {}, std::nullopt);
         const QString text = textAt(model, 1);
         CHECK(text.startsWith("Linear 1: "));
         CHECK(text.contains("+"));
@@ -405,7 +406,7 @@ TEST_CASE("A negative-only step is worded for the demosaic", "[app][history][neg
     built.steps.push_back(both);
 
     HistoryModel model;
-    model.setHistory(built.steps, 3, both.state, both.negative);
+    model.setHistory(built.steps, 3, both.state, both.negative, std::nullopt);
     CHECK(textAt(model, 2) == "Demosaic: VNG");
     CHECK(textAt(model, 3) == "2 changes");
 
@@ -453,7 +454,7 @@ TEST_CASE("A lens step is worded for the correction and for the lens", "[app][hi
     built.steps.push_back(none);
 
     HistoryModel model;
-    model.setHistory(built.steps, 8, none.state, none.negative);
+    model.setHistory(built.steps, 8, none.state, none.negative, std::nullopt);
     CHECK(textAt(model, 2) == "Lens: distortion on");
     CHECK(textAt(model, 3) == "Lens: distortion off");
     CHECK(textAt(model, 4) == "Lens corrections");
@@ -461,4 +462,29 @@ TEST_CASE("A lens step is worded for the correction and for the lens", "[app][hi
     CHECK(textAt(model, 6) == "2 changes");
     CHECK(textAt(model, 7) == "Lens: vignetting 60%");
     CHECK(textAt(model, 8) == "Lens: vignetting off");
+}
+
+TEST_CASE("A restore step is worded with the snapshot's name", "[app][history]") {
+    Built built;
+    built.then([](DevelopSettings& s) { s.tone.exposure = 1.0F; }, EditOrigin::Restore, "Warm");
+    HistoryModel model;
+    model.setHistory(built.steps, 1, DevelopState{}, {}, std::nullopt);
+
+    CHECK(textAt(model, 1) == "Restore snapshot: Warm");
+}
+
+TEST_CASE("The saved marker compares the base too", "[app][history]") {
+    DevelopState state;
+    HistoryStep opened{state, EditOrigin::Opened, {}, {}, std::nullopt};
+    HistoryStep based{state, EditOrigin::Restore, "A", {}, SnapshotId{1}};
+    const std::vector<HistoryStep> steps{opened, based};
+    HistoryModel model;
+
+    model.setHistory(steps, 1, state, {}, SnapshotId{1});
+    CHECK_FALSE(model.data(model.index(model.rowOfIndex(0)), HistoryModel::SavedRole).toBool());
+    CHECK(model.data(model.index(model.rowOfIndex(1)), HistoryModel::SavedRole).toBool());
+
+    model.setHistory(steps, 1, state, {}, std::nullopt);
+    CHECK(model.data(model.index(model.rowOfIndex(0)), HistoryModel::SavedRole).toBool());
+    CHECK_FALSE(model.data(model.index(model.rowOfIndex(1)), HistoryModel::SavedRole).toBool());
 }

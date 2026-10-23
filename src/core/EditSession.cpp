@@ -5,6 +5,7 @@
 #include <Sidecar.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <optional>
 #include <stdexcept>
@@ -19,7 +20,7 @@ void EditSession::begin() {
     if (editing()) {
         commit();
     }
-    baseline_ = Baseline{photo_.state(), photo_.negative()};
+    baseline_ = Baseline{photo_.state(), photo_.negative(), base_};
 }
 
 void EditSession::update(DevelopState state) {
@@ -43,15 +44,19 @@ Photo EditSession::withLensRecorded(const LensSettings& before, const Photo& aft
     return recordLensMatch(after, *lensDatabase_);
 }
 
+void EditSession::appendStep(HistoryStep step) {
+    history_.erase(history_.begin() + static_cast<std::ptrdiff_t>(position_) + 1, history_.end());
+    history_.push_back(std::move(step));
+    ++position_;
+}
+
 void EditSession::commitPhoto(Photo next, EditOrigin origin, std::string detail) {
     Baseline before = std::move(*baseline_);
     baseline_.reset();
     photo_ = std::move(next);
-    if (before.state != photo_.state() || before.negative != photo_.negative()) {
-        history_.erase(history_.begin() + static_cast<std::ptrdiff_t>(position_) + 1,
-                       history_.end());
-        history_.push_back({photo_.state(), origin, std::move(detail), photo_.negative()});
-        ++position_;
+    if (before.state != photo_.state() || before.negative != photo_.negative() ||
+        before.base != base_) {
+        appendStep({photo_.state(), origin, std::move(detail), photo_.negative(), base_});
     }
 }
 
@@ -70,6 +75,7 @@ void EditSession::cancel() {
     }
     // The baseline was valid when it was taken, so this cannot throw on its contents.
     photo_ = photo_.with(std::move(baseline_->negative)).with(std::move(baseline_->state));
+    base_ = baseline_->base;
     baseline_.reset();
 }
 
@@ -112,13 +118,12 @@ void EditSession::setState(NegativeSettings negative, DevelopState state, EditOr
         return;
     }
     photo_ = std::move(next);
-    history_.erase(history_.begin() + static_cast<std::ptrdiff_t>(position_) + 1, history_.end());
-    history_.push_back({photo_.state(), origin, std::move(detail), photo_.negative()});
-    ++position_;
+    appendStep({photo_.state(), origin, std::move(detail), photo_.negative(), base_});
 }
 
 bool EditSession::baselineIsCurrent() const noexcept {
-    return baseline_->state == photo_.state() && baseline_->negative == photo_.negative();
+    return baseline_->state == photo_.state() && baseline_->negative == photo_.negative() &&
+           baseline_->base == base_;
 }
 
 bool EditSession::canUndo() const noexcept {
@@ -138,6 +143,7 @@ void EditSession::goTo(std::size_t index) {
         throw std::out_of_range("There is no history step " + std::to_string(index));
     }
     photo_ = photo_.with(history_[index].negative).with(history_[index].state);
+    base_ = history_[index].baseSnapshot;
     position_ = index;
 }
 
@@ -164,9 +170,27 @@ void EditSession::redo() {
 void EditSession::save() {
     // The photograph as the commit will leave it, matched before anything is written or changed.
     Photo next = editing() ? withLensRecorded(baseline_->negative.lens, photo_) : photo_;
-    // Written first, so a failure leaves even an open edit open.
-    writeSidecar(next);
+    // Written first, so a failure leaves even an open edit open. No marks are named: setMarks()
+    // writes them at once, so the session never holds a mark it has not written.
+    const auto write = [&] {
+        if (baseKnown_ || base_ != savedBase_) {
+            writeSidecar(next, base_, MarkChanges{});
+        } else {
+            // The saved base is unknown, and so left as the file has it.
+            writeSidecar(next);
+        }
+    };
+    try {
+        write();
+    } catch (const SnapshotBaseMissing&) {
+        // Another process deleted the base since the session read the list. Read it again,
+        // remap to the nearest survivor, and try once more; the refresh stands if this fails.
+        refreshSnapshots();
+        write();
+    }
     saved_ = next;
+    baseKnown_ = baseKnown_ || base_ != savedBase_;
+    savedBase_ = base_;
     if (editing()) {
         commitPhoto(std::move(next), EditOrigin::Edit, {});
     }
@@ -176,16 +200,146 @@ void EditSession::setMarks(PhotoMarks marks) {
     // Both are checked and written before anything changes.
     Photo saved = saved_.with(marks);
     Photo current = photo_.with(marks);
-    writeSidecar(saved);
+    // Only the marks that differ: a recipe or rating another process wrote is not put back.
+    writeSidecarMarkChanges(saved_.path(), changedMarks(saved_.marks(), marks));
     saved_ = std::move(saved);
     photo_ = std::move(current);
 }
 
 void EditSession::discardChanges() {
     photo_ = saved_;
+    base_ = savedBase_;
     baseline_.reset();
-    history_ = {{saved_.state(), EditOrigin::Opened, {}, saved_.negative()}};
+    history_ = {{saved_.state(), EditOrigin::Opened, {}, saved_.negative(), savedBase_}};
     position_ = 0;
+}
+
+std::optional<SnapshotId> EditSession::survivor(std::optional<SnapshotId> id,
+                                                const SnapshotCollection& fresh) const {
+    // The held collection has no cycle, and the walk is bounded all the same.
+    for (std::size_t steps = 0; id && fresh.find(*id) == nullptr; ++steps) {
+        const Snapshot* known = steps <= snapshots_.entries.size() ? snapshots_.find(*id) : nullptr;
+        id = known != nullptr ? known->parent : std::nullopt;
+    }
+    return id;
+}
+
+void EditSession::adopt(SnapshotCollection fresh) {
+    base_ = survivor(base_, fresh);
+    savedBase_ = survivor(savedBase_, fresh);
+    if (baseline_) {
+        baseline_->base = survivor(baseline_->base, fresh);
+    }
+    for (HistoryStep& step : history_) {
+        step.baseSnapshot = survivor(step.baseSnapshot, fresh);
+    }
+    snapshots_ = std::move(fresh);
+}
+
+void EditSession::refreshSnapshots() {
+    const std::optional<SidecarContents> contents = readSidecar(photo_.path());
+    adopt(contents ? contents->snapshots : SnapshotCollection{});
+}
+
+void EditSession::refreshAfterConflict() noexcept {
+    try {
+        refreshSnapshots();
+    } catch (...) {
+        // The conflict is the error to report; the collection stays as it was.
+    }
+}
+
+void EditSession::replaceBase(SnapshotId gone, std::optional<SnapshotId> instead) {
+    const auto swap = [&](std::optional<SnapshotId>& base) {
+        if (base == gone) {
+            base = instead;
+        }
+    };
+    swap(base_);
+    swap(savedBase_);
+    if (baseline_) {
+        swap(baseline_->base);
+    }
+    for (HistoryStep& step : history_) {
+        swap(step.baseSnapshot);
+    }
+}
+
+SnapshotId EditSession::createSnapshot(std::string name) {
+    // The photograph as settling a gesture will leave it; matched before anything is written.
+    Photo next = editing() ? withLensRecorded(baseline_->negative.lens, photo_) : photo_;
+    Snapshot draft;
+    draft.parent = base_;
+    draft.name = std::move(name);
+    draft.created = std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now());
+    draft.state = next.state();
+    draft.negative = next.negative();
+    SnapshotUpdate update;
+    try {
+        update = addSnapshot(photo_.path(), snapshots_.revision, std::move(draft));
+    } catch (const SnapshotRevisionConflict&) {
+        refreshAfterConflict();
+        throw;
+    }
+    // Written: now the session changes. The gesture is settled first, and the step it makes,
+    // or the position it leaves current, is the one the new snapshot anchors.
+    if (editing()) {
+        commitPhoto(std::move(next), EditOrigin::Edit, {});
+    }
+    snapshots_ = std::move(update.collection);
+    base_ = update.id;
+    history_[position_].baseSnapshot = update.id;
+    return update.id;
+}
+
+void EditSession::restoreSnapshot(SnapshotId id) {
+    const Snapshot* found = snapshots_.find(id);
+    if (found == nullptr) {
+        throw std::invalid_argument("There is no snapshot " + std::to_string(id.value));
+    }
+    // Copied: committing below cannot change the collection, but a copy keeps that obvious.
+    const Snapshot snapshot = *found;
+    // The snapshot's own recipe, exactly: no lens is matched again. Built before the open edit
+    // is committed, so a recipe that is refused leaves the edit open.
+    Photo next = photo_.with(snapshot.negative).with(snapshot.state);
+    if (editing()) {
+        commit();
+        next = photo_.with(snapshot.negative).with(snapshot.state);
+    }
+    if (next.state() == photo_.state() && next.negative() == photo_.negative() && base_ == id) {
+        return;
+    }
+    photo_ = std::move(next);
+    base_ = id;
+    appendStep({photo_.state(), EditOrigin::Restore, snapshot.name, photo_.negative(), base_});
+}
+
+void EditSession::renameSnapshot(SnapshotId id, std::string name) {
+    if (snapshots_.find(id) == nullptr) {
+        throw std::invalid_argument("There is no snapshot " + std::to_string(id.value));
+    }
+    try {
+        snapshots_ = arraw::renameSnapshot(photo_.path(), snapshots_.revision, id, std::move(name))
+                         .collection;
+    } catch (const SnapshotRevisionConflict&) {
+        refreshAfterConflict();
+        throw;
+    }
+}
+
+void EditSession::deleteSnapshot(SnapshotId id) {
+    const Snapshot* found = snapshots_.find(id);
+    if (found == nullptr) {
+        throw std::invalid_argument("There is no snapshot " + std::to_string(id.value));
+    }
+    const std::optional<SnapshotId> parent = found->parent;
+    try {
+        snapshots_ = arraw::deleteSnapshot(photo_.path(), snapshots_.revision, id).collection;
+    } catch (const SnapshotRevisionConflict&) {
+        refreshAfterConflict();
+        throw;
+    }
+    replaceBase(id, parent);
 }
 
 namespace {

@@ -120,11 +120,6 @@ Snapshot draft(std::string name, float exposure = 0.5F, std::optional<SnapshotId
     return snapshot;
 }
 
-/// Key a snapshot's thumbnail carries in these tests: its name.
-std::string keyOf(const Snapshot& snapshot) {
-    return "key-" + snapshot.name;
-}
-
 /// A sidecar of one description: attributes, then child elements.
 std::string sidecarOf(const std::string& attributes, const std::string& body = {}) {
     return R"(<x:xmpmeta xmlns:x="adobe:ns:meta/">
@@ -297,8 +292,7 @@ TEST_CASE("A thumbnail with a bad render key never reaches the sidecar", "[snaps
 
     const SnapshotId id = addSnapshot(bench.photo, 0, draft("Look")).id;
     const std::string before = slurp(bench.sidecar);
-    CHECK_THROWS_AS(setSnapshotThumbnail(bench.photo, id, thumbnailOf(8, 8, "a\rb"),
-                                         [](const Snapshot&) { return std::string("a\rb"); }),
+    CHECK_THROWS_AS(setSnapshotThumbnail(bench.photo, id, thumbnailOf(8, 8, "a\rb"), "a\rb"),
                     std::invalid_argument);
     CHECK(slurp(bench.sidecar) == before);
     CHECK_NOTHROW(bench.read());
@@ -572,7 +566,8 @@ TEST_CASE("A thumbnail is attached by id and key, and is not structural",
     const SnapshotId first = addSnapshot(bench.photo, 0, draft("First")).id;
     const SnapshotId second = addSnapshot(bench.photo, 1, draft("Second")).id;
 
-    REQUIRE(setSnapshotThumbnail(bench.photo, first, thumbnailOf(32, 24, "key-First"), keyOf));
+    REQUIRE(
+        setSnapshotThumbnail(bench.photo, first, thumbnailOf(32, 24, "key-First"), "key-First"));
     OpenDocument document = openDocument(bench.photo);
     CHECK(document.snapshots.revision == 2);
     REQUIRE(document.snapshots.find(first)->thumbnail);
@@ -580,30 +575,35 @@ TEST_CASE("A thumbnail is attached by id and key, and is not structural",
     CHECK_FALSE(document.snapshots.find(second)->thumbnail);
 
     // It is replaceable.
-    REQUIRE(setSnapshotThumbnail(bench.photo, first, thumbnailOf(16, 12, "key-First"), keyOf));
+    REQUIRE(
+        setSnapshotThumbnail(bench.photo, first, thumbnailOf(16, 12, "key-First"), "key-First"));
     CHECK(openDocument(bench.photo).snapshots.find(first)->thumbnail->jpeg.size() !=
           document.snapshots.find(first)->thumbnail->jpeg.size());
 
     // A key that is no longer the node's, or an id that is gone, writes nothing.
     const std::string before = slurp(bench.sidecar);
-    CHECK_FALSE(setSnapshotThumbnail(bench.photo, second, thumbnailOf(8, 8, "key-Old"), keyOf));
     CHECK_FALSE(
-        setSnapshotThumbnail(bench.photo, SnapshotId{9}, thumbnailOf(8, 8, "key-Z"), keyOf));
+        setSnapshotThumbnail(bench.photo, second, thumbnailOf(8, 8, "key-Old"), "key-Second"));
+    CHECK_FALSE(
+        setSnapshotThumbnail(bench.photo, SnapshotId{9}, thumbnailOf(8, 8, "key-Z"), "key-Z"));
     CHECK(slurp(bench.sidecar) == before);
     CHECK_THROWS_AS(
-        setSnapshotThumbnail(bench.photo, second, thumbnailOf(300, 8, "key-Second"), keyOf),
+        setSnapshotThumbnail(bench.photo, second, thumbnailOf(300, 8, "key-Second"), "key-Second"),
         std::invalid_argument);
 
-    // The key names the node's recipe as the caller sees it. A rename in between changes the key,
-    // so the late thumbnail made for the old name is dropped and the rename is kept ...
+    // The caller's expected key is compared with the key the thumbnail carries: one made for
+    // another key is dropped. The file does not recompute keys; that rests on recipes being
+    // immutable and IDs unique. A rename in between is kept ...
     renameSnapshot(bench.photo, 2, first, "Renamed");
     const std::string renamed = slurp(bench.sidecar);
-    CHECK_FALSE(setSnapshotThumbnail(bench.photo, first, thumbnailOf(8, 8, "key-First"), keyOf));
+    CHECK_FALSE(
+        setSnapshotThumbnail(bench.photo, first, thumbnailOf(8, 8, "key-First"), "key-Renamed"));
     CHECK(slurp(bench.sidecar) == renamed);
     CHECK(openDocument(bench.photo).snapshots.find(first)->name == "Renamed");
     // ... while a sibling's rename does not disturb a patch of this node, nor the revision.
     renameSnapshot(bench.photo, 3, second, "Sibling");
-    REQUIRE(setSnapshotThumbnail(bench.photo, first, thumbnailOf(8, 8, "key-Renamed"), keyOf));
+    REQUIRE(
+        setSnapshotThumbnail(bench.photo, first, thumbnailOf(8, 8, "key-Renamed"), "key-Renamed"));
     document = openDocument(bench.photo);
     CHECK(document.snapshots.find(second)->name == "Sibling");
     CHECK(document.snapshots.find(first)->name == "Renamed");
@@ -611,7 +611,8 @@ TEST_CASE("A thumbnail is attached by id and key, and is not structural",
 
     // A deleted node's late thumbnail does not come back.
     deleteSnapshot(bench.photo, 4, second);
-    CHECK_FALSE(setSnapshotThumbnail(bench.photo, second, thumbnailOf(8, 8, "key-Sibling"), keyOf));
+    CHECK_FALSE(
+        setSnapshotThumbnail(bench.photo, second, thumbnailOf(8, 8, "key-Sibling"), "key-Sibling"));
     document = openDocument(bench.photo);
     CHECK(document.snapshots.entries.size() == 1);
     CHECK(document.snapshots.revision == 5);
@@ -683,7 +684,7 @@ TEST_CASE("A RAW with no saved settings stays at its defaults through every v2 w
         requireDefaults();
         CHECK(bench.read().marks.rating == 3);
 
-        REQUIRE(setSnapshotThumbnail(bench.photo, id, thumbnailOf(16, 16, "key-Look"), keyOf));
+        REQUIRE(setSnapshotThumbnail(bench.photo, id, thumbnailOf(16, 16, "key-Look"), "key-Look"));
         requireDefaults();
         CHECK(bench.read().marks.rating == 3);
         CHECK(bench.read().snapshots.entries.size() == 1);
@@ -720,7 +721,7 @@ TEST_CASE("A RAW with no saved settings stays at its defaults through every v2 w
         CHECK(bench.read().state->settings.tone.exposure == 1.5F);
         const SnapshotId id = addSnapshot(bench.photo, 0, draft("Look")).id;
         CHECK(bench.read().state->settings.tone.exposure == 1.5F);
-        REQUIRE(setSnapshotThumbnail(bench.photo, id, thumbnailOf(8, 8, "key-Look"), keyOf));
+        REQUIRE(setSnapshotThumbnail(bench.photo, id, thumbnailOf(8, 8, "key-Look"), "key-Look"));
         REQUIRE(bench.read().state);
         CHECK(bench.read().state->settings.tone.exposure == 1.5F);
         CHECK(contains(slurp(bench.sidecar), "arraw:activeStatePresent=\"True\""));
@@ -889,7 +890,7 @@ TEST_CASE("A newer sidecar is refused by every snapshot writer", "[snapshots][ve
     CHECK_THROWS_AS(renameSnapshot(bench.photo, 0, SnapshotId{1}, "x"), std::runtime_error);
     CHECK_THROWS_AS(deleteSnapshot(bench.photo, 0, SnapshotId{1}), std::runtime_error);
     CHECK_THROWS_AS(
-        setSnapshotThumbnail(bench.photo, SnapshotId{1}, thumbnailOf(8, 8, "key-Look"), keyOf),
+        setSnapshotThumbnail(bench.photo, SnapshotId{1}, thumbnailOf(8, 8, "key-Look"), "key-Look"),
         std::runtime_error);
     CHECK_THROWS_AS(writeSidecarMarks(bench.photo, {.rating = 1}), std::runtime_error);
     CHECK(slurp(bench.sidecar) == newer);
@@ -903,7 +904,8 @@ TEST_CASE("Foreign XMP survives every snapshot write", "[snapshots][foreign]") {
 
     const SnapshotId first = addSnapshot(bench.photo, 0, draft("First")).id;
     renameSnapshot(bench.photo, 1, first, "Renamed");
-    REQUIRE(setSnapshotThumbnail(bench.photo, first, thumbnailOf(8, 8, "key-Renamed"), keyOf));
+    REQUIRE(
+        setSnapshotThumbnail(bench.photo, first, thumbnailOf(8, 8, "key-Renamed"), "key-Renamed"));
     const SnapshotId second = addSnapshot(bench.photo, 2, draft("Second")).id;
     deleteSnapshot(bench.photo, 3, second);
     writeSidecarMarks(bench.photo, {.rating = 2});
@@ -1014,7 +1016,7 @@ TEST_CASE("A writer gives up after the lock timeout and leaves the file alone",
         timesOut([&] { deleteSnapshot(bench.photo, 1, first); });
     }
     SECTION("thumbnail") {
-        timesOut([&] { setSnapshotThumbnail(bench.photo, first, thumbnail, keyOf); });
+        timesOut([&] { setSnapshotThumbnail(bench.photo, first, thumbnail, thumbnail.renderKey); });
     }
     SECTION("Save") {
         timesOut([&] { writeSidecar(opened); });
@@ -1057,6 +1059,26 @@ TEST_CASE("A lock left by a writer that is gone is broken", "[snapshots][lock]")
     CHECK(openDocument(bench.photo).snapshots.find(first)->name == "Despite stale lock");
 }
 #endif
+
+TEST_CASE("A lock held by a live writer is respected whatever its age", "[snapshots][lock]") {
+    // Qt judges a lock whose owner still runs (same host, pid and application) by that alone, so
+    // a slow writer is never overtaken; only a dead owner's lock is broken (see above).
+    const Bench bench;
+    const SnapshotId first = addSnapshot(bench.photo, 0, draft("First")).id;
+    const int savedStale = detail::sidecarStaleLock;
+    const int savedTimeout = detail::sidecarLockTimeout;
+    detail::sidecarStaleLock = 150;
+    detail::sidecarLockTimeout = 100;
+    QLockFile lock(QString::fromStdString(bench.sidecar.string() + ".lock"));
+    lock.setStaleLockTime(0);
+    REQUIRE(lock.tryLock(100));
+    std::this_thread::sleep_for(std::chrono::milliseconds(400));
+
+    CHECK_THROWS_AS(renameSnapshot(bench.photo, 1, first, "Overtaken"), SidecarLockTimeout);
+
+    detail::sidecarStaleLock = savedStale;
+    detail::sidecarLockTimeout = savedTimeout;
+}
 
 TEST_CASE("Concurrent writers of every kind all land", "[snapshots][concurrent]") {
     const Bench bench;
@@ -1129,8 +1151,10 @@ TEST_CASE("Concurrent writers of every kind all land", "[snapshots][concurrent]"
             for (std::size_t i = 0; i < seeded.size(); ++i) {
                 persist(
                     [&] {
-                        patched +=
-                            setSnapshotThumbnail(bench.photo, seeded[i], patches[i], keyOf) ? 1 : 0;
+                        patched += setSnapshotThumbnail(bench.photo, seeded[i], patches[i],
+                                                        patches[i].renderKey)
+                                       ? 1
+                                       : 0;
                         return true;
                     },
                     "thumbnail " + std::to_string(i));
@@ -1238,7 +1262,8 @@ TEST_CASE("Damaged snapshot data is reported and skipped, and the photograph ope
         CHECK(extra.value == 13);
         renameSnapshot(bench.photo, 6, SnapshotId{1}, "Renamed");
         deleteSnapshot(bench.photo, 7, SnapshotId{4});
-        setSnapshotThumbnail(bench.photo, SnapshotId{1}, thumbnailOf(8, 8, "key-Renamed"), keyOf);
+        setSnapshotThumbnail(bench.photo, SnapshotId{1}, thumbnailOf(8, 8, "key-Renamed"),
+                             "key-Renamed");
         const std::string text = slurp(bench.sidecar);
         CHECK(contains(text, "{ not json"));
         CHECK(contains(text, "Bad state"));
@@ -1365,6 +1390,24 @@ TEST_CASE("Unusable entries that fill the list are named in the refusal", "[snap
     CHECK(openDocument(bench.photo).snapshots.entries.size() == 20);
     CHECK_THROWS_WITH(addSnapshot(bench.photo, 0, draft("x")),
                       ContainsSubstring("20 of them usable"));
+    CHECK_THROWS_WITH(addSnapshot(bench.photo, 0, draft("x")),
+                      ContainsSubstring("12 unreadable entries"));
+    // A snapshot that is not there says, once unreadable entries exist, that it may be one of them.
+    CHECK_THROWS_WITH(renameSnapshot(bench.photo, 0, SnapshotId{25}, "x"),
+                      ContainsSubstring("no usable snapshot 25") &&
+                          ContainsSubstring("12 unreadable entries"));
+}
+
+TEST_CASE("A missing snapshot of a healthy list is a plain refusal", "[snapshots][damaged]") {
+    const Bench bench;
+    addSnapshot(bench.photo, 0, draft("First"));
+    CHECK_THROWS_WITH(deleteSnapshot(bench.photo, 1, SnapshotId{7}),
+                      ContainsSubstring("no usable snapshot 7"));
+    try {
+        deleteSnapshot(bench.photo, 1, SnapshotId{7});
+    } catch (const std::invalid_argument& error) {
+        CHECK_THAT(error.what(), !ContainsSubstring("unreadable"));
+    }
 }
 
 namespace {
@@ -1426,9 +1469,9 @@ TEST_CASE("The snapshot list may serialize to the limit and not a byte more",
         }();
         const SubtreeLimit limit(size);
         const std::string before = slurp(bench.sidecar);
-        CHECK_THROWS_AS(
-            setSnapshotThumbnail(bench.photo, id, thumbnailOf(8, 8, "key-" + wide.name), keyOf),
-            std::invalid_argument);
+        CHECK_THROWS_AS(setSnapshotThumbnail(bench.photo, id, thumbnailOf(8, 8, "key-" + wide.name),
+                                             "key-" + wide.name),
+                        std::invalid_argument);
         CHECK(slurp(bench.sidecar) == before);
     }
 }
@@ -1651,9 +1694,9 @@ TEST_CASE("Foreign and future content inside and around snapshot nodes survives 
     renameSnapshot(bench.photo, 4, SnapshotId{1}, "One renamed");
     renameSnapshot(bench.photo, 5, SnapshotId{2}, "Two renamed");
     REQUIRE(setSnapshotThumbnail(bench.photo, SnapshotId{2}, thumbnailOf(8, 8, "key-Two renamed"),
-                                 keyOf));
+                                 "key-Two renamed"));
     REQUIRE(setSnapshotThumbnail(bench.photo, SnapshotId{1}, thumbnailOf(8, 8, "key-One renamed"),
-                                 keyOf));
+                                 "key-One renamed"));
     deleteSnapshot(bench.photo, 6, three);
     writeSidecarMarks(bench.photo, {.rating = 2});
 

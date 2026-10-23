@@ -38,8 +38,10 @@ public:
     /// @param position Index of the current step.
     /// @param saved State on disk, to mark the steps that equal it.
     /// @param savedNegative Negative settings on disk, which a step must also equal.
+    /// @param savedBase Working base on disk, which a step must also equal.
     void setHistory(const std::vector<HistoryStep>& history, std::size_t position,
-                    const DevelopState& saved, const NegativeSettings& savedNegative);
+                    const DevelopState& saved, const NegativeSettings& savedNegative,
+                    std::optional<SnapshotId> savedBase);
 
     /// @brief Shows no steps.
     void clear();
@@ -73,6 +75,7 @@ private:
     std::size_t position_ = 0;
     std::optional<DevelopState> saved_;
     NegativeSettings savedNegative_;
+    std::optional<SnapshotId> savedBase_;
 };
 
 } // namespace arraw::app
