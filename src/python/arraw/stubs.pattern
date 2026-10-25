@@ -25,5 +25,15 @@ LinearMask\.__suffix__:
     def from_(self) -> tuple[float, float]:
         """Where the weight is 1: a (u, v) point normalised to the corrected frame."""
 
+SnapshotRevisionConflict\.__suffix__:
+    expected: int
+    """Revision the session saw. Set when arraw raised it; absent on one built in Python."""
+    actual: int
+    """Revision the sidecar holds. Set when arraw raised it; absent on one built in Python."""
+
+SnapshotBaseMissing\.__suffix__:
+    base: SnapshotId
+    """Snapshot the save named. Set when arraw raised it; absent on one built in Python."""
+
 _arraw\.__suffix__:
     __version__: str

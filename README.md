@@ -60,6 +60,8 @@ arraw-cli export photo.arw -o out/ --exposure -0.5 --temperature 3200   # RAW on
 arraw-cli export photo.arw -o out/ --rotate 2.5 --crop-aspect 3:2
 arraw-cli export photo.arw -o out/ --rotate 90 --crop 0.1,0.2,0.8,0.9
 arraw-cli export photo.arw -o out/ --device gpu --gpu-backend vulkan   # no CPU fallback
+arraw-cli info photo.arw                  # includes the snapshots of its sidecar and their IDs
+arraw-cli export photo.arw -o out/ --snapshot 2   # render the look of snapshot 2 (see `info`)
 arraw-cli gpu-test                        # check the GPU backend works on this machine
 ```
 

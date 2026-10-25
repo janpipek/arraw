@@ -25,14 +25,18 @@
 #include <ShortestDecimal.h>
 #include <Shot.h>
 #include <Sidecar.h>
+#include <Snapshots.h>
 
 #include <QCommandLineParser>
+#include <QDateTime>
 #include <QString>
 #include <QStringList>
+#include <QTimeZone>
 
 #include <algorithm>
 #include <cctype>
 #include <charconv>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <exception>
@@ -120,6 +124,15 @@ struct FileReport {
 
     /// @brief The lens of a RAW, resolved; shown only when it has something to say.
     LensReport lens;
+
+    /// @brief Snapshots the sidecar lists, when it was read.
+    SnapshotCollection snapshots;
+
+    /// @brief Snapshot the saved recipe is based on, when the sidecar says and it exists.
+    std::optional<SnapshotId> savedBase;
+
+    /// @brief Raw snapshot entries in the sidecar this arraw cannot use.
+    std::size_t unreadableSnapshots = 0;
 };
 
 /// @brief Reports a usage problem of `info`.
@@ -162,6 +175,11 @@ void configure(QCommandLineParser& parser) {
         "each was resolved for (read from the file or assumed). A correction that cannot be\n"
         "applied is reported as a diagnostic that names the reason. --json gives a\n"
         "\"lensCorrection\" object.\n"
+        "A photograph with snapshots lists each with its ID, parent ID, name and creation\n"
+        "time (UTC), the saved base (the snapshot the saved settings are based on), and a\n"
+        "note when the sidecar holds snapshot entries this arraw cannot use. --json gives\n"
+        "\"snapshots\", \"savedBase\" and \"unreadableSnapshots\", with IDs as decimal\n"
+        "strings. Thumbnails are never printed. `export --snapshot ID` exports one.\n"
         "The command never writes anything.");
     parser.addHelpOption();
     parser.addOption({"all", "List every develop setting, not only those that differ."});
@@ -682,6 +700,57 @@ std::string lensJson(const LensReport& report) {
            ", \"lateralCa\": " + provenance(report.correction.lateralCaFrom) + "}";
 }
 
+/// @brief Spells a snapshot's creation time as ISO 8601 in UTC, as the sidecar does.
+std::string snapshotTime(std::chrono::sys_seconds time) {
+    return QDateTime::fromSecsSinceEpoch(time.time_since_epoch().count(), QTimeZone::UTC)
+        .toString(Qt::ISODate)
+        .toStdString();
+}
+
+/// @brief Spells a snapshot ID, a decimal number.
+std::string idText(SnapshotId id) {
+    return std::to_string(id.value);
+}
+
+/// @brief Writes the snapshots of a photograph, nothing when it has none to report.
+void writeSnapshots(std::ostream& out, const FileReport& report) {
+    const SnapshotCollection& snapshots = report.snapshots;
+    if (!snapshots.entries.empty()) {
+        out << "  snapshots:\n";
+        for (const Snapshot& snapshot : snapshots.entries) {
+            out << "    " << idText(snapshot.id) << ": " << cli::terminalText(snapshot.name)
+                << " (parent " << (snapshot.parent ? idText(*snapshot.parent) : std::string("none"))
+                << ", created " << snapshotTime(snapshot.created) << ")\n";
+        }
+    }
+    if (!snapshots.entries.empty() || report.savedBase) {
+        out << "  saved base: " << (report.savedBase ? idText(*report.savedBase) : "none") << '\n';
+    }
+    if (report.unreadableSnapshots > 0) {
+        out << "  unreadable snapshot entries: " << report.unreadableSnapshots
+            << " (kept in the sidecar and counted toward the limit of " << maximumSnapshots
+            << "; the app can discard them)\n";
+    }
+}
+
+/// @brief Spells the snapshots of a photograph as the JSON members `snapshots`, `savedBase` and
+/// `unreadableSnapshots`, with IDs as decimal strings and without thumbnails.
+std::string snapshotsJson(const FileReport& report) {
+    std::string text = "\"snapshots\": [";
+    bool first = true;
+    for (const Snapshot& snapshot : report.snapshots.entries) {
+        text += first ? "" : ", ";
+        first = false;
+        text += "{\"id\": " + jsonString(idText(snapshot.id)) + ", \"parent\": " +
+                (snapshot.parent ? jsonString(idText(*snapshot.parent)) : "null") +
+                ", \"name\": " + jsonString(snapshot.name) +
+                ", \"created\": " + jsonString(snapshotTime(snapshot.created)) + "}";
+    }
+    return text + "], \"savedBase\": " +
+           (report.savedBase ? jsonString(idText(*report.savedBase)) : "null") +
+           ", \"unreadableSnapshots\": " + std::to_string(report.unreadableSnapshots);
+}
+
 /// @brief Writes one file as lines of text.
 void writeText(std::ostream& out, const FileReport& report, bool all) {
     const Photo& photo = report.photo;
@@ -719,6 +788,7 @@ void writeText(std::ostream& out, const FileReport& report, bool all) {
     if (marks.label) {
         out << "  label: " << labelName(*marks.label) << '\n';
     }
+    writeSnapshots(out, report);
     if (report.creatorTool || !report.others.empty()) {
         out << "  other tools:\n";
         if (report.creatorTool) {
@@ -785,7 +855,7 @@ std::string jsonOfReport(const FileReport& report, bool all) {
                 ", \"properties\": " + std::to_string(other.properties) +
                 ", \"owner\": " + (owner ? jsonString(*owner) : "null") + "}";
     }
-    text += "], \"settings\": {";
+    text += "], " + snapshotsJson(report) + ", \"settings\": {";
     bool first = true;
     for (const auto& [descriptor, value] :
          listedSettings(withoutUnusedSettings(photo.state().settings, isRaw(metadata)), all)) {
@@ -855,6 +925,9 @@ FileReport open(const InfoRequest& request, const std::filesystem::path& input,
     if (contents) {
         report.creatorTool = contents->creatorTool;
         report.others = contents->others;
+        report.snapshots = contents->snapshots;
+        report.savedBase = contents->savedBase;
+        report.unreadableSnapshots = contents->unreadableSnapshots;
     }
     return report;
 }

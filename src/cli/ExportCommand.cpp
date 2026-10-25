@@ -32,6 +32,7 @@
 #include <Photo.h>
 #include <SettingDescriptors.h>
 #include <ShortestDecimal.h>
+#include <Snapshots.h>
 #include <ToneCurveSettings.h>
 #include <WhiteBalance.h>
 
@@ -186,6 +187,8 @@ struct ExportRequest {
     cli::LensOptions lens;
     /// @brief Whether each photograph's sidecar is read; false is `--no-sidecar`.
     bool useSidecars = true;
+    /// @brief Snapshot `--snapshot` names; each photograph is developed as it says (ADR 056).
+    std::optional<SnapshotId> snapshot;
     ExportOptions options;
     /// @brief Metadata groups each export carries from its photograph (ADR 032).
     MetadataSelection metadata;
@@ -248,6 +251,20 @@ std::optional<ResizeFilter> parseResizeFilter(const std::string& name) {
 /// @brief Reports a usage problem and the exit code that goes with it.
 int usageError(std::ostream& err, const std::string& message) {
     return cli::commandUsageError(err, "export", message);
+}
+
+/// @brief Reads a snapshot ID: plain decimal digits, nonzero, within 64 bits.
+/// @return The ID, or nothing for anything else (a sign, a space, a prefix, a fraction).
+std::optional<SnapshotId> parseSnapshotId(std::string_view text) {
+    const bool digits =
+        !text.empty() && std::ranges::all_of(text, [](char c) { return c >= '0' && c <= '9'; });
+    std::uint64_t value = 0;
+    if (!digits ||
+        std::from_chars(text.data(), text.data() + text.size(), value).ec != std::errc{} ||
+        value == 0) {
+        return std::nullopt;
+    }
+    return SnapshotId{value};
 }
 
 /// @brief Reads a named option as an integer.
@@ -661,6 +678,9 @@ void configure(QCommandLineParser& parser) {
         "With no develop settings an export is a faithful conversion of the image as\n"
         "captured, save for a gentle roll-off that bends the brightest values toward\n"
         "white instead of clipping them flat; --filmic-highlights 0 turns it off.\n"
+        "--snapshot ID exports the look of that snapshot of each photograph (`info` lists\n"
+        "them) instead of its saved settings; the flags still apply on top.\n"
+        "\n"
         "Each file renders through its own .xmp sidecar, if it has one: the develop\n"
         "settings given here are applied on top of the sidecar's and replace only what\n"
         "they name. --no-sidecar ignores sidecars, so the flags alone develop the file.\n"
@@ -813,6 +833,13 @@ void configure(QCommandLineParser& parser) {
                       "Ignore each photograph's .xmp sidecar: develop it from the defaults and "
                       "the flags alone. Without it, the flags are applied on top of the sidecar's "
                       "settings. The command never writes a sidecar."});
+    parser.addOption({"snapshot",
+                      "Export each photograph as its snapshot with this ID looks (its develop "
+                      "state and negative settings, exactly, with no lens matched again), then "
+                      "apply the other flags on top. IDs are the decimal numbers `info` lists. "
+                      "A photograph without such a snapshot fails. Conflicts with --no-sidecar. "
+                      "Repeat the command with other --output folders for other snapshots.",
+                      "id"});
     parser.addOption({"no-profile", "Convert colour but do not embed the output profile."});
     parser.addOption({"metadata",
                       "Metadata to carry from the photograph: all, none, or a comma-separated "
@@ -1042,6 +1069,26 @@ std::optional<ExportRequest> buildRequest(const QCommandLineParser& parser, std:
         request.metadata = *selection;
     }
     request.useSidecars = !parser.isSet("no-sidecar");
+    if (parser.isSet("snapshot")) {
+        if (!request.useSidecars) {
+            code = usageError(err, "--snapshot and --no-sidecar contradict: snapshots live in "
+                                   "the sidecar");
+            return std::nullopt;
+        }
+        if (parser.values("snapshot").size() > 1) {
+            code = usageError(err, "--snapshot is given twice; one export writes one look, so run "
+                                   "the command once per snapshot, each with its own --output");
+            return std::nullopt;
+        }
+        const std::string text = parser.value("snapshot").toStdString();
+        request.snapshot = parseSnapshotId(text);
+        if (!request.snapshot) {
+            code = usageError(err, "--snapshot takes a snapshot ID, a whole number above 0 in "
+                                   "plain decimal digits, not '" +
+                                       text + "'; `info` lists the IDs");
+            return std::nullopt;
+        }
+    }
     const auto filter = cli::readMarksFilter(parser, "export", err, code);
     if (!filter) {
         return std::nullopt;
@@ -1209,8 +1256,29 @@ int exportAll(const ExportRequest& request, std::ostream& err) {
             // photograph would export without the edits its photographer made
             // and the exit status would say all was well. --no-sidecar opts out.
             cli::SidecarWatch watch(log);
-            const Photo opened = request.useSidecars ? openPhoto(input, watch)
-                                                     : Photo(input, readImageMetadata(input, log));
+            std::optional<Photo> loaded;
+            if (request.useSidecars) {
+                OpenDocument document = openDocument(input, watch);
+                if (request.snapshot && !watch.unreadable) {
+                    // The snapshot's recipe exactly, before the flags (ADR 056, decision 10).
+                    const Snapshot* snapshot = document.snapshots.find(*request.snapshot);
+                    if (snapshot == nullptr) {
+                        throw std::runtime_error(
+                            "there is no snapshot " + std::to_string(request.snapshot->value) +
+                            " in its sidecar; `info` lists the snapshots it has" +
+                            (document.unreadableSnapshots > 0
+                                 ? " (it also holds " +
+                                       std::to_string(document.unreadableSnapshots) +
+                                       " entries this arraw cannot read)"
+                                 : std::string()));
+                    }
+                    document.photo = withSnapshot(document.photo, *snapshot);
+                }
+                loaded = std::move(document.photo);
+            } else {
+                loaded = Photo(input, readImageMetadata(input, log));
+            }
+            const Photo& opened = *loaded;
             if (watch.unreadable) {
                 throw std::runtime_error("its sidecar could not be read, so its edits are not "
                                          "applied; fix the sidecar, or pass --no-sidecar to "

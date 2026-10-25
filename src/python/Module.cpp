@@ -20,5 +20,6 @@ NB_MODULE(_arraw, m) {
     arraw::python::bindExport(m);
     arraw::python::bindLensMethods(m);
     arraw::python::bindShots(m);
+    arraw::python::bindSnapshots(m);
     arraw::python::bindSession(m);
 }

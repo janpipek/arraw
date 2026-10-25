@@ -166,3 +166,7 @@ OpenDocument arraw::openDocument(const std::filesystem::path& path, DiagnosticLo
 Photo arraw::openPhoto(const std::filesystem::path& path, DiagnosticLog& log) {
     return openDocument(path, log).photo;
 }
+
+Photo arraw::withSnapshot(const Photo& photo, const Snapshot& snapshot) {
+    return Photo(photo.path(), photo.metadata(), snapshot.negative, snapshot.state, photo.marks());
+}

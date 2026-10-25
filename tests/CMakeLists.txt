@@ -33,6 +33,7 @@ add_executable(arraw-tests
         test_BrushStrokes.cpp
         test_StrokeCodec.cpp
         test_Cli.cpp
+        test_CliSnapshots.cpp
         test_CheckpointLadder.cpp
         test_ClippingMask.cpp
         test_CopySections.cpp

@@ -275,3 +275,10 @@ a preset's enlarging. Both commands take `--config-dir DIR` for the directory of
 (else `ARRAW_CONFIG_DIR`, else the user's arraw configuration directory); `export` ignores it
 without `--export-preset`. An unknown, unusable or unreadable preset is a usage error (exit 2),
 because retrying will not fix it.
+
+## Note, 2026-10-25: snapshots in `info` and `export`
+
+`info` lists a photograph's snapshots and prints the keys `snapshots`,
+`savedBase` and `unreadableSnapshots` in its JSON, and `export` takes
+`--snapshot <id>` (one ID per run) to export a snapshot's recipe, with the
+other flags applied on top. See ADR 056, addendum item 19.

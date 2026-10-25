@@ -30,7 +30,7 @@ def test_stub_imports_only_real_modules():
             imported.add(node.module.split(".")[0])
     classes = {n.name for n in tree.body if isinstance(n, ast.ClassDef)}
     assert not imported & classes
-    allowed = {"collections", "enum", "os", "pathlib", "typing", "numpy", "types", "__future__"}
+    allowed = {"collections", "datetime", "enum", "os", "pathlib", "typing", "numpy", "types", "__future__"}
     assert imported <= allowed, imported - allowed
 
 
@@ -48,3 +48,46 @@ def test_stub_declares_every_exported_name_of_the_extension():
     assert {"ToneCurve", "ToneCurveSettings", "GradeZone", "ColorGradingSettings",
             "VignetteSettings", "EffectsSettings"} <= native
     assert native <= declared, native - declared
+
+
+def test_stub_annotations_only_use_defined_names():
+    import builtins
+
+    tree = ast.parse(STUB.read_text())
+    defined = set(dir(builtins))
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef)):
+            defined.add(node.name)
+        elif isinstance(node, ast.Import):
+            defined.update((a.asname or a.name).split(".")[0] for a in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            defined.update(a.asname or a.name for a in node.names)
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            defined.add(node.target.id)
+        elif isinstance(node, ast.Assign):
+            defined.update(t.id for t in node.targets if isinstance(t, ast.Name))
+    annotations = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef):
+            annotations.append(node.returns)
+            args = node.args
+            annotations += [a.annotation for a in args.posonlyargs + args.args + args.kwonlyargs]
+            annotations += [a.annotation for a in (args.vararg, args.kwarg) if a]
+        elif isinstance(node, ast.AnnAssign):
+            annotations.append(node.annotation)
+    used = {
+        n.id
+        for annotation in annotations
+        if annotation is not None
+        for n in ast.walk(annotation)
+        if isinstance(n, ast.Name)
+    }
+    # Quoted annotations are strings in the AST: parse them too.
+    for annotation in annotations:
+        for n in ast.walk(annotation) if annotation is not None else ():
+            if isinstance(n, ast.Constant) and isinstance(n.value, str):
+                try:
+                    used |= {m.id for m in ast.walk(ast.parse(n.value, mode="eval")) if isinstance(m, ast.Name)}
+                except SyntaxError:
+                    pass
+    assert not used - defined, used - defined

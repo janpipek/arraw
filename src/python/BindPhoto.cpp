@@ -17,6 +17,7 @@
 #include <Photo.h>
 #include <PhotoMarks.h>
 #include <Sidecar.h>
+#include <Snapshots.h>
 
 #include <nanobind/ndarray.h>
 
@@ -584,6 +585,16 @@ void bindPhoto(nb::module_& m) {
     m.def(
         "write_sidecar", [](const Photo& photo) { withoutGil([&] { writeSidecar(photo); }); },
         "photo"_a, "Write a photograph's state and marks into its sidecar, keeping the rest.");
+
+    m.def(
+        "write_sidecar",
+        [](const Photo& photo, std::optional<SnapshotId> savedBase) {
+            withoutGil([&] { writeSidecar(photo, savedBase); });
+        },
+        "photo"_a, "saved_base"_a.none(),
+        "As write_sidecar(photo), and record `saved_base` as the snapshot the saved recipe is "
+        "based on (None: none). SnapshotBaseMissing (a ValueError) if the sidecar lists no such "
+        "snapshot; nothing is written then.");
 
     m.def(
         "write_sidecar_marks",

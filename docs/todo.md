@@ -379,7 +379,7 @@ and committed:
    refresh after external changes. Also a way to discard unreadable snapshot entries: they stay in
    the sidecar and count toward the 32-snapshot limit, and the errors now say so, but nothing
    removes them yet (deferred from gate 1).
-5. **[ ] CLI and Python.** Extend `info`, add `export --snapshot ID`, and bind the same document,
+5. **[x] CLI and Python.** Extend `info`, add `export --snapshot ID`, and bind the same document,
    collection, and session operations. Verify text/JSON parity, unknown IDs, option conflicts,
    repeated exports, and Python parity.
 

@@ -8,6 +8,7 @@
 #include <NegativeSettings.h>
 #include <Photo.h>
 #include <PhotoMarks.h>
+#include <Snapshots.h>
 
 #include <cstddef>
 #include <new>
@@ -36,6 +37,16 @@ struct EditScope {
     std::string detail;
 };
 
+/// @brief Chooses the lens database a session starts with.
+///
+/// None is the process's database, but only a RAW has lens corrections to record.
+const LensDatabase* databaseFor(const Photo& photo, const LensDatabase* database) {
+    if (database == nullptr && !std::holds_alternative<NamedEncoding>(photo.metadata().encoding)) {
+        return withoutGil([] { return &LensDatabase::system(); });
+    }
+    return database;
+}
+
 } // namespace
 
 void bindSession(nb::module_& module) {
@@ -56,6 +67,8 @@ void bindSession(nb::module_& module) {
         .def_ro("detail", &HistoryStep::detail,
                 "What the origin applies to, such as a preset's name; empty otherwise.")
         .def_ro("negative", &HistoryStep::negative, "Negative settings after the step.")
+        .def_ro("base_snapshot", &HistoryStep::baseSnapshot,
+                "Snapshot the working look was based on after the step, or None.")
         .def_prop_ro(
             "lens", [](const HistoryStep& step) { return step.negative.lens; },
             "Lens settings after the step; the same as `negative.lens`.")
@@ -63,7 +76,8 @@ void bindSession(nb::module_& module) {
         .def("__repr__", [](const HistoryStep& step) {
             return "HistoryStep(state=" + reprValue(step.state) +
                    ", origin=" + reprValue(step.origin) + ", detail=" + reprValue(step.detail) +
-                   ", negative=" + reprValue(step.negative) + ")";
+                   ", negative=" + reprValue(step.negative) +
+                   ", base_snapshot=" + reprValue(step.baseSnapshot) + ")";
         });
 
     nb::class_<ChangeDescription>(module, "ChangeDescription",
@@ -145,17 +159,27 @@ void bindSession(nb::module_& module) {
         .def(
             "__init__",
             [](EditSession* self, Photo photo, const LensDatabase* database) {
-                // None is the process's database, but only a RAW has lens corrections to record.
-                if (database == nullptr &&
-                    !std::holds_alternative<NamedEncoding>(photo.metadata().encoding)) {
-                    database = withoutGil([] { return &LensDatabase::system(); });
-                }
+                database = databaseFor(photo, database);
                 new (self) EditSession(std::move(photo), database);
             },
             "photo"_a, "lens_database"_a.none() = nb::none(), nb::keep_alive<1, 3>(),
             "Start editing `photo`. `lens_database` is the database the session records lens "
             "matches in (None: the process's, loaded on first use, for a RAW only; other files "
-            "have none). It is kept alive as long as the session.")
+            "have none). It is kept alive as long as the session. The session does not know "
+            "the snapshots of the photograph's sidecar: start from `open_document` to have "
+            "them. Its first snapshot change then raises SnapshotRevisionConflict when the "
+            "sidecar has snapshots; call `refresh_snapshots` first, or start from "
+            "`open_document`.")
+        .def(
+            "__init__",
+            [](EditSession* self, OpenDocument document, const LensDatabase* database) {
+                database = databaseFor(document.photo, database);
+                new (self) EditSession(std::move(document), database);
+            },
+            "document"_a, "lens_database"_a.none() = nb::none(), nb::keep_alive<1, 3>(),
+            "Start editing a document from `open_document`, with the snapshots its sidecar "
+            "lists and the base its saved recipe has. The session keeps both current as it "
+            "creates, restores, renames and deletes snapshots, and `save` writes the base.")
         .def_prop_ro("lens_database", &EditSession::lensDatabase, nb::rv_policy::reference,
                      nb::sig("def lens_database(self) -> LensDatabase | None"),
                      "The lens database the session records matches in, or None (not a RAW).")
@@ -264,6 +288,45 @@ void bindSession(nb::module_& module) {
              "Write the photograph to its sidecar and make that the saved state.")
         .def("set_marks", &EditSession::setMarks, "marks"_a,
              "Set the marks, writing them to the sidecar at once.")
+        .def_prop_ro("snapshots", &EditSession::snapshots, nb::rv_policy::copy,
+                     "The photograph's snapshots as the session last read them from its sidecar "
+                     "or wrote them; a copy on every access.")
+        .def("refresh_snapshots", &EditSession::refreshSnapshots,
+             "Read the snapshots again from the sidecar, for a change another process made. "
+             "The settings and their dirty state do not change. RuntimeError when the sidecar "
+             "cannot be read; nothing changes.")
+        .def_prop_ro("unreadable_snapshots", &EditSession::unreadableSnapshots,
+                     "Count of raw snapshot entries in the sidecar that this arraw cannot use.")
+        .def_prop_ro("base_snapshot", &EditSession::baseSnapshot,
+                     "Snapshot the current look is based on, or None.")
+        .def_prop_ro("saved_base_snapshot", &EditSession::savedBaseSnapshot,
+                     "Snapshot the saved recipe is based on, or None.")
+        .def("create_snapshot", &EditSession::createSnapshot, "name"_a,
+             "Capture the current look as a new snapshot, written to the sidecar at once, and "
+             "return its SnapshotId. It becomes the base of the current history position (no "
+             "step is added) and the saved settings on disk stay as they are. Blocks, other "
+             "Python threads included (the GIL is held), while it waits for the sidecar's "
+             "lock and rewrites it; EditSession is not thread-safe. RuntimeError while an "
+             "edit is open. ValueError for an invalid name or a full list; "
+             "SnapshotRevisionConflict when another process changed the snapshots (the session "
+             "reads them again; nothing is captured); SidecarLockTimeout; RuntimeError for a "
+             "sidecar it cannot keep whole.")
+        .def("restore_snapshot", &EditSession::restoreSnapshot, "id"_a,
+             "Switch the working look to a snapshot as one undoable history step (origin "
+             "RESTORE) carrying its exact state and negative settings and its ID as the base. "
+             "ValueError for an ID the session does not know.")
+        .def("rename_snapshot", &EditSession::renameSnapshot, "id"_a, "name"_a,
+             "Rename a snapshot, written to the sidecar at once; not a history step. "
+             "ValueError for an invalid name or unknown ID; errors and blocking as "
+             "`create_snapshot`.")
+        .def("delete_snapshot", &EditSession::deleteSnapshot, "id"_a,
+             "Delete a snapshot, written to the sidecar at once; not a history step. Its "
+             "children take its parent and every base that was it becomes its parent. "
+             "ValueError for an unknown ID; errors and blocking as `create_snapshot`.")
+        .def("discard_unreadable_snapshots", &EditSession::discardUnreadableSnapshots,
+             "Remove from the sidecar the snapshot entries this arraw cannot use, keeping every "
+             "snapshot it lists; a sidecar with none is not written. Errors and blocking "
+             "as `create_snapshot`.")
         .def("discard_changes", &EditSession::discardChanges,
              "Return to the saved state, dropping history and any open edit.")
         .def(

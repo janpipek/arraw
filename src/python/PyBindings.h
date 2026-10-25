@@ -211,6 +211,10 @@ void bindShots(nb::module_& module);
 /// @brief Binds photographs, diagnostics and the develop and save functions.
 void bindPhoto(nb::module_& module);
 
+/// @brief Binds snapshots, their collection, the opened document and the snapshot errors; after
+/// ::bindPhoto and before ::bindSession.
+void bindSnapshots(nb::module_& module);
+
 /// @brief Binds the edit session, its history and describe_change.
 void bindSession(nb::module_& module);
 

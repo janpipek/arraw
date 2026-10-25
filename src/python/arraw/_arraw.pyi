@@ -1,6 +1,7 @@
 """Python bindings for the arraw RAW processing engine."""
 
-from collections.abc import Callable, Sequence, Set
+from collections.abc import Callable, Iterator, Sequence, Set
+import datetime
 import enum
 import os
 import pathlib
@@ -1996,6 +1997,11 @@ class Photo:
         Return a photograph with the lens recorded as chosen by the photographer, as `--lens 'Maker|Model'` does: looked up by its exact lensfun name, with the camera's crop factor. ValueError when the database does not list it or the photograph is not a RAW.
         """
 
+    def with_snapshot(self, snapshot: Snapshot) -> Photo:
+        """
+        Return a photograph developed as the snapshot says: its state and negative settings exactly (no lens is matched again), with this photograph's file and marks. This is what `arraw-cli export --snapshot` does before its flags; render or `with_` it as any photograph. Nothing is read from the disk or written to it.
+        """
+
     def with_(
         self,
         state: DevelopState | None = None,
@@ -2021,9 +2027,16 @@ def sidecar_path(path: str | os.PathLike) -> pathlib.Path:
 def read_sidecar(path: str | os.PathLike) -> SidecarContents | None:
     """Read the sidecar of a photograph, or None when it has none."""
 
+@overload
 def write_sidecar(photo: Photo) -> None:
     """
     Write a photograph's state and marks into its sidecar, keeping the rest.
+    """
+
+@overload
+def write_sidecar(photo: Photo, saved_base: SnapshotId | None) -> None:
+    """
+    As write_sidecar(photo), and record `saved_base` as the snapshot the saved recipe is based on (None: none). SnapshotBaseMissing (a ValueError) if the sidecar lists no such snapshot; nothing is written then.
     """
 
 def write_sidecar_marks(path: str | os.PathLike, marks: PhotoMarks) -> None:
@@ -2513,6 +2526,174 @@ def is_supported_image(path: str | os.PathLike) -> bool:
 
 SUPPORTED_EXTENSIONS: tuple = ...
 
+class SnapshotRevisionConflict(RuntimeError):
+    """
+    A snapshot change that was refused because the sidecar's snapshots are no longer the ones the session saw (another process changed them). `expected` is the revision the session saw and `actual` the one the sidecar holds. The session has read the snapshots again; nothing was changed, and the call is not retried.
+    """
+
+    expected: int
+    """Revision the session saw. Set when arraw raised it; absent on one built in Python."""
+    actual: int
+    """Revision the sidecar holds. Set when arraw raised it; absent on one built in Python."""
+
+class SnapshotBaseMissing(ValueError):
+    """
+    A save whose base names no snapshot of the sidecar (another process deleted it). `base` is the SnapshotId; nothing was written.
+    """
+
+    base: SnapshotId
+    """Snapshot the save named. Set when arraw raised it; absent on one built in Python."""
+
+class SidecarLockTimeout(RuntimeError):
+    """
+    Another writer held the sidecar's lock for too long (about two seconds); nothing was written. Try again.
+    """
+
+class SnapshotId:
+    """
+    Identity of a snapshot within one photograph: a whole number from 1, never reused after the snapshot is deleted.
+    """
+
+    def __init__(self, value: int) -> None:
+        """
+        ValueError for 0 or a number out of 64 bits; TypeError for anything but an int.
+        """
+
+    @property
+    def value(self) -> int:
+        """The number."""
+
+    def __eq__(self, arg: SnapshotId, /) -> bool: ...
+
+    def __lt__(self, arg: SnapshotId, /) -> bool: ...
+
+    def __le__(self, arg: SnapshotId, /) -> bool: ...
+
+    def __ge__(self, arg: SnapshotId, /) -> bool: ...
+
+    def __hash__(self) -> int: ...
+
+    def __int__(self) -> int: ...
+
+    def __index__(self) -> int: ...
+
+    def __str__(self) -> str: ...
+
+    def __repr__(self) -> str: ...
+
+class Snapshot:
+    """
+    A named, complete develop recipe of one photograph, as its sidecar lists it. Read-only; `SnapshotCollection` and `EditSession` make and change them.
+    """
+
+    @property
+    def id(self) -> SnapshotId:
+        """Identity."""
+
+    @property
+    def parent(self) -> SnapshotId | None:
+        """
+        Snapshot the working look was based on when this one was captured, or None.
+        """
+
+    @property
+    def name(self) -> str:
+        """Name; not unique."""
+
+    @property
+    def created(self) -> datetime.datetime:
+        """When it was captured, a timezone-aware datetime in UTC, to the second."""
+
+    @property
+    def state(self) -> DevelopState:
+        """The develop state it restores."""
+
+    @property
+    def negative(self) -> NegativeSettings:
+        """The negative settings it restores."""
+
+    @property
+    def has_thumbnail(self) -> bool:
+        """
+        Whether the sidecar holds a thumbnail of it (the JPEG itself is not exposed).
+        """
+
+    def __eq__(self, arg: Snapshot, /) -> bool: ...
+
+    def __repr__(self) -> str: ...
+
+    __hash__: None = None
+
+class SnapshotCollection:
+    """All snapshots of one photograph, in the order the sidecar lists them."""
+
+    @property
+    def entries(self) -> list[Snapshot]:
+        """The snapshots, at most 32; a new list on every access."""
+
+    @property
+    def next_id(self) -> int:
+        """Number the next snapshot takes; above every ID, never lowered."""
+
+    @property
+    def revision(self) -> int:
+        """
+        Count of structural changes (add, rename, delete) written to the sidecar.
+        """
+
+    def find(self, id: SnapshotId) -> Snapshot | None:
+        """The snapshot with that ID, or None."""
+
+    def __len__(self) -> int: ...
+
+    def __contains__(self, item: object) -> bool:
+        """
+        Whether `item` is the SnapshotId of a snapshot; False for anything else.
+        """
+
+    def __iter__(self) -> Iterator[Snapshot]:
+        """Iterate over the snapshots in sidecar order."""
+
+    def __eq__(self, arg: SnapshotCollection, /) -> bool: ...
+
+    def __repr__(self) -> str: ...
+
+    __hash__: None = None
+
+class OpenDocument:
+    """
+    A photograph with everything its sidecar adds to it: what `open_document` returns.
+    """
+
+    @property
+    def photo(self) -> Photo:
+        """The photograph, as `open` gives it."""
+
+    @property
+    def snapshots(self) -> SnapshotCollection:
+        """The snapshots; empty when the sidecar has none."""
+
+    @property
+    def saved_base(self) -> SnapshotId | None:
+        """
+        Snapshot the saved recipe was based on, if the sidecar says and it still exists.
+        """
+
+    @property
+    def unreadable_snapshots(self) -> int:
+        """
+        Count of raw snapshot entries in the sidecar that this arraw cannot use; they are kept until EditSession.discard_unreadable_snapshots removes them.
+        """
+
+    def __repr__(self) -> str: ...
+
+    __hash__: None = None
+
+def open_document(path: str | os.PathLike) -> OpenDocument:
+    """
+    Open a photograph with its snapshots, reading its metadata and sidecar once. As `open`, which is this without the snapshots: an unreadable sidecar is logged on the 'arraw' logger, not raised, and the defaults are used; damaged snapshot entries are logged and left out (counted in `unreadable_snapshots`).
+    """
+
 class EditOrigin(enum.Enum):
     """Kind of change that made a history step, beyond what its states show."""
 
@@ -2548,6 +2729,10 @@ class HistoryStep:
     @property
     def negative(self) -> NegativeSettings:
         """Negative settings after the step."""
+
+    @property
+    def base_snapshot(self) -> SnapshotId | None:
+        """Snapshot the working look was based on after the step, or None."""
 
     @property
     def lens(self) -> LensSettings:
@@ -2610,9 +2795,16 @@ class EditSession:
     One photograph being edited: the document as it stands, and how it got there.
     """
 
+    @overload
     def __init__(self, photo: Photo, lens_database: LensDatabase | None = None) -> None:
         """
-        Start editing `photo`. `lens_database` is the database the session records lens matches in (None: the process's, loaded on first use, for a RAW only; other files have none). It is kept alive as long as the session.
+        Start editing `photo`. `lens_database` is the database the session records lens matches in (None: the process's, loaded on first use, for a RAW only; other files have none). It is kept alive as long as the session. The session does not know the snapshots of the photograph's sidecar: start from `open_document` to have them. Its first snapshot change then raises SnapshotRevisionConflict when the sidecar has snapshots; call `refresh_snapshots` first, or start from `open_document`.
+        """
+
+    @overload
+    def __init__(self, document: OpenDocument, lens_database: LensDatabase | None = None) -> None:
+        """
+        Start editing a document from `open_document`, with the snapshots its sidecar lists and the base its saved recipe has. The session keeps both current as it creates, restores, renames and deletes snapshots, and `save` writes the base.
         """
 
     @property
@@ -2710,6 +2902,56 @@ class EditSession:
 
     def set_marks(self, marks: PhotoMarks) -> None:
         """Set the marks, writing them to the sidecar at once."""
+
+    @property
+    def snapshots(self) -> SnapshotCollection:
+        """
+        The photograph's snapshots as the session last read them from its sidecar or wrote them; a copy on every access.
+        """
+
+    def refresh_snapshots(self) -> None:
+        """
+        Read the snapshots again from the sidecar, for a change another process made. The settings and their dirty state do not change. RuntimeError when the sidecar cannot be read; nothing changes.
+        """
+
+    @property
+    def unreadable_snapshots(self) -> int:
+        """
+        Count of raw snapshot entries in the sidecar that this arraw cannot use.
+        """
+
+    @property
+    def base_snapshot(self) -> SnapshotId | None:
+        """Snapshot the current look is based on, or None."""
+
+    @property
+    def saved_base_snapshot(self) -> SnapshotId | None:
+        """Snapshot the saved recipe is based on, or None."""
+
+    def create_snapshot(self, name: str) -> SnapshotId:
+        """
+        Capture the current look as a new snapshot, written to the sidecar at once, and return its SnapshotId. It becomes the base of the current history position (no step is added) and the saved settings on disk stay as they are. Blocks, other Python threads included (the GIL is held), while it waits for the sidecar's lock and rewrites it; EditSession is not thread-safe. RuntimeError while an edit is open. ValueError for an invalid name or a full list; SnapshotRevisionConflict when another process changed the snapshots (the session reads them again; nothing is captured); SidecarLockTimeout; RuntimeError for a sidecar it cannot keep whole.
+        """
+
+    def restore_snapshot(self, id: SnapshotId) -> None:
+        """
+        Switch the working look to a snapshot as one undoable history step (origin RESTORE) carrying its exact state and negative settings and its ID as the base. ValueError for an ID the session does not know.
+        """
+
+    def rename_snapshot(self, id: SnapshotId, name: str) -> None:
+        """
+        Rename a snapshot, written to the sidecar at once; not a history step. ValueError for an invalid name or unknown ID; errors and blocking as `create_snapshot`.
+        """
+
+    def delete_snapshot(self, id: SnapshotId) -> None:
+        """
+        Delete a snapshot, written to the sidecar at once; not a history step. Its children take its parent and every base that was it becomes its parent. ValueError for an unknown ID; errors and blocking as `create_snapshot`.
+        """
+
+    def discard_unreadable_snapshots(self) -> None:
+        """
+        Remove from the sidecar the snapshot entries this arraw cannot use, keeping every snapshot it lists; a sidecar with none is not written. Errors and blocking as `create_snapshot`.
+        """
 
     def discard_changes(self) -> None:
         """Return to the saved state, dropping history and any open edit."""

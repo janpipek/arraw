@@ -178,4 +178,16 @@ struct OpenDocument {
 [[nodiscard]] OpenDocument openDocument(const std::filesystem::path& path,
                                         DiagnosticLog& log = discardedDiagnostics());
 
+/// @brief Gives a photograph the look of a snapshot: the one path every surface selects a
+/// snapshot for rendering or export through (ADR 056, decision 10).
+///
+/// The snapshot's state and negative are copied exactly: no lens is rematched, nothing is read
+/// from the disk or written to it. The file and marks stay the photograph's own, so explicit
+/// overrides apply to the result as to any photograph.
+/// @param photo Photograph to take the file, metadata and marks from.
+/// @param snapshot Snapshot to take the state and negative from.
+/// @return A document over the same file, developed as the snapshot says.
+/// @throws std::invalid_argument as the ::arraw::Photo constructor does.
+[[nodiscard]] Photo withSnapshot(const Photo& photo, const Snapshot& snapshot);
+
 } // namespace arraw

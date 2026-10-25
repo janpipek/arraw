@@ -120,3 +120,28 @@ text. In short:
     adopted whatever the dirty state.
 17. Preview renders a separate shown photograph; editing, undo, Create and Save are disabled until
     it closes.
+
+## Addendum, 2026-10-25: Gate 5 (CLI and Python)
+
+18. `::arraw::withSnapshot` is the one path that gives a `Photo` a snapshot's look: the exact state
+    and negative, no lens rematching, the photograph's own file and marks. `export --snapshot ID`
+    and Python's `Photo.with_snapshot` both use it, and the export flags apply afterwards.
+19. IDs on the command line are plain decimal digits above zero; `info --json` spells IDs
+    (`id`, `parent`, `savedBase`) as decimal strings, as the sidecar's JSON does, and lists
+    `unreadableSnapshots` beside them. `info` never prints thumbnails. No CLI command mutates
+    snapshots.
+20. Python binds `SnapshotId` (a checked value, no implicit conversion from `int`), `Snapshot`
+    (read-only), `SnapshotCollection`, `OpenDocument` (`open_document`), and the blocking
+    `EditSession` snapshot methods. `SnapshotRevisionConflict` and `SidecarLockTimeout` derive
+    from `RuntimeError` and `SnapshotBaseMissing` from `ValueError`, so code that caught the
+    builtin keeps working.
+    Also bound: `refresh_snapshots` (a session built from a bare `Photo` does not know the
+    sidecar's snapshots, so its first change would conflict); `Snapshot.has_thumbnail` only (the
+    JPEG is not exposed); `Snapshot.created` as a UTC datetime (computed from an epoch plus a
+    timedelta, since Windows `fromtimestamp` refuses years past 3000); `SnapshotId` ordering and
+    `__index__`; and `write_sidecar(photo, saved_base)`. The snapshot write methods hold the GIL
+    while they wait for the lock and rewrite the sidecar, because `EditSession` is not
+    thread-safe; releasing it needs a per-session guard first. `SnapshotCollection` copies its
+    entries (thumbnails included) on each access.
+21. `export --snapshot` accepts leading zeros (`007` is 7), is a usage error when repeated (one
+    export writes one look), and a photograph in a batch that lacks the ID fails alone.
