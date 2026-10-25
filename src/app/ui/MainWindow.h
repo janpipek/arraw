@@ -10,6 +10,8 @@
 #include "PhotoLoader.h"
 #include "PreviewRenderer.h"
 #include "RenderIndicator.h"
+#include "SnapshotWriter.h"
+#include "ThumbnailWorker.h"
 
 #include <DecodeOptions.h>
 #include <EditSession.h>
@@ -20,6 +22,8 @@
 #include <Photo.h>
 #include <PhotoMarks.h>
 #include <Progress.h>
+#include <SnapshotWrites.h>
+#include <Snapshots.h>
 
 #include <QImage>
 #include <QMainWindow>
@@ -53,7 +57,9 @@ class QListView;
 class QToolButton;
 class QEvent;
 class QShortcut;
+class QSplitter;
 class QTabWidget;
+class QTreeView;
 class QObject;
 
 namespace arraw::app {
@@ -69,6 +75,7 @@ class HistogramPanel;
 class HistoryModel;
 class PhotoView;
 class RenderProgressPie;
+class SnapshotModel;
 class StatusLine;
 
 /// @brief Top-level window of the desktop application.
@@ -492,6 +499,101 @@ private:
     /// @param row Row clicked or activated.
     void goToHistoryRow(const QModelIndex& row);
 
+    /// @brief Builds the snapshot panel that sits above the history list in the same dock.
+    ///
+    /// A header with the New and menu buttons, the notice about unreadable entries, the banner of
+    /// a preview and the tree of snapshots.
+    /// @return The panel, to be added to the dock's splitter.
+    QWidget* buildSnapshotPanel();
+
+    /// @brief Gives the photograph the view, the panel and the lens status show.
+    ///
+    /// The previewed snapshot's look while one is previewed, else the session's photograph. Edits
+    /// always read the session's.
+    /// @pre A photograph is open.
+    [[nodiscard]] const Photo& shownPhoto() const {
+        return open_->previewPhoto ? *open_->previewPhoto : open_->session.photo();
+    }
+
+    /// @brief Tells whether a snapshot is being previewed.
+    [[nodiscard]] bool previewing() const noexcept {
+        return open_ && open_->previewed.has_value();
+    }
+
+    /// @brief Shows the look of a snapshot without changing the session.
+    ///
+    /// Finishes a pending edit first; on failure, or when the snapshot's look is refused, the
+    /// preview does not start and the user is told.
+    /// @param id Snapshot to preview.
+    void startPreview(SnapshotId id);
+
+    /// @brief Ends the preview, if one is on, and shows the working look again.
+    /// @param refresh Whether to refresh the panel and ask for a render; false when the caller
+    /// goes on to change the session at once.
+    void closePreview(bool refresh = true);
+
+    /// @brief Closes the preview of a snapshot the collection no longer lists.
+    void reconcilePreview();
+
+    /// @brief Makes a snapshot's look the working look, as one undoable step.
+    /// @param id Snapshot to restore.
+    void restoreSnapshot(SnapshotId id);
+
+    /// @brief Asks for a name and creates a snapshot of the working look (Ctrl+N).
+    void createSnapshot();
+
+    /// @brief Asks for a new name of the selected snapshot.
+    void renameSelectedSnapshot();
+
+    /// @brief Asks to delete the selected snapshot, then does.
+    void deleteSelectedSnapshot();
+
+    /// @brief Asks to remove the unreadable snapshot entries of the sidecar, then does.
+    void discardUnreadableSnapshots();
+
+    /// @brief Asks for a snapshot name until the answer is storable or the user cancels.
+    /// @param title Dialog title.
+    /// @param initial Name to start with.
+    /// @return The trimmed name, with the default for an empty one; nothing if cancelled.
+    [[nodiscard]] std::optional<std::string> askSnapshotName(const QString& title,
+                                                             const QString& initial);
+
+    /// @brief Hands a prepared write to the snapshot writer.
+    /// @param write Write to carry out.
+    /// @param structural Whether it changes the list; at most one is in flight.
+    void submitSnapshotWrite(SnapshotWrite write, bool structural);
+
+    /// @brief Takes the result of a snapshot write, on the GUI thread.
+    /// @param result Outcome delivered by the writer.
+    void snapshotWriteLanded(const SnapshotWriteResult& result);
+
+    /// @brief Takes a thumbnail the film strip's worker made for a snapshot.
+    /// @param result Outcome delivered by the worker.
+    void snapshotThumbnailLanded(const SnapshotThumbnailResult& result);
+
+    /// @brief Asks the worker for the thumbnails of snapshots not requested yet, or whose stored
+    /// one changed.
+    void requestSnapshotThumbnails();
+
+    /// @brief Starts a new snapshot generation for the open photograph and asks for its thumbnails.
+    void beginSnapshotThumbnails();
+
+    /// @brief Shows the session's snapshots in the tree.
+    /// @param force Whether to refresh even if the revision and the bases are the ones shown.
+    void refreshSnapshotModel(bool force);
+
+    /// @brief Refreshes everything that follows a change of the snapshots or their bases.
+    void refreshSnapshotUi();
+
+    /// @brief Enables the snapshot panel and its actions, and shows the notice and the banner.
+    void updateSnapshotPanel();
+
+    /// @brief Gives the snapshot the tree has selected.
+    [[nodiscard]] std::optional<SnapshotId> selectedSnapshot() const;
+
+    /// @brief Makes the tree's selection the previewed snapshot, or none.
+    void syncSnapshotSelection();
+
     /// @brief Asks which sections to copy and holds the open photograph's settings for pasting.
     void copySettings();
 
@@ -662,8 +764,15 @@ private:
     /// @brief Closes the open photograph, leaving the window empty.
     void closePhoto();
 
-    /// @brief Tells whether a photograph is open with its pixels, so whether it can be edited.
+    /// @brief Tells whether a photograph is open with its pixels and no snapshot is previewed, so
+    /// whether it can be edited.
     [[nodiscard]] bool editable() const noexcept {
+        return open_ && open_->decoded && !open_->previewed;
+    }
+
+    /// @brief Tells whether a photograph is open with its pixels, so whether it can be viewed,
+    /// zoomed, exported and its snapshots used, whether or not a snapshot is previewed.
+    [[nodiscard]] bool hasPixels() const noexcept {
         return open_ && open_->decoded;
     }
 
@@ -696,6 +805,21 @@ private:
         float lensAmount = 0.0F;
         /// The lens corrections and the panel's words about them, as of lensKey.
         LensView lensView = {};
+        /// Snapshot being previewed; the session is untouched.
+        std::optional<SnapshotId> previewed = std::nullopt;
+        /// The photograph with the previewed snapshot's recipe, shown instead of the session's.
+        std::optional<Photo> previewPhoto = std::nullopt;
+        /// Number of this session among the window's, to drop results of an earlier one.
+        std::uint64_t serial = 0;
+        /// Snapshot generation of the thumbnails requested for this session.
+        std::uint64_t snapshotGeneration = 0;
+        /// Ticket of the structural snapshot write in flight, if any.
+        std::optional<std::uint64_t> structuralTicket = std::nullopt;
+        /// Whether a thumbnail write failed, after which none is asked for or written.
+        bool thumbnailWritesFailed = false;
+        /// Render key of the stored thumbnail each snapshot had when its thumbnail was last
+        /// requested, or of the one written since.
+        std::map<std::uint64_t, std::string> requestedKeys = {};
     };
 
     DebugLog& debugLog_;
@@ -758,6 +882,37 @@ private:
     HistoryModel* historyModel_ = nullptr;
     QListView* historyView_ = nullptr;
     QDockWidget* historyDock_ = nullptr;
+    /// Snapshots of the open photograph's session, as a tree.
+    SnapshotModel* snapshotModel_ = nullptr;
+    QTreeView* snapshotTree_ = nullptr;
+    /// Section of the History dock above the history list.
+    QWidget* snapshotPanel_ = nullptr;
+    /// Notice that the sidecar holds snapshot entries that cannot be read, and its text.
+    QWidget* snapshotDamageNotice_ = nullptr;
+    QLabel* snapshotDamageLabel_ = nullptr;
+    /// Banner shown while a snapshot is previewed, and its text.
+    QWidget* snapshotPreviewBanner_ = nullptr;
+    QLabel* snapshotPreviewLabel_ = nullptr;
+    QAction* createSnapshotAction_ = nullptr;
+    QAction* renameSnapshotAction_ = nullptr;
+    QAction* deleteSnapshotAction_ = nullptr;
+    QAction* restoreSnapshotAction_ = nullptr;
+    QAction* discardUnreadableAction_ = nullptr;
+    /// Esc while a snapshot is previewed.
+    QShortcut* closePreviewShortcut_ = nullptr;
+    /// Whether the tree's selection is being set by the window, which is no request to preview.
+    bool syncingSnapshotSelection_ = false;
+    /// What the tree last showed, so that an edit that changes none of it costs nothing.
+    struct ShownSnapshots {
+        std::uint64_t serial = 0;
+        std::uint64_t revision = 0;
+        std::size_t count = 0;
+        std::optional<SnapshotId> base;
+        std::optional<SnapshotId> savedBase;
+    };
+    std::optional<ShownSnapshots> shownSnapshots_;
+    /// Serial given to the newest session.
+    std::uint64_t sessionSerial_ = 0;
     QAction* saveAction_ = nullptr;
     QAction* undoAction_ = nullptr;
     QAction* redoAction_ = nullptr;
@@ -908,6 +1063,12 @@ private:
     /// Declared last, so it is destroyed first: it cancels the decode in
     /// progress and waits for its threads; see previewRenderer_.
     PhotoLoader photoLoader_;
+
+    /// Thread that writes snapshot changes to sidecars (ADR 056, Gate 4).
+    ///
+    /// Declared after every worker its results touch, so it is destroyed, and joined, early:
+    /// queued structural writes are carried out, and nothing is delivered once destruction began.
+    SnapshotWriter snapshotWriter_;
 
     /// Thread that loads the lens database at startup (ADR 050, step 7).
     ///

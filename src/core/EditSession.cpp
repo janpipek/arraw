@@ -4,10 +4,13 @@
 #include <LocalAdjustmentEdits.h>
 #include <Sidecar.h>
 #include <SnapshotThumbnails.h>
+#include <SnapshotWrites.h>
 
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -240,6 +243,15 @@ void EditSession::adopt(SnapshotCollection fresh) {
 void EditSession::refreshSnapshots() {
     const std::optional<SidecarContents> contents = readSidecar(photo_.path());
     adopt(contents ? contents->snapshots : SnapshotCollection{});
+    unreadable_ = contents ? contents->unreadableSnapshots : 0;
+}
+
+void EditSession::adoptSnapshots(SnapshotCollection fresh, std::size_t unreadable) {
+    if (fresh.revision < snapshots_.revision) {
+        return; // An older result must not move the session backwards.
+    }
+    adopt(std::move(fresh));
+    unreadable_ = unreadable;
 }
 
 std::vector<SnapshotId> EditSession::snapshotsNeedingThumbnails() const {
@@ -253,22 +265,18 @@ std::vector<SnapshotId> EditSession::snapshotsNeedingThumbnails() const {
 }
 
 bool EditSession::applySnapshotThumbnail(SnapshotId id, SnapshotThumbnail thumbnail) {
-    validate(thumbnail);
-    const auto found = std::ranges::find(snapshots_.entries, id, &Snapshot::id);
-    if (found == snapshots_.entries.end()) {
+    // From the recipe the session holds, worked out by the write before the lock (ADR 056,
+    // decision 6). The file now holds exactly this; keeping the copy equal to it is also what
+    // lets a reader of the sidecar tell this session's own write from someone else's change.
+    const auto write = prepareSnapshotThumbnail(id, std::move(thumbnail));
+    if (!write) {
         return false;
     }
-    // From the recipe the session holds, worked out before the call (ADR 056, decision 6).
-    const auto key = snapshotThumbnailKey(photo_.path(), found->state, found->negative);
-    if (!key || *key != thumbnail.renderKey) {
+    const SnapshotWriteOutcome outcome = writeSnapshotChange(*write);
+    if (!outcome.written) {
         return false;
     }
-    if (!setSnapshotThumbnail(photo_.path(), id, thumbnail, *key)) {
-        return false;
-    }
-    // The file now holds exactly this; keeping the copy equal to it is also what lets a reader
-    // of the sidecar tell this session's own write from someone else's change.
-    found->thumbnail = std::move(thumbnail);
+    finishSnapshotWrite(*write, outcome);
     return true;
 }
 
@@ -280,34 +288,116 @@ void EditSession::refreshAfterConflict() noexcept {
     }
 }
 
-void EditSession::replaceBase(SnapshotId gone, std::optional<SnapshotId> instead) {
-    const auto swap = [&](std::optional<SnapshotId>& base) {
-        if (base == gone) {
-            base = instead;
-        }
-    };
-    swap(base_);
-    swap(savedBase_);
-    if (baseline_) {
-        swap(baseline_->base);
+SnapshotWrite EditSession::createWrite(std::string name, const Photo& look) const {
+    Snapshot draft;
+    draft.parent = base_;
+    draft.name = std::move(name);
+    draft.created = std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now());
+    draft.state = look.state();
+    draft.negative = look.negative();
+    // Checked now, as the write does, so that an invalid name fails before anything is queued.
+    Snapshot probe = draft;
+    probe.id = SnapshotId{std::numeric_limits<std::uint64_t>::max()};
+    validate(probe);
+    return {photo_.path(), snapshots_.revision, SnapshotCreate{std::move(draft), position_}};
+}
+
+SnapshotWrite EditSession::prepareCreateSnapshot(std::string name) const {
+    if (editing()) {
+        throw std::logic_error("An open edit must be settled before a snapshot is prepared");
     }
-    for (HistoryStep& step : history_) {
-        swap(step.baseSnapshot);
+    return createWrite(std::move(name), photo_);
+}
+
+SnapshotWrite EditSession::prepareRenameSnapshot(SnapshotId id, std::string name) const {
+    const Snapshot* found = snapshots_.find(id);
+    if (found == nullptr) {
+        throw std::invalid_argument("There is no snapshot " + std::to_string(id.value));
     }
+    Snapshot renamed = *found;
+    renamed.name = name;
+    validate(renamed);
+    return {photo_.path(), snapshots_.revision, SnapshotRename{id, std::move(name)}};
+}
+
+SnapshotWrite EditSession::prepareDeleteSnapshot(SnapshotId id) const {
+    if (snapshots_.find(id) == nullptr) {
+        throw std::invalid_argument("There is no snapshot " + std::to_string(id.value));
+    }
+    return {photo_.path(), snapshots_.revision, SnapshotDelete{id}};
+}
+
+SnapshotWrite EditSession::prepareDiscardUnreadableSnapshots() const {
+    return {photo_.path(), snapshots_.revision, SnapshotDiscardUnreadable{}};
+}
+
+std::optional<SnapshotWrite>
+EditSession::prepareSnapshotThumbnail(SnapshotId id, SnapshotThumbnail thumbnail) const {
+    validate(thumbnail);
+    const Snapshot* found = snapshots_.find(id);
+    if (found == nullptr) {
+        return std::nullopt;
+    }
+    return SnapshotWrite{
+        photo_.path(), snapshots_.revision,
+        SnapshotThumbnailPatch{id, std::move(thumbnail), found->state, found->negative}};
+}
+
+bool EditSession::finishSnapshotWrite(const SnapshotWrite& write,
+                                      const SnapshotWriteOutcome& outcome) {
+    if (write.photo != photo_.path()) {
+        throw std::invalid_argument("The write is for " + write.photo.string() +
+                                    ", not for this session's photograph");
+    }
+    bool anchored = true;
+    std::visit(
+        [&](const auto& change) {
+            using Change = std::decay_t<decltype(change)>;
+            if constexpr (std::is_same_v<Change, SnapshotThumbnailPatch>) {
+                if (!outcome.written) {
+                    return;
+                }
+                // The recipe of an id never changes, so no key is checked again.
+                const auto found = std::ranges::find(snapshots_.entries, change.id, &Snapshot::id);
+                if (found != snapshots_.entries.end()) {
+                    found->thumbnail = change.thumbnail;
+                }
+            } else if (!outcome.update) {
+                // A discard that found nothing unusable: the file holds none.
+                if constexpr (std::is_same_v<Change, SnapshotDiscardUnreadable>) {
+                    unreadable_ = 0;
+                }
+            } else {
+                const SnapshotUpdate& update = *outcome.update;
+                // An older result must not move the session backwards (a newer one was adopted
+                // in between); the references are kept as they are then.
+                if (update.collection.revision >= snapshots_.revision) {
+                    adopt(update.collection);
+                    unreadable_ = update.unreadable;
+                }
+                if constexpr (std::is_same_v<Change, SnapshotCreate>) {
+                    const Snapshot& draft = change.draft;
+                    anchored = snapshots_.find(update.id) != nullptr && !editing() &&
+                               position_ == change.position && photo_.state() == draft.state &&
+                               photo_.negative() == draft.negative && base_ == draft.parent;
+                    if (anchored) {
+                        base_ = update.id;
+                        history_[position_].baseSnapshot = update.id;
+                    }
+                }
+            }
+        },
+        write.change);
+    return anchored;
 }
 
 SnapshotId EditSession::createSnapshot(std::string name) {
     // The photograph as settling a gesture will leave it; matched before anything is written.
     Photo next = editing() ? withLensRecorded(baseline_->negative.lens, photo_) : photo_;
-    Snapshot draft;
-    draft.parent = base_;
-    draft.name = std::move(name);
-    draft.created = std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now());
-    draft.state = next.state();
-    draft.negative = next.negative();
-    SnapshotUpdate update;
+    SnapshotWrite write = createWrite(std::move(name), next);
+    SnapshotWriteOutcome outcome;
     try {
-        update = addSnapshot(photo_.path(), snapshots_.revision, std::move(draft));
+        outcome = writeSnapshotChange(write);
     } catch (const SnapshotRevisionConflict&) {
         refreshAfterConflict();
         throw;
@@ -317,10 +407,9 @@ SnapshotId EditSession::createSnapshot(std::string name) {
     if (editing()) {
         commitPhoto(std::move(next), EditOrigin::Edit, {});
     }
-    snapshots_ = std::move(update.collection);
-    base_ = update.id;
-    history_[position_].baseSnapshot = update.id;
-    return update.id;
+    std::get<SnapshotCreate>(write.change).position = position_;
+    finishSnapshotWrite(write, outcome);
+    return outcome.update->id;
 }
 
 void EditSession::restoreSnapshot(SnapshotId id) {
@@ -346,12 +435,9 @@ void EditSession::restoreSnapshot(SnapshotId id) {
 }
 
 void EditSession::renameSnapshot(SnapshotId id, std::string name) {
-    if (snapshots_.find(id) == nullptr) {
-        throw std::invalid_argument("There is no snapshot " + std::to_string(id.value));
-    }
+    const SnapshotWrite write = prepareRenameSnapshot(id, std::move(name));
     try {
-        snapshots_ = arraw::renameSnapshot(photo_.path(), snapshots_.revision, id, std::move(name))
-                         .collection;
+        finishSnapshotWrite(write, writeSnapshotChange(write));
     } catch (const SnapshotRevisionConflict&) {
         refreshAfterConflict();
         throw;
@@ -359,18 +445,23 @@ void EditSession::renameSnapshot(SnapshotId id, std::string name) {
 }
 
 void EditSession::deleteSnapshot(SnapshotId id) {
-    const Snapshot* found = snapshots_.find(id);
-    if (found == nullptr) {
-        throw std::invalid_argument("There is no snapshot " + std::to_string(id.value));
-    }
-    const std::optional<SnapshotId> parent = found->parent;
+    const SnapshotWrite write = prepareDeleteSnapshot(id);
     try {
-        snapshots_ = arraw::deleteSnapshot(photo_.path(), snapshots_.revision, id).collection;
+        finishSnapshotWrite(write, writeSnapshotChange(write));
     } catch (const SnapshotRevisionConflict&) {
         refreshAfterConflict();
         throw;
     }
-    replaceBase(id, parent);
+}
+
+void EditSession::discardUnreadableSnapshots() {
+    const SnapshotWrite write = prepareDiscardUnreadableSnapshots();
+    try {
+        finishSnapshotWrite(write, writeSnapshotChange(write));
+    } catch (const SnapshotRevisionConflict&) {
+        refreshAfterConflict();
+        throw;
+    }
 }
 
 namespace {

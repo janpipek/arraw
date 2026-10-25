@@ -114,6 +114,8 @@ add_executable(arraw-tests
         test_Sidecar.cpp
         test_Snapshots.cpp
         test_SnapshotThumbnails.cpp
+        test_SnapshotModel.cpp
+        test_SnapshotWriter.cpp
         test_SampleConversion.cpp
         test_Sample.cpp
         test_RoundTrip.cpp
@@ -172,6 +174,7 @@ add_executable(arraw-widget-tests
         test_FilmStripNotice.cpp
         test_FilmStripSubfolders.cpp
         test_MainWindowOpening.cpp
+        test_MainWindowSnapshots.cpp
         test_MaskOverlay.cpp
         test_MasksPanel.cpp
         test_RenderProgressPie.cpp

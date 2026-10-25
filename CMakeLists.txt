@@ -318,6 +318,8 @@ add_library(arraw STATIC
         src/core/SnapshotThumbnails.cpp
         include/Sidecar.h
         src/core/Sidecar.cpp
+        include/SnapshotWrites.h
+        src/core/SnapshotWrites.cpp
         src/core/ImageBuffer.cpp
         include/ConfigDirectory.h
         src/core/ConfigDirectory.cpp
@@ -593,6 +595,10 @@ add_library(arraw-app-core STATIC
         src/app/ShotFilterModel.h
         src/app/ShotModel.cpp
         src/app/ShotModel.h
+        src/app/SnapshotModel.cpp
+        src/app/SnapshotModel.h
+        src/app/SnapshotWriter.cpp
+        src/app/SnapshotWriter.h
         src/app/SettingPresentation.cpp
         src/app/SettingPresentation.h
         src/app/ThumbnailCache.cpp

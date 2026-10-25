@@ -8,10 +8,12 @@
 #include <Snapshots.h>
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -125,6 +127,14 @@ struct SidecarContents {
     ///
     /// The snapshot writers keep such content verbatim, or refuse the edit when they cannot.
     bool snapshotsDamaged = false;
+
+    /// @brief Count of raw snapshot entries this reading cannot use.
+    ///
+    /// The nodes it leaves out (damaged, a repeated id, past ::arraw::maximumSnapshots) plus,
+    /// when the list is not a single sequence, the items in all its occurrences (at least 1).
+    /// These stay in the file and count toward the limit until
+    /// ::arraw::discardUnreadableSnapshots removes them.
+    std::size_t unreadableSnapshots = 0;
 
     /// @brief Program that wrote the sidecar, from `xmp:CreatorTool`.
     std::optional<std::string> creatorTool;
@@ -365,8 +375,12 @@ struct SnapshotUpdate {
     /// @brief The saved base as it now stands.
     std::optional<SnapshotId> savedBase;
 
-    /// @brief The snapshot added, or the one renamed or deleted.
+    /// @brief The snapshot added, or the one renamed or deleted; zero for a discard.
     SnapshotId id;
+
+    /// @brief Count of raw entries the sidecar holds that this arraw cannot use, as the reader
+    /// sees the list after the edit.
+    std::size_t unreadable = 0;
 };
 
 /// @brief Adds a snapshot to the sidecar, without saving anything else.
@@ -427,5 +441,54 @@ SnapshotUpdate deleteSnapshot(const std::filesystem::path& photo, std::uint64_t 
 /// @throws std::runtime_error as ::arraw::addSnapshot.
 bool setSnapshotThumbnail(const std::filesystem::path& photo, SnapshotId id,
                           SnapshotThumbnail thumbnail, std::string_view expectedKey);
+
+/// @brief One thumbnail to attach, with the render key the caller expects the snapshot to have.
+struct ThumbnailPatchByKey {
+    /// @brief Snapshot the thumbnail is of.
+    SnapshotId id;
+
+    /// @brief Thumbnail to store.
+    SnapshotThumbnail thumbnail;
+
+    /// @brief Render key the snapshot's thumbnail ought to carry now.
+    std::string expectedKey;
+};
+
+/// @brief Attaches or replaces the thumbnails of several snapshots under one lock.
+///
+/// As ::arraw::setSnapshotThumbnail for each patch, with one lock, one reread of the file and one
+/// commit: a patch whose snapshot is gone, or whose expected key is not the one its thumbnail
+/// carries, is skipped, and nothing is written when none matches. The subtree limit is checked
+/// once, for the result. The revision is never changed.
+/// @param photo Path of the photograph.
+/// @param patches Thumbnails to store; the later of two for one snapshot wins.
+/// @return For each patch, in order, whether it was written.
+/// @throws std::invalid_argument if a thumbnail is invalid (nothing is written) or the result
+/// would pass ::arraw::maximumSnapshotSubtreeBytes.
+/// @throws std::runtime_error, ::arraw::SidecarLockTimeout as ::arraw::setSnapshotThumbnail.
+std::vector<bool> setSnapshotThumbnails(const std::filesystem::path& photo,
+                                        std::span<const ThumbnailPatchByKey> patches);
+
+/// @brief Removes from the sidecar the snapshot content this arraw cannot use, keeping every
+/// snapshot it lists.
+///
+/// The only writer that drops raw snapshot content (ADR 056, decision 15); every other writer
+/// keeps it or refuses the edit. Under the lock it rereads the sidecar and checks the revision.
+/// It removes every raw entry the reader leaves out: damaged nodes, repeated ids and entries past
+/// ::arraw::maximumSnapshots; when the list is not a single sequence it removes every occurrence
+/// of the property. It writes each usable node's parent as the reader repaired it (a missing
+/// parent or a cut cycle edge), removes a saved base that names no listed snapshot, raises the
+/// revision, and sets the counter above every raw id seen in all occurrences, so no id is ever
+/// reused. Usable nodes, and foreign content in them, are patched in place, not rewritten. If a
+/// reread would still report unusable content, nothing is written.
+/// @param photo Path of the photograph.
+/// @param expectedRevision Revision of the collection the caller saw.
+/// @return The sidecar's snapshots afterwards, or nothing, with no write at all, when it held
+/// nothing unusable.
+/// @throws ::arraw::SnapshotRevisionConflict if the revision in the file is not
+/// @p expectedRevision.
+/// @throws ::arraw::SidecarLockTimeout, std::runtime_error as ::arraw::addSnapshot.
+std::optional<SnapshotUpdate> discardUnreadableSnapshots(const std::filesystem::path& photo,
+                                                         std::uint64_t expectedRevision);
 
 } // namespace arraw

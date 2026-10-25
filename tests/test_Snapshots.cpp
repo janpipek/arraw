@@ -1714,3 +1714,311 @@ TEST_CASE("Foreign and future content inside and around snapshot nodes survives 
     CHECK(collection.find(SnapshotId{2})->thumbnail);
     CHECK(collection.revision == 7);
 }
+
+namespace {
+
+/// A usable node with a field of its own that arraw does not know.
+std::string nodeWithForeignField(std::uint64_t id, std::optional<std::uint64_t> parent,
+                                 const std::string& name) {
+    std::string text = node(id, parent, name);
+    const std::string close = "</rdf:li>";
+    text.insert(text.size() - close.size(), "<arraw:keepMe>foreign " + name + "</arraw:keepMe>");
+    return text;
+}
+
+/// A list of two usable nodes, one with a foreign field, then the damage a discard removes.
+std::string damagedItems() {
+    const std::string badJson = "{ not json";
+    return nodeWithForeignField(1, {}, "Root") + node(2, 1, "Child") +
+           node(3, 1, "Bad state", badJson) + node(4, {}, "Another bad", badJson) +
+           node(1, {}, "Duplicate of one") + node(9, {}, "The highest, bad", badJson);
+}
+
+constexpr std::string_view markedBare = "arraw:version=\"2\" arraw:activeStatePresent=\"False\" ";
+
+/// Counts the lock acquisitions of every writer, for the life of the object.
+struct CountedLocks {
+    std::atomic<int> taken = 0;
+
+    CountedLocks() {
+        detail::sidecarLockHeldHook = [this] { ++taken; };
+    }
+    ~CountedLocks() {
+        detail::sidecarLockHeldHook = nullptr;
+    }
+    CountedLocks(const CountedLocks&) = delete;
+    CountedLocks& operator=(const CountedLocks&) = delete;
+};
+
+} // namespace
+
+TEST_CASE("The reader counts the entries it cannot use", "[snapshots][discard][damaged]") {
+    const Bench bench;
+    CHECK(openDocument(bench.photo).unreadableSnapshots == 0);
+
+    SECTION("a damaged node, a repeated id and a node past the limit") {
+        spit(bench.sidecar, sidecarOf(std::string(markedBare), listOf(damagedItems())));
+        const SidecarContents contents = bench.read();
+        CHECK(contents.unreadableSnapshots == 4); // 3, 4, the duplicate 1 and 9
+        CHECK(contents.snapshots.entries.size() == 2);
+        CHECK(openDocument(bench.photo).unreadableSnapshots == 4);
+    }
+    SECTION("entries past the limit of 32") {
+        std::string items;
+        for (std::uint64_t id = 1; id <= 34; ++id) {
+            items += node(id, {}, "Snapshot " + std::to_string(id));
+        }
+        spit(bench.sidecar, sidecarOf(std::string(markedBare), listOf(items)));
+        CHECK(bench.read().snapshots.entries.size() == 32);
+        CHECK(bench.read().unreadableSnapshots == 2);
+        CHECK(openDocument(bench.photo).unreadableSnapshots == 2);
+    }
+    SECTION("a list that is not one sequence counts every item of every occurrence, at least one") {
+        spit(bench.sidecar,
+             sidecarOf(std::string(markedBare),
+                       listOf(node(2, {}, "A")) + listOf(node(7, {}, "B") + node(8, {}, "C"))));
+        CHECK(bench.read().unreadableSnapshots == 3);
+        CHECK(bench.read().snapshots.entries.empty());
+        spit(bench.sidecar, sidecarOf(std::string(markedBare),
+                                      "<arraw:snapshots>not a sequence</arraw:snapshots>"));
+        CHECK(bench.read().unreadableSnapshots == 1);
+        CHECK(openDocument(bench.photo).unreadableSnapshots == 1);
+    }
+    SECTION("an edit reports the count it leaves") {
+        spit(bench.sidecar, sidecarOf(std::string(markedBare), listOf(damagedItems())));
+        const SnapshotUpdate update = addSnapshot(bench.photo, 0, draft("New"));
+        CHECK(update.unreadable == 4);
+        CHECK(renameSnapshot(bench.photo, 1, SnapshotId{1}, "R").unreadable == 4);
+    }
+}
+
+TEST_CASE("Discarding removes the unusable entries and keeps every snapshot",
+          "[snapshots][discard]") {
+    const Bench bench;
+    spit(bench.sidecar, sidecarOf(std::string(markedBare) +
+                                      "arraw:snapshotNextId=\"3\" arraw:snapshotRevision=\"5\"",
+                                  listOf(damagedItems())));
+    const SnapshotCollection before = bench.read().snapshots;
+    REQUIRE(before.entries.size() == 2);
+    REQUIRE(bench.read().unreadableSnapshots == 4);
+
+    const auto update = discardUnreadableSnapshots(bench.photo, 5);
+
+    REQUIRE(update);
+    CHECK(update->unreadable == 0);
+    CHECK(update->id.value == 0);
+    CHECK(update->collection.entries == before.entries);
+    CHECK(update->collection.revision == 6);
+    CHECK(update->collection.nextId == 10); // above the raw id 9 of an entry that is gone
+    const SidecarContents after = bench.read();
+    CHECK(after.snapshots == update->collection);
+    CHECK(after.unreadableSnapshots == 0);
+    CHECK_FALSE(after.snapshotsDamaged);
+    const std::string text = slurp(bench.sidecar);
+    CHECK(contains(text, "foreign Root"));
+    CHECK_FALSE(contains(text, "Duplicate of one"));
+    CHECK_FALSE(contains(text, "Bad state"));
+    CHECK_FALSE(contains(text, "The highest, bad"));
+    CollectedDiagnostics log;
+    static_cast<void>(openDocument(bench.photo, log));
+    CHECK(count(log, Notice::SnapshotDamaged) == 0);
+
+    // The list takes new snapshots again, and no removed id comes back.
+    CHECK(addSnapshot(bench.photo, 6, draft("After")).id.value == 10);
+}
+
+TEST_CASE("Discarding a list that is not one sequence removes every occurrence",
+          "[snapshots][discard]") {
+    const Bench bench;
+    spit(bench.sidecar, sidecarOf(std::string(markedBare) +
+                                      "arraw:snapshotNextId=\"2\" arraw:snapshotRevision=\"3\"",
+                                  listOf(node(2, {}, "A")) + listOf(node(7, {}, "B"))));
+    REQUIRE(bench.read().unreadableSnapshots == 2);
+
+    const auto update = discardUnreadableSnapshots(bench.photo, 3);
+
+    REQUIRE(update);
+    CHECK(update->collection.entries.empty());
+    CHECK(update->collection.revision == 4);
+    CHECK(update->collection.nextId == 8); // above the raw ids of both occurrences
+    const std::string text = slurp(bench.sidecar);
+    CHECK_FALSE(contains(text, "arraw:snapshots"));
+    CHECK(bench.read().unreadableSnapshots == 0);
+    CHECK_FALSE(bench.read().snapshotsDamaged);
+    CHECK(addSnapshot(bench.photo, 4, draft("After")).id.value == 8);
+
+    SECTION("a list that is an attribute or plain text goes too") {
+        spit(bench.sidecar, sidecarOf(std::string(markedBare) + "arraw:snapshots=\"text\""));
+        REQUIRE(bench.read().unreadableSnapshots == 1);
+        REQUIRE(discardUnreadableSnapshots(bench.photo, 0));
+        CHECK_FALSE(contains(slurp(bench.sidecar), "arraw:snapshots"));
+        spit(bench.sidecar,
+             sidecarOf(std::string(markedBare), "<arraw:snapshots>text</arraw:snapshots>"));
+        REQUIRE(discardUnreadableSnapshots(bench.photo, 0));
+        CHECK_FALSE(contains(slurp(bench.sidecar), "arraw:snapshots"));
+        CHECK(bench.read().unreadableSnapshots == 0);
+    }
+}
+
+TEST_CASE("Discarding refuses a stale revision and leaves the file alone", "[snapshots][discard]") {
+    const Bench bench;
+    spit(bench.sidecar, sidecarOf(std::string(markedBare) + "arraw:snapshotRevision=\"5\"",
+                                  listOf(damagedItems())));
+    const std::string before = slurp(bench.sidecar);
+
+    try {
+        static_cast<void>(discardUnreadableSnapshots(bench.photo, 4));
+        FAIL("a stale revision was accepted");
+    } catch (const SnapshotRevisionConflict& error) {
+        CHECK(error.expected == 4);
+        CHECK(error.actual == 5);
+    }
+    CHECK(slurp(bench.sidecar) == before);
+}
+
+TEST_CASE("Discarding with nothing unusable writes nothing", "[snapshots][discard]") {
+    const Bench bench;
+    SECTION("no sidecar") {
+        CHECK_FALSE(discardUnreadableSnapshots(bench.photo, 0));
+        CHECK_FALSE(fs::exists(bench.sidecar));
+    }
+    SECTION("a clean list") {
+        addSnapshot(bench.photo, 0, draft("One"));
+        addSnapshot(bench.photo, 1, draft("Two"));
+        const std::string before = slurp(bench.sidecar);
+        const auto stamp = fs::last_write_time(bench.sidecar);
+        CHECK_FALSE(discardUnreadableSnapshots(bench.photo, 2));
+        CHECK(slurp(bench.sidecar) == before);
+        CHECK(fs::last_write_time(bench.sidecar) == stamp);
+        CHECK_FALSE(fs::exists(bench.sidecar.string() + ".lock"));
+        // The revision is still checked first.
+        CHECK_THROWS_AS(discardUnreadableSnapshots(bench.photo, 1), SnapshotRevisionConflict);
+    }
+}
+
+TEST_CASE("Discarding writes the parents and the saved base as the reader repaired them",
+          "[snapshots][discard]") {
+    const Bench bench;
+    const std::string badJson = "{ not json";
+    const std::string items =
+        node(1, {}, "Root") + node(2, 1, "Child") +
+        node(3, 99, "Dangling parent") +                // missing parent
+        node(4, {}, "Bad", badJson) +                   // unusable, and a parent ...
+        node(5, 4, "Child of the bad one") +            // ... of this one
+        node(6, 7, "Cycle A") + node(7, 6, "Cycle B") + // a cycle
+        item(field("id", "8") + field("parent", "x?") + field("name", "Odd parent") +
+             field("created", "2026-10-23T12:00:00Z") +
+             field("state", escaped(stateToJson(DevelopState{}))) +
+             field("negative", escaped(negativeToJson(NegativeSettings{}))));
+    spit(bench.sidecar,
+         sidecarOf(std::string(markedBare) + "arraw:savedBase=\"77\"", listOf(items)));
+    CollectedDiagnostics log;
+    const SnapshotCollection before = bench.read(log).snapshots;
+    REQUIRE(count(log, Notice::SnapshotDamaged) > 4);
+    REQUIRE(before.entries.size() == 7);
+
+    const auto update = discardUnreadableSnapshots(bench.photo, 0);
+
+    REQUIRE(update);
+    CHECK(update->collection.entries == before.entries); // as the reader had repaired them
+    CHECK(update->collection.find(SnapshotId{2})->parent == SnapshotId{1});
+    CHECK(update->collection.find(SnapshotId{3})->parent == std::nullopt);
+    CHECK(update->collection.find(SnapshotId{5})->parent == std::nullopt);
+    CHECK(update->collection.find(SnapshotId{8})->parent == std::nullopt);
+    CHECK(update->savedBase == std::nullopt);
+    // Nothing is left to repair on the next read: no notice at all.
+    CollectedDiagnostics again;
+    const SidecarContents after = bench.read(again);
+    CHECK(count(again, Notice::SnapshotDamaged) == 0);
+    CHECK(after.savedBase == std::nullopt);
+    CHECK_FALSE(contains(slurp(bench.sidecar), "arraw:savedBase"));
+    CHECK(after.snapshots.entries == before.entries);
+}
+
+TEST_CASE("Discarding keeps a saved base that names a listed snapshot", "[snapshots][discard]") {
+    const Bench bench;
+    spit(bench.sidecar,
+         sidecarOf(std::string(markedBare) + "arraw:savedBase=\"2\"",
+                   listOf(node(1, {}, "A") + node(2, 1, "B") + node(3, {}, "Bad", "{ not json"))));
+    const auto update = discardUnreadableSnapshots(bench.photo, 0);
+    REQUIRE(update);
+    CHECK(update->savedBase == SnapshotId{2});
+    CHECK(bench.read().savedBase == SnapshotId{2});
+}
+
+TEST_CASE("Discarding times out on a locked sidecar and leaves the file alone",
+          "[snapshots][discard][lock][slow]") {
+    const ShortLockTimeout shortTimeout;
+    const Bench bench;
+    spit(bench.sidecar, sidecarOf(std::string(markedBare), listOf(damagedItems())));
+    const std::string before = slurp(bench.sidecar);
+
+    QLockFile lock(QString::fromStdString(bench.sidecar.string() + ".lock"));
+    REQUIRE(lock.tryLock(1000));
+    CHECK_THROWS_AS(discardUnreadableSnapshots(bench.photo, 0), SidecarLockTimeout);
+    CHECK(slurp(bench.sidecar) == before);
+    lock.unlock();
+    CHECK(discardUnreadableSnapshots(bench.photo, 0));
+}
+
+TEST_CASE("Several thumbnails are written under one lock and one commit",
+          "[snapshots][thumbnail]") {
+    const Bench bench;
+    const SnapshotId one = addSnapshot(bench.photo, 0, draft("One")).id;
+    const SnapshotId two = addSnapshot(bench.photo, 1, draft("Two")).id;
+    const SnapshotId three = addSnapshot(bench.photo, 2, draft("Three")).id;
+    // A rename that lands after the patches were prepared is kept.
+    renameSnapshot(bench.photo, 3, two, "Two renamed");
+
+    const std::vector<ThumbnailPatchByKey> patches = {
+        {one, thumbnailOf(8, 8, "key-one"), "key-one"},
+        {two, thumbnailOf(8, 8, "key-two"), "key-other"}, // the wrong key
+        {three, thumbnailOf(16, 12, "key-three"), "key-three"},
+        {SnapshotId{9}, thumbnailOf(8, 8, "key-gone"), "key-gone"}, // not a snapshot
+    };
+    {
+        const CountedLocks locks;
+        CHECK(setSnapshotThumbnails(bench.photo, patches) ==
+              std::vector<bool>{true, false, true, false});
+        CHECK(locks.taken == 1);
+    }
+    const SnapshotCollection collection = bench.read().snapshots;
+    CHECK(collection.revision == 4);
+    CHECK(collection.find(one)->thumbnail->renderKey == "key-one");
+    CHECK_FALSE(collection.find(two)->thumbnail);
+    CHECK(collection.find(two)->name == "Two renamed");
+    CHECK(collection.find(three)->thumbnail->renderKey == "key-three");
+
+    SECTION("when none matches nothing is written") {
+        const std::string before = slurp(bench.sidecar);
+        const auto stamp = fs::last_write_time(bench.sidecar);
+        const std::vector<ThumbnailPatchByKey> none = {
+            {two, thumbnailOf(8, 8, "key-two"), "key-other"},
+            {SnapshotId{9}, thumbnailOf(8, 8, "key-gone"), "key-gone"}};
+        CHECK(setSnapshotThumbnails(bench.photo, none) == std::vector<bool>{false, false});
+        CHECK(slurp(bench.sidecar) == before);
+        CHECK(fs::last_write_time(bench.sidecar) == stamp);
+    }
+    SECTION("an empty batch takes no lock") {
+        const CountedLocks locks;
+        CHECK(setSnapshotThumbnails(bench.photo, {}).empty());
+        CHECK(locks.taken == 0);
+    }
+    SECTION("an invalid thumbnail refuses the whole batch") {
+        const std::string before = slurp(bench.sidecar);
+        const std::vector<ThumbnailPatchByKey> bad = {
+            {two, thumbnailOf(8, 8, "key-two"), "key-two"},
+            {three, thumbnailOf(300, 8, "key-three"), "key-three"}};
+        CHECK_THROWS_AS(setSnapshotThumbnails(bench.photo, bad), std::invalid_argument);
+        CHECK(slurp(bench.sidecar) == before);
+    }
+    SECTION("the later of two patches for one snapshot wins") {
+        const std::vector<ThumbnailPatchByKey> twice = {
+            {one, thumbnailOf(8, 8, "key-new"), "key-new"},
+            {one, thumbnailOf(24, 24, "key-new"), "key-new"}};
+        CHECK(setSnapshotThumbnails(bench.photo, twice) == std::vector<bool>{true, true});
+        const SnapshotThumbnail kept = *bench.read().snapshots.find(one)->thumbnail;
+        CHECK(kept == twice.back().thumbnail);
+        CHECK(bench.read().snapshots.revision == 4);
+    }
+}

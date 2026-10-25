@@ -5,6 +5,7 @@
 #include <NegativeSettings.h>
 #include <Photo.h>
 #include <SettingDescriptors.h>
+#include <SnapshotWrites.h>
 #include <Snapshots.h>
 
 #include <cstddef>
@@ -189,7 +190,7 @@ public:
     explicit EditSession(OpenDocument document, const LensDatabase* lensDatabase = nullptr)
         : photo_(document.photo), saved_(std::move(document.photo)),
           snapshots_(std::move(document.snapshots)), base_(document.savedBase),
-          savedBase_(document.savedBase),
+          savedBase_(document.savedBase), unreadable_(document.unreadableSnapshots),
           history_{{saved_.state(), EditOrigin::Opened, {}, saved_.negative(), document.savedBase}},
           lensDatabase_(lensDatabase) {}
 
@@ -206,7 +207,7 @@ public:
     /// taken to be what its sidecar holds (or defaults, when there is none).
     /// @param lensDatabase Database the session records lens matches in, as setLensDatabase().
     explicit EditSession(Photo photo, const LensDatabase* lensDatabase = nullptr)
-        : EditSession(OpenDocument{std::move(photo), SnapshotCollection{}, std::nullopt},
+        : EditSession(OpenDocument{std::move(photo), SnapshotCollection{}, std::nullopt, 0},
                       lensDatabase) {
         baseKnown_ = false;
     }
@@ -386,6 +387,12 @@ public:
         return snapshots_;
     }
 
+    /// @brief Count of raw snapshot entries the sidecar held, as the session last read or wrote
+    /// it, that this arraw cannot use (::arraw::SidecarContents::unreadableSnapshots).
+    [[nodiscard]] std::size_t unreadableSnapshots() const noexcept {
+        return unreadable_;
+    }
+
     /// @brief Snapshot the current look is based on, if any.
     [[nodiscard]] std::optional<SnapshotId> baseSnapshot() const noexcept {
         return base_;
@@ -400,7 +407,9 @@ public:
     ///
     /// Blocking: the write waits up to the lock timeout and parses the sidecar, so call it, like
     /// renameSnapshot(), deleteSnapshot() and refreshSnapshots(), from the thread that owns the
-    /// session and expect it to take time.
+    /// session and expect it to take time. The synchronous snapshot methods are for the command
+    /// line and scripts; the GUI uses the prepare, write and finish parts (prepareCreateSnapshot(),
+    /// ::arraw::writeSnapshotChange, finishSnapshotWrite()) with a writer thread.
     ///
     /// A gesture under way is settled first, as save() does, with the lens match recorded. The
     /// snapshot holds the whole state and negative, takes the working base as its parent and a
@@ -453,6 +462,78 @@ public:
     /// @throws std::runtime_error, ::arraw::SidecarLockTimeout as ::arraw::deleteSnapshot.
     void deleteSnapshot(SnapshotId id);
 
+    /// @brief Removes the snapshot entries this arraw cannot use from the sidecar at once.
+    ///
+    /// Blocking, as createSnapshot(); the sync form of prepareDiscardUnreadableSnapshots(). Every
+    /// snapshot the session lists is kept (::arraw::discardUnreadableSnapshots). A sidecar that
+    /// holds nothing unusable is not written.
+    /// @throws ::arraw::SnapshotRevisionConflict as createSnapshot().
+    /// @throws std::runtime_error, ::arraw::SidecarLockTimeout as
+    /// ::arraw::discardUnreadableSnapshots.
+    void discardUnreadableSnapshots();
+
+    /// @brief Prepares Create from the current look, for a writer thread to carry out.
+    ///
+    /// Pure: nothing changes in the session and nothing is read or written. The draft takes the
+    /// working base as parent and records the history position for finishSnapshotWrite() to anchor
+    /// to.
+    /// @param name Name of the snapshot, 1 to ::arraw::maximumSnapshotNameBytes bytes.
+    /// @return The write.
+    /// @throws std::logic_error if an edit is open; the caller settles the gesture first.
+    /// @throws std::invalid_argument if the name or the look is invalid.
+    [[nodiscard]] SnapshotWrite prepareCreateSnapshot(std::string name) const;
+
+    /// @brief Prepares Rename, for a writer thread to carry out; pure.
+    /// @param id Snapshot to rename.
+    /// @param name New name.
+    /// @return The write.
+    /// @throws std::invalid_argument if the name is invalid or the session knows no such snapshot.
+    [[nodiscard]] SnapshotWrite prepareRenameSnapshot(SnapshotId id, std::string name) const;
+
+    /// @brief Prepares Delete, for a writer thread to carry out; pure.
+    /// @param id Snapshot to delete.
+    /// @return The write.
+    /// @throws std::invalid_argument if the session knows no such snapshot.
+    [[nodiscard]] SnapshotWrite prepareDeleteSnapshot(SnapshotId id) const;
+
+    /// @brief Prepares the removal of unusable snapshot entries, for a writer thread to carry out;
+    /// pure.
+    /// @return The write.
+    [[nodiscard]] SnapshotWrite prepareDiscardUnreadableSnapshots() const;
+
+    /// @brief Prepares storing a rendered thumbnail, for a writer thread to carry out; pure.
+    ///
+    /// Reads no file: the render key is worked out by ::arraw::writeSnapshotChange.
+    /// @param id Snapshot the thumbnail is of.
+    /// @param thumbnail Thumbnail to store.
+    /// @return The write, or nothing when the session knows no such snapshot.
+    /// @throws std::invalid_argument if @p thumbnail is invalid.
+    [[nodiscard]] std::optional<SnapshotWrite>
+    prepareSnapshotThumbnail(SnapshotId id, SnapshotThumbnail thumbnail) const;
+
+    /// @brief Applies a snapshot write that succeeded.
+    ///
+    /// A Create adopts the collection and anchors the new snapshot to the current history step only
+    /// if no edit is open and the session is still at the position, with the state, negative and
+    /// base the write was prepared from; otherwise the snapshot is listed and the base is
+    /// unchanged. Rename, Delete and discard adopt the collection, which remaps every reference to
+    /// a deleted snapshot to its parent. A thumbnail that was written is stored on its snapshot
+    /// when that is still listed; the history, bases, dirty state and revision never change. A
+    /// write that was refused or found nothing to do changes nothing.
+    /// @param write The write that was carried out.
+    /// @param outcome What it did.
+    /// @return False only for a Create that could not be anchored.
+    /// @throws std::invalid_argument if @p write is not for this session's photograph.
+    bool finishSnapshotWrite(const SnapshotWrite& write, const SnapshotWriteOutcome& outcome);
+
+    /// @brief Takes a collection read elsewhere, after a conflict or an external change.
+    ///
+    /// Remaps every reference to a snapshot it no longer lists, as refreshSnapshots() does,
+    /// without reading anything.
+    /// @param fresh The sidecar's collection.
+    /// @param unreadable Count of unusable raw entries beside it.
+    void adoptSnapshots(SnapshotCollection fresh, std::size_t unreadable);
+
     /// @brief Reads the snapshots again from the sidecar, for a change another process made.
     ///
     /// References to snapshots that are gone (the working base, the saved base, the open edit's
@@ -472,6 +553,9 @@ public:
     [[nodiscard]] std::vector<SnapshotId> snapshotsNeedingThumbnails() const;
 
     /// @brief Stores a rendered thumbnail on its snapshot, if it is still the one wanted.
+    ///
+    /// The sync form of prepareSnapshotThumbnail(), ::arraw::writeSnapshotChange and
+    /// finishSnapshotWrite().
     ///
     /// Works out the render key the snapshot's recipe has now (::arraw::snapshotThumbnailKey) and
     /// writes through ::arraw::setSnapshotThumbnail with it, so the thumbnail is accepted only if
@@ -545,6 +629,9 @@ private:
     /// Snapshot the saved recipe is based on.
     std::optional<SnapshotId> savedBase_;
 
+    /// Raw snapshot entries the sidecar held that cannot be used, as last read or written.
+    std::size_t unreadable_ = 0;
+
     /// Whether savedBase_ is what the sidecar holds; false for a session built from a bare Photo.
     bool baseKnown_ = true;
 
@@ -569,11 +656,12 @@ private:
     [[nodiscard]] std::optional<SnapshotId> survivor(std::optional<SnapshotId> id,
                                                      const SnapshotCollection& fresh) const;
 
-    /// Replaces every reference to @p gone with @p instead.
-    void replaceBase(SnapshotId gone, std::optional<SnapshotId> instead);
-
     /// Reads the collection again after a conflict, ignoring a failure to read.
     void refreshAfterConflict() noexcept;
+
+    /// Builds the Create write for a draft taken from @p look, which must be the photograph as it
+    /// will stand once any open edit is settled.
+    [[nodiscard]] SnapshotWrite createWrite(std::string name, const Photo& look) const;
 
     /// Drops the steps after the position and appends one.
     void appendStep(HistoryStep step);

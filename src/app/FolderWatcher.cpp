@@ -7,6 +7,7 @@
 #include <QDeadlineTimer>
 #include <QMetaObject>
 
+#include <algorithm>
 #include <exception>
 #include <functional>
 #include <system_error>
@@ -134,7 +135,16 @@ void FolderWatcher::finishWalk(std::uint64_t walk, ListingSummary summary) {
 
 void FolderWatcher::noteOwnWrite(const std::filesystem::path& sidecar) {
     if (const auto stamp = fileStamp(sidecar)) {
-        ownStamps_[normalised(sidecar)] = *stamp;
+        noteOwnWrite(sidecar, *stamp);
+    }
+}
+
+void FolderWatcher::noteOwnWrite(const std::filesystem::path& sidecar, std::int64_t stamp) {
+    std::deque<std::int64_t>& stamps = ownStamps_[normalised(sidecar)];
+    std::erase(stamps, stamp);
+    stamps.push_back(stamp);
+    while (stamps.size() > ownStampsKept) {
+        stamps.pop_front();
     }
 }
 
@@ -143,7 +153,7 @@ void FolderWatcher::onSidecarRefreshed(const QString& primary, qint64 stamp) {
         const auto sidecar =
             normalised(sidecarPath(std::filesystem::path(primary.toStdU16String())));
         const auto own = ownStamps_.find(sidecar);
-        if (own != ownStamps_.end() && own->second == stamp) {
+        if (own != ownStamps_.end() && std::ranges::find(own->second, stamp) != own->second.end()) {
             return;
         }
     } catch (const std::exception&) {

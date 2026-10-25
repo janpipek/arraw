@@ -239,7 +239,7 @@ std::uint64_t ThumbnailWorker::beginSnapshots() {
 }
 
 bool ThumbnailWorker::requestSnapshotThumbnail(const fs::path& primary, SnapshotRecipe recipe,
-                                               std::uint64_t generation) {
+                                               std::uint64_t generation, std::string storedKey) {
     {
         const std::scoped_lock lock(mutex_);
         // Under the lock, so that a generation cannot change between the check and the push.
@@ -249,7 +249,7 @@ bool ThumbnailWorker::requestSnapshotThumbnail(const fs::path& primary, Snapshot
         std::erase_if(snapshots_, [&](const SnapshotJob& queued) {
             return queued.primary == primary && queued.recipe.id == recipe.id;
         });
-        snapshots_.push_back({primary, std::move(recipe), generation});
+        snapshots_.push_back({primary, std::move(recipe), generation, std::move(storedKey)});
     }
     wake_.notify_one();
     return true;
@@ -291,6 +291,12 @@ std::optional<ThumbnailWorker::Job> ThumbnailWorker::next(const std::stop_token&
     }
     if (!embedded_.empty()) {
         return takeFrom(embedded_, ThumbnailKind::Embedded);
+    }
+    // The developed thumbnails of the shots on screen go before the snapshots' (ADR 056,
+    // decision 14); the rest of them after.
+    if (std::ranges::any_of(developed_,
+                            [this](const fs::path& p) { return visible_.contains(p); })) {
+        return takeFrom(developed_, ThumbnailKind::Developed);
     }
     if (!snapshots_.empty()) {
         SnapshotJob snapshot = std::move(snapshots_.front());
@@ -341,8 +347,8 @@ void ThumbnailWorker::executeSnapshot(const SnapshotJob& job, const std::stop_to
             return;
         }
         const auto key = snapshotThumbnailKey(job.primary, job.recipe.state, job.recipe.negative);
-        if (!key) {
-            return;
+        if (!key || (!job.storedKey.empty() && *key == job.storedKey)) {
+            return; // None to make, or the sidecar's thumbnail is current.
         }
         std::optional<SnapshotThumbnail> thumbnail = cache_.loadSnapshot(*key);
         if (!thumbnail) {

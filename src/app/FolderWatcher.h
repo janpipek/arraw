@@ -10,7 +10,9 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <functional>
 #include <map>
@@ -106,6 +108,19 @@ public:
     /// @param sidecar Path of the sidecar written (see ::arraw::sidecarPath).
     void noteOwnWrite(const std::filesystem::path& sidecar);
 
+    /// @brief Records a sidecar the application has written, by the stamp the writer read.
+    ///
+    /// For a writer on another thread, which reads the stamp right after its commit. The last
+    /// ::arraw::app::FolderWatcher::ownStampsKept stamps of each sidecar are remembered, because
+    /// two own writers may note theirs out of order; a change that leaves any of them is not
+    /// reported as external.
+    /// @param sidecar Path of the sidecar written (see ::arraw::sidecarPath).
+    /// @param stamp ::arraw::app::fileStamp of the sidecar after the write.
+    void noteOwnWrite(const std::filesystem::path& sidecar, std::int64_t stamp);
+
+    /// @brief Stamps remembered for each sidecar.
+    static constexpr std::size_t ownStampsKept = 4;
+
     /// @brief Lists the directories under watch.
     /// @return Their paths, as Qt spells them.
     [[nodiscard]] QStringList watchedDirectories() const {
@@ -198,8 +213,8 @@ private:
 
     /// Model kept up to date.
     ShotModel& model_;
-    /// Stamp of each sidecar the application wrote, by normalised path.
-    std::map<std::filesystem::path, std::int64_t> ownStamps_;
+    /// The last stamps of each sidecar the application wrote, oldest first, by normalised path.
+    std::map<std::filesystem::path, std::deque<std::int64_t>> ownStamps_;
     /// Delivery of the lister, shared with it.
     std::shared_ptr<Link> link_ = std::make_shared<Link>();
     /// Longest wait for the lister's thread at exit.

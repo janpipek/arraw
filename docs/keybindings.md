@@ -30,7 +30,8 @@ its rows from *Planned* to *Current* in the same change that wires them.
 | `X` | Reject (outside cropping) | Culling actions |
 | `R` `Y` `G` `B` `P` | Red, yellow, green, blue, purple colour label | Culling actions |
 | `F5` | Refresh Folder: walk the strip's folder again. F5 on every platform, plus the platform's own Refresh keys (`Ctrl+R` on GNOME, `Shift+Cmd+R` on macOS, the keyboard's Refresh key) | View menu (F5 and all of `QKeySequence::keyBindings(Refresh)`), the strip's context menu and its "not watched" notice |
-| `F7` | Toggle History panel | View menu |
+| `F7` | Toggle Snapshots and History panel | View menu |
+| `Ctrl+N` | New snapshot of the working look (asks for a name; off while a snapshot is previewed) | Photo menu |
 | `F8` | Toggle Adjustments panel | View menu |
 | `F11` | Full screen | View menu |
 | `F12` | Hide panels (lights-out) | View menu |
@@ -52,6 +53,18 @@ another widget has the focus (a slider's value field keeps typed characters).
 | `{` / `}` (`Shift+[` / `Shift+]` on a US layout) | Brush softer / harder (∓ 10 % hardness) while the brush is armed |
 | `E` | Flip the brush's Erase toggle while the brush is armed |
 | `Alt` (held at the press) | Erase with this stroke (paint when Erase is on); on some Linux desktops `Alt` with a drag moves the window, so use `E` or the Erase button |
+
+### Snapshots panel
+
+Shortcuts of the snapshot tree (the Snapshots section of the History dock), which fire while the
+tree or the rows have the focus. Selecting a row previews the snapshot; the preview edits nothing.
+
+| Key | Action |
+|---|---|
+| `Enter` / double-click | Restore the snapshot as the working look (one undoable step) |
+| `F2` | Rename the selected snapshot |
+| `Delete` | Delete the selected snapshot, after a confirmation |
+| `Esc` | End the preview (window-level, on only while a snapshot is previewed) |
 
 ## Wiring rules
 

@@ -157,6 +157,55 @@ QString wordLocal(const DevelopState& before, const DevelopState& after, const L
 
 } // namespace
 
+QString wordEdit(const HistoryStep& before, const HistoryStep& after) {
+    const auto tr = [](const char* text) {
+        return QCoreApplication::translate("arraw::app::HistoryModel", text);
+    };
+    const ChangeDescription change = describeChange(before, after);
+    if (!change.negative.empty()) {
+        // A step that changed the negative alone is named for it; anything more is a count.
+        const std::size_t masks = change.local.added.size() + change.local.removed.size() +
+                                  change.local.changed.size() + (change.local.reordered ? 1 : 0);
+        const std::size_t total = change.negative.size() + change.keys.size() + masks;
+        if (total == 1 && change.negative.front() == "demosaic") {
+            return QStringLiteral("%1: %2").arg(tr("Demosaic"),
+                                                demosaicDisplayName(after.negative.demosaic));
+        }
+        // A correction turned on records its lens in the same step, which is still one change.
+        const bool lensOnly = change.keys.empty() && masks == 0 &&
+                              std::ranges::all_of(change.negative, [](std::string_view key) {
+                                  return key != "demosaic";
+                              });
+        if (lensOnly) {
+            return wordLens(after.negative, change.negative);
+        }
+        return QCoreApplication::translate("arraw::app::HistoryModel", "%n changes", nullptr,
+                                           static_cast<int>(total));
+    }
+    if (!change.local.empty()) {
+        if (change.keys.empty()) {
+            return wordLocal(before.state, after.state, change.local);
+        }
+        // Settings and masks at once: nothing to name but how many.
+        const std::size_t masks = change.local.added.size() + change.local.removed.size() +
+                                  change.local.changed.size() + (change.local.reordered ? 1 : 0);
+        return QCoreApplication::translate("arraw::app::HistoryModel", "%n changes", nullptr,
+                                           static_cast<int>(change.keys.size() + masks));
+    }
+    if (change.keys.size() == 1) {
+        return wordSingle(change.keys.front(), after.state);
+    }
+    if (change.group) {
+        return groupDisplayName(*change.group);
+    }
+    if (change.keys.empty()) {
+        return tr("Edit");
+    }
+    // Several groups: the plural form needs the count.
+    return QCoreApplication::translate("arraw::app::HistoryModel", "%n settings", nullptr,
+                                       static_cast<int>(change.keys.size()));
+}
+
 HistoryModel::HistoryModel(QObject* parent) : QAbstractListModel(parent) {}
 
 void HistoryModel::setHistory(const std::vector<HistoryStep>& history, std::size_t position,
@@ -244,49 +293,7 @@ QString HistoryModel::textOf(std::size_t index) const {
     if (index == 0) {
         return tr("Edit");
     }
-    const ChangeDescription change = describeChange(history_[index - 1], step);
-    if (!change.negative.empty()) {
-        // A step that changed the negative alone is named for it; anything more is a count.
-        const std::size_t masks = change.local.added.size() + change.local.removed.size() +
-                                  change.local.changed.size() + (change.local.reordered ? 1 : 0);
-        const std::size_t total = change.negative.size() + change.keys.size() + masks;
-        if (total == 1 && change.negative.front() == "demosaic") {
-            return QStringLiteral("%1: %2").arg(tr("Demosaic"),
-                                                demosaicDisplayName(step.negative.demosaic));
-        }
-        // A correction turned on records its lens in the same step, which is still one change.
-        const bool lensOnly = change.keys.empty() && masks == 0 &&
-                              std::ranges::all_of(change.negative, [](std::string_view key) {
-                                  return key != "demosaic";
-                              });
-        if (lensOnly) {
-            return wordLens(step.negative, change.negative);
-        }
-        return QCoreApplication::translate("arraw::app::HistoryModel", "%n changes", nullptr,
-                                           static_cast<int>(total));
-    }
-    if (!change.local.empty()) {
-        if (change.keys.empty()) {
-            return wordLocal(history_[index - 1].state, step.state, change.local);
-        }
-        // Settings and masks at once: nothing to name but how many.
-        const std::size_t masks = change.local.added.size() + change.local.removed.size() +
-                                  change.local.changed.size() + (change.local.reordered ? 1 : 0);
-        return QCoreApplication::translate("arraw::app::HistoryModel", "%n changes", nullptr,
-                                           static_cast<int>(change.keys.size() + masks));
-    }
-    if (change.keys.size() == 1) {
-        return wordSingle(change.keys.front(), step.state);
-    }
-    if (change.group) {
-        return groupDisplayName(*change.group);
-    }
-    if (change.keys.empty()) {
-        return tr("Edit");
-    }
-    // Several groups: the plural form needs the count.
-    return QCoreApplication::translate("arraw::app::HistoryModel", "%n settings", nullptr,
-                                       static_cast<int>(change.keys.size()));
+    return wordEdit(history_[index - 1], step);
 }
 
 } // namespace arraw::app

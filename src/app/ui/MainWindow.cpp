@@ -26,6 +26,7 @@
 #include "RenderProgressPie.h"
 #include "SettingPresentation.h"
 #include "SettingsDialog.h"
+#include "SnapshotModel.h"
 #include "StatusLine.h"
 #include "ThumbnailCache.h"
 #include "ThumbnailWorker.h"
@@ -43,21 +44,28 @@
 #include <Photo.h>
 #include <Shot.h>
 #include <Sidecar.h>
+#include <SnapshotThumbnails.h>
 #include <WhiteBalance.h>
 
 #include <QAction>
 #include <QActionGroup>
 #include <QApplication>
 #include <QCloseEvent>
+#include <QDateTime>
 #include <QDockWidget>
 #include <QEvent>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QHBoxLayout>
+#include <QHeaderView>
 #include <QImage>
+#include <QInputDialog>
 #include <QItemSelectionModel>
 #include <QKeySequence>
 #include <QLabel>
+#include <QLineEdit>
 #include <QListView>
+#include <QLocale>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
@@ -69,6 +77,7 @@
 #include <QSettings>
 #include <QShortcut>
 #include <QSignalBlocker>
+#include <QSplitter>
 #include <QStandardPaths>
 #include <QStatusBar>
 #include <QStatusTipEvent>
@@ -79,6 +88,7 @@
 #include <QTabBar>
 #include <QTabWidget>
 #include <QToolButton>
+#include <QTreeView>
 #include <QVBoxLayout>
 #include <QWindowStateChangeEvent>
 
@@ -88,6 +98,7 @@
 #include <exception>
 #include <filesystem>
 #include <iterator>
+#include <map>
 #include <optional>
 #include <stdexcept>
 #include <string_view>
@@ -233,7 +244,14 @@ MainWindow::MainWindow(DebugLog& debugLog, QWidget* parent, PhotoLoader::Decoder
                   },
                   Qt::QueuedConnection);
           },
-          decoder ? std::move(decoder) : PhotoLoader::imageDecoder(&debugLog.diagnostics)) {
+          decoder ? std::move(decoder) : PhotoLoader::imageDecoder(&debugLog.diagnostics)),
+      snapshotWriter_([this](SnapshotWriteResult result) {
+          // On the writer thread. Dropped if the window is gone by the time the GUI thread would
+          // run it.
+          QMetaObject::invokeMethod(
+              this, [this, result = std::move(result)] { snapshotWriteLanded(result); },
+              Qt::QueuedConnection);
+      }) {
     try {
         exportPresets_.emplace(ExportPresetStore::standard());
     } catch (const std::exception& error) {
@@ -549,6 +567,11 @@ MainWindow::~MainWindow() {
     if (histogramSection_ != nullptr) {
         histogramSection_->disconnect(this);
     }
+    // The tree's selection changes as its model goes, into lambdas that use the session.
+    if (snapshotTree_ != nullptr) {
+        snapshotTree_->selectionModel()->disconnect(this);
+        snapshotTree_->disconnect(this);
+    }
     if (photoView_ != nullptr) {
         // Hiding or deactivating the overlay while the window comes down must not reach it.
         photoView_->maskOverlay().disconnect(this);
@@ -617,7 +640,7 @@ void MainWindow::buildZoomControls() {
 
 void MainWindow::updateZoomControls() {
     // The crop mode always fits the whole photograph.
-    const bool enabled = editable() && !photoView_->isCropMode();
+    const bool enabled = hasPixels() && !photoView_->isCropMode();
     zoomButton_->setEnabled(enabled);
     zoomInAction_->setEnabled(enabled);
     zoomOutAction_->setEnabled(enabled);
@@ -956,6 +979,8 @@ void MainWindow::setMaskMode(bool masking) {
 
 void MainWindow::showMaskMode() {
     maskAction_->setChecked(photoView_->isMaskMode());
+    // The snapshot panel rests in the mask mode, where Esc and Delete are the mode's.
+    updateSnapshotPanel();
     if (developTabs_ == nullptr) {
         return;
     }
@@ -1027,7 +1052,7 @@ void MainWindow::syncMasks() {
     if (!open_) {
         return;
     }
-    const DevelopState& state = open_->session.photo().state();
+    const DevelopState& state = shownPhoto().state();
     maskSelection_ = reconciledSelection(state, maskSelection_);
     std::optional<SourceShape> source;
     if (open_->decoded) {
@@ -1158,8 +1183,9 @@ void MainWindow::updateHistoryActions() {
         redoAction_->setEnabled(photoView_->cropOverlay().canRedo());
         return;
     }
-    undoAction_->setEnabled(open_->session.canUndo());
-    redoAction_->setEnabled(open_->session.canRedo());
+    // A preview shows a look the history does not hold: nothing is taken back until it closes.
+    undoAction_->setEnabled(!previewing() && open_->session.canUndo());
+    redoAction_->setEnabled(!previewing() && open_->session.canRedo());
 }
 
 namespace {
@@ -1195,10 +1221,19 @@ void MainWindow::buildHistoryDock() {
     connect(historyView_, &QListView::clicked, this, &MainWindow::goToHistoryRow);
     connect(historyView_, &QListView::activated, this, &MainWindow::goToHistoryRow);
 
+    // The snapshots above the history, with a handle between them (ADR 056, Gate 4).
+    auto* splitter = new QSplitter(Qt::Vertical);
+    splitter->setObjectName("historySplitter");
+    splitter->setChildrenCollapsible(false);
+    splitter->addWidget(buildSnapshotPanel());
+    splitter->addWidget(historyView_);
+    splitter->setStretchFactor(0, 1);
+    splitter->setStretchFactor(1, 2);
+
     historyDock_ = new QDockWidget(tr("History"), this);
     historyDock_->setObjectName("HistoryDock");
     historyDock_->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
-    historyDock_->setWidget(historyView_);
+    historyDock_->setWidget(splitter);
     historyDock_->setEnabled(false);
     addDockWidget(Qt::LeftDockWidgetArea, historyDock_);
     resizeDocks({historyDock_}, {200}, Qt::Horizontal);
@@ -1206,7 +1241,170 @@ void MainWindow::buildHistoryDock() {
     // Presets join this dock in a later step; the action already carries both names.
     QAction* toggle = historyDock_->toggleViewAction();
     toggle->setObjectName("presetsAndHistoryAction");
-    toggle->setText(tr("Presets and &History"));
+    toggle->setText(tr("&Snapshots and History"));
+}
+
+QWidget* MainWindow::buildSnapshotPanel() {
+    snapshotModel_ = new SnapshotModel(this);
+
+    const auto makeAction = [this](const char* name, const QString& text,
+                                   const QKeySequence& key = {}) {
+        auto* action = new QAction(text, this);
+        action->setObjectName(name);
+        if (!key.isEmpty()) {
+            action->setShortcut(key);
+        }
+        action->setEnabled(false);
+        return action;
+    };
+    createSnapshotAction_ = makeAction("createSnapshotAction", tr("New &Snapshot…"),
+                                       QKeySequence(Qt::CTRL | Qt::Key_N));
+    renameSnapshotAction_ = makeAction("renameSnapshotAction", tr("&Rename Snapshot…"));
+    deleteSnapshotAction_ = makeAction("deleteSnapshotAction", tr("&Delete Snapshot…"));
+    restoreSnapshotAction_ = makeAction("restoreSnapshotAction", tr("Re&store Snapshot"));
+    discardUnreadableAction_ =
+        makeAction("discardUnreadableAction", tr("Remove &Unreadable Entries…"));
+    connect(createSnapshotAction_, &QAction::triggered, this, &MainWindow::createSnapshot);
+    connect(renameSnapshotAction_, &QAction::triggered, this, &MainWindow::renameSelectedSnapshot);
+    connect(deleteSnapshotAction_, &QAction::triggered, this, &MainWindow::deleteSelectedSnapshot);
+    connect(restoreSnapshotAction_, &QAction::triggered, this, [this] {
+        if (const auto id = selectedSnapshot()) {
+            restoreSnapshot(*id);
+        }
+    });
+    connect(discardUnreadableAction_, &QAction::triggered, this,
+            &MainWindow::discardUnreadableSnapshots);
+    // Last in the Photo menu; the window carries the key (keepMenuShortcutsOnWindow).
+    photoMenu_->addSeparator();
+    photoMenu_->addAction(createSnapshotAction_);
+
+    snapshotPanel_ = new QWidget;
+    snapshotPanel_->setObjectName("snapshotPanel");
+    auto* column = new QVBoxLayout(snapshotPanel_);
+    column->setContentsMargins(4, 4, 4, 0);
+    column->setSpacing(4);
+
+    // Buttons take no focus: keys belong to the photograph.
+    auto* header = new QHBoxLayout;
+    header->addWidget(new QLabel(tr("Snapshots")), 1);
+    auto* plus = new QToolButton;
+    plus->setObjectName("createSnapshotButton");
+    plus->setText(QStringLiteral("+"));
+    plus->setAutoRaise(true);
+    plus->setFocusPolicy(Qt::NoFocus);
+    plus->setToolTip(
+        tr("New Snapshot (%1)")
+            .arg(createSnapshotAction_->shortcut().toString(QKeySequence::NativeText)));
+    plus->setEnabled(false);
+    connect(plus, &QToolButton::clicked, createSnapshotAction_, &QAction::trigger);
+    connect(createSnapshotAction_, &QAction::changed, plus,
+            [this, plus] { plus->setEnabled(createSnapshotAction_->isEnabled()); });
+    header->addWidget(plus);
+    auto* more = new QToolButton;
+    more->setObjectName("snapshotMenuButton");
+    more->setText(QStringLiteral("\u22ef"));
+    more->setAutoRaise(true);
+    more->setFocusPolicy(Qt::NoFocus);
+    more->setPopupMode(QToolButton::InstantPopup);
+    more->setToolTip(tr("Snapshot actions"));
+    auto* menu = new QMenu(more);
+    menu->addAction(restoreSnapshotAction_);
+    menu->addAction(renameSnapshotAction_);
+    menu->addAction(deleteSnapshotAction_);
+    menu->addSeparator();
+    menu->addAction(discardUnreadableAction_);
+    more->setMenu(menu);
+    header->addWidget(more);
+    column->addLayout(header);
+
+    snapshotDamageNotice_ = new QWidget;
+    snapshotDamageNotice_->setObjectName("snapshotDamageNotice");
+    auto* damage = new QHBoxLayout(snapshotDamageNotice_);
+    damage->setContentsMargins(0, 0, 0, 0);
+    snapshotDamageLabel_ = new QLabel;
+    snapshotDamageLabel_->setWordWrap(true);
+    damage->addWidget(snapshotDamageLabel_, 1);
+    auto* remove = new QPushButton(tr("Remove…"));
+    remove->setObjectName("removeUnreadableButton");
+    remove->setFocusPolicy(Qt::NoFocus);
+    connect(remove, &QPushButton::clicked, discardUnreadableAction_, &QAction::trigger);
+    damage->addWidget(remove);
+    snapshotDamageNotice_->hide();
+    column->addWidget(snapshotDamageNotice_);
+
+    snapshotPreviewBanner_ = new QWidget;
+    snapshotPreviewBanner_->setObjectName("snapshotPreviewBanner");
+    auto* banner = new QHBoxLayout(snapshotPreviewBanner_);
+    banner->setContentsMargins(0, 0, 0, 0);
+    snapshotPreviewLabel_ = new QLabel;
+    snapshotPreviewLabel_->setWordWrap(true);
+    banner->addWidget(snapshotPreviewLabel_, 1);
+    auto* restore = new QPushButton(tr("Restore"));
+    restore->setObjectName("previewRestoreButton");
+    restore->setFocusPolicy(Qt::NoFocus);
+    connect(restore, &QPushButton::clicked, restoreSnapshotAction_, &QAction::trigger);
+    banner->addWidget(restore);
+    auto* close = new QPushButton(tr("Close"));
+    close->setObjectName("previewCloseButton");
+    close->setFocusPolicy(Qt::NoFocus);
+    connect(close, &QPushButton::clicked, this, [this] { closePreview(); });
+    banner->addWidget(close);
+    snapshotPreviewBanner_->hide();
+    column->addWidget(snapshotPreviewBanner_);
+
+    snapshotTree_ = new QTreeView;
+    snapshotTree_->setObjectName("snapshotTree");
+    snapshotTree_->setModel(snapshotModel_);
+    snapshotTree_->setHeaderHidden(true);
+    snapshotTree_->setIconSize(QSize(64, 48));
+    snapshotTree_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    snapshotTree_->setSelectionMode(QAbstractItemView::SingleSelection);
+    snapshotTree_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    snapshotTree_->setUniformRowHeights(true);
+    snapshotTree_->setExpandsOnDoubleClick(false);
+    snapshotTree_->setMinimumHeight(80);
+    connect(snapshotModel_, &QAbstractItemModel::modelReset, snapshotTree_, &QTreeView::expandAll);
+    // Selecting a row previews it; clearing the selection ends the preview.
+    connect(snapshotTree_->selectionModel(), &QItemSelectionModel::selectionChanged, this, [this] {
+        if (syncingSnapshotSelection_) {
+            return;
+        }
+        if (const auto id = selectedSnapshot()) {
+            startPreview(*id);
+        } else {
+            closePreview();
+        }
+        updateSnapshotPanel();
+    });
+    // Double-click and Enter restore. Not `activated`: with single-click activation a click
+    // would preview and restore at once.
+    connect(snapshotTree_, &QTreeView::doubleClicked, this, [this](const QModelIndex& row) {
+        if (const auto id = snapshotModel_->idOf(row)) {
+            restoreSnapshot(*id);
+        }
+    });
+    for (const Qt::Key key : {Qt::Key_Return, Qt::Key_Enter}) {
+        auto* shortcut = new QShortcut(QKeySequence(key), snapshotTree_);
+        shortcut->setContext(Qt::WidgetWithChildrenShortcut);
+        connect(shortcut, &QShortcut::activated, this, [this] {
+            if (const auto id = selectedSnapshot()) {
+                restoreSnapshot(*id);
+            }
+        });
+    }
+    const auto addTreeKey = [this](Qt::Key key, void (MainWindow::*act)()) {
+        auto* shortcut = new QShortcut(QKeySequence(key), snapshotTree_);
+        shortcut->setContext(Qt::WidgetWithChildrenShortcut);
+        connect(shortcut, &QShortcut::activated, this, act);
+    };
+    addTreeKey(Qt::Key_F2, &MainWindow::renameSelectedSnapshot);
+    addTreeKey(Qt::Key_Delete, &MainWindow::deleteSelectedSnapshot);
+    column->addWidget(snapshotTree_, 1);
+
+    closePreviewShortcut_ = new QShortcut(Qt::Key_Escape, this);
+    closePreviewShortcut_->setEnabled(false);
+    connect(closePreviewShortcut_, &QShortcut::activated, this, [this] { closePreview(); });
+    return snapshotPanel_;
 }
 
 void MainWindow::buildPanelActions() {
@@ -1326,10 +1524,17 @@ void MainWindow::updateHistoryDock() {
     if (!open_) {
         historyModel_->clear();
         historyDock_->setEnabled(false);
+        snapshotModel_->clear();
+        shownSnapshots_.reset();
+        updateSnapshotPanel();
         return;
     }
     const bool cropping = photoView_->isCropMode();
-    historyDock_->setEnabled(editable() && !cropping);
+    // The snapshots stay usable while one is previewed; the steps wait for the preview to close.
+    historyDock_->setEnabled(hasPixels() && !cropping);
+    historyView_->setEnabled(editable() && !cropping);
+    refreshSnapshotModel(false);
+    updateSnapshotPanel();
     // The list changes when an edit commits, not while one is open (a drag, the crop mode).
     if (open_->session.editing()) {
         return;
@@ -1360,6 +1565,511 @@ void MainWindow::goToHistoryRow(const QModelIndex& row) {
         open_->session.goTo(step);
         refreshPanel();
     });
+}
+
+std::optional<SnapshotId> MainWindow::selectedSnapshot() const {
+    if (snapshotTree_ == nullptr) {
+        return std::nullopt;
+    }
+    const QModelIndexList rows = snapshotTree_->selectionModel()->selectedRows();
+    return rows.isEmpty() ? std::nullopt : snapshotModel_->idOf(rows.first());
+}
+
+void MainWindow::syncSnapshotSelection() {
+    QItemSelectionModel* selection = snapshotTree_->selectionModel();
+    const QModelIndex shown =
+        previewing() ? snapshotModel_->indexOfId(*open_->previewed) : QModelIndex();
+    syncingSnapshotSelection_ = true;
+    if (shown.isValid()) {
+        selection->setCurrentIndex(shown,
+                                   QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+        snapshotTree_->scrollTo(shown);
+    } else {
+        selection->clear();
+    }
+    syncingSnapshotSelection_ = false;
+}
+
+void MainWindow::refreshSnapshotModel(bool force) {
+    if (!open_) {
+        snapshotModel_->clear();
+        shownSnapshots_.reset();
+        return;
+    }
+    const EditSession& session = open_->session;
+    const SnapshotCollection& collection = session.snapshots();
+    const ShownSnapshots now{open_->serial, collection.revision, collection.entries.size(),
+                             session.baseSnapshot(), session.savedBaseSnapshot()};
+    if (!force && shownSnapshots_ && shownSnapshots_->serial == now.serial &&
+        shownSnapshots_->revision == now.revision && shownSnapshots_->count == now.count &&
+        shownSnapshots_->base == now.base && shownSnapshots_->savedBase == now.savedBase) {
+        return;
+    }
+    shownSnapshots_ = now;
+    snapshotModel_->setSnapshots(collection, now.base, now.savedBase);
+    syncSnapshotSelection();
+}
+
+void MainWindow::updateSnapshotPanel() {
+    if (snapshotPanel_ == nullptr) {
+        return;
+    }
+    const bool pixels = hasPixels();
+    // The mask mode and the crop mode have Esc and Delete of their own.
+    const bool quiet = pixels && !photoView_->isCropMode() && !photoView_->isMaskMode();
+    snapshotPanel_->setEnabled(quiet);
+    const bool busy = open_ && open_->structuralTicket.has_value();
+    const std::size_t unreadable = open_ ? open_->session.unreadableSnapshots() : 0;
+    const bool selected = selectedSnapshot().has_value();
+    createSnapshotAction_->setEnabled(quiet && !previewing() && !busy);
+    renameSnapshotAction_->setEnabled(quiet && selected && !busy);
+    deleteSnapshotAction_->setEnabled(quiet && selected && !busy);
+    restoreSnapshotAction_->setEnabled(quiet && selected);
+    discardUnreadableAction_->setEnabled(quiet && unreadable > 0 && !busy);
+    snapshotDamageNotice_->setVisible(open_ && unreadable > 0);
+    snapshotDamageLabel_->setText(tr("%n snapshot entries in the sidecar cannot be read.", nullptr,
+                                     static_cast<int>(unreadable)));
+    snapshotDamageNotice_->setEnabled(!busy);
+    snapshotPreviewBanner_->setVisible(previewing());
+    if (previewing()) {
+        const Snapshot* snapshot = open_->session.snapshots().find(*open_->previewed);
+        snapshotPreviewLabel_->setText(
+            tr("Previewing “%1”")
+                .arg(snapshot != nullptr ? QString::fromStdString(snapshot->name) : QString()));
+    }
+    closePreviewShortcut_->setEnabled(previewing());
+}
+
+void MainWindow::startPreview(SnapshotId id) {
+    if (!hasPixels() || photoView_->isCropMode() || photoView_->isMaskMode()) {
+        syncSnapshotSelection();
+        return;
+    }
+    if (open_->previewed == id) {
+        return;
+    }
+    const Snapshot* snapshot = open_->session.snapshots().find(id);
+    if (snapshot == nullptr) {
+        syncSnapshotSelection();
+        return;
+    }
+    const QString name = QString::fromStdString(snapshot->name);
+    // Esc is the picker's while it is armed, and the preview's from now on.
+    setPicking(false);
+    try {
+        // A slider still being dragged becomes a step; the preview leaves the session alone.
+        developPanel_->finishPendingEdit();
+        if (open_->session.editing()) {
+            throw std::logic_error("an edit is still open");
+        }
+        open_->previewPhoto = open_->session.photo().with(snapshot->negative).with(snapshot->state);
+        open_->previewed = id;
+    } catch (const std::exception& error) {
+        // A preview that was open ends properly: the view, the actions and the panel follow.
+        closePreview();
+        open_->previewPhoto.reset();
+        open_->previewed.reset();
+        statusLine_->showMessage(
+            tr("Cannot preview “%1”: %2").arg(name, QString::fromUtf8(error.what())), 8000);
+        syncSnapshotSelection();
+        updateSnapshotPanel();
+        return;
+    }
+    updateEditingActions();
+    refreshPanel();
+}
+
+void MainWindow::closePreview(bool refresh) {
+    if (!open_ || !open_->previewed) {
+        return;
+    }
+    open_->previewed.reset();
+    open_->previewPhoto.reset();
+    updateEditingActions();
+    syncSnapshotSelection();
+    if (refresh) {
+        refreshPanel();
+    } else {
+        updateSnapshotPanel();
+    }
+}
+
+void MainWindow::restoreSnapshot(SnapshotId id) {
+    if (!hasPixels() || photoView_->isCropMode() || photoView_->isMaskMode()) {
+        return;
+    }
+    closePreview(false);
+    guarded([this, id] {
+        developPanel_->finishPendingEdit();
+        photoView_->maskOverlay().abandonDrag();
+        open_->session.restoreSnapshot(id);
+        refreshPanel();
+    });
+}
+
+void MainWindow::refreshSnapshotUi() {
+    if (!open_) {
+        return;
+    }
+    const bool closed =
+        previewing() && open_->session.snapshots().find(*open_->previewed) == nullptr;
+    if (closed) {
+        closePreview(false);
+    }
+    refreshSnapshotModel(true);
+    updateHistoryActions();
+    saveAction_->setEnabled(!previewing() && open_->session.hasUnsavedChanges());
+    updateTitle();
+    if (closed) {
+        refreshPanel();
+    }
+}
+
+std::optional<std::string> MainWindow::askSnapshotName(const QString& title,
+                                                       const QString& initial) {
+    QString shown = initial;
+    for (;;) {
+        bool accepted = false;
+        const QString entered =
+            QInputDialog::getText(this, title, tr("Name:"), QLineEdit::Normal, shown, &accepted);
+        if (!accepted) {
+            return std::nullopt;
+        }
+        shown = entered;
+        QString name = entered.trimmed();
+        if (name.isEmpty()) {
+            name = initial;
+        }
+        if (static_cast<std::size_t>(name.toUtf8().size()) > maximumSnapshotNameBytes) {
+            QMessageBox::warning(this, title,
+                                 tr("The name is too long: at most %1 bytes of UTF-8.")
+                                     .arg(maximumSnapshotNameBytes));
+            continue;
+        }
+        return name.toStdString();
+    }
+}
+
+void MainWindow::submitSnapshotWrite(SnapshotWrite write, bool structural) {
+    const std::uint64_t ticket = snapshotWriter_.submit(std::move(write), open_->serial);
+    if (structural) {
+        open_->structuralTicket = ticket;
+        updateSnapshotPanel();
+    }
+}
+
+namespace {
+
+/// @brief Tells whether a snapshot action may start: a session with pixels, no write in flight,
+/// and none of the modes that have keys of their own.
+bool mayChangeSnapshots(bool pixels, bool busy, bool cropping, bool masking) {
+    return pixels && !busy && !cropping && !masking;
+}
+
+} // namespace
+
+void MainWindow::createSnapshot() {
+    if (!open_ ||
+        !mayChangeSnapshots(hasPixels(), open_->structuralTicket.has_value(),
+                            photoView_->isCropMode(), photoView_->isMaskMode()) ||
+        previewing()) {
+        return;
+    }
+    const QString title = tr("Cannot Create Snapshot");
+    const std::uint64_t serial = open_->serial;
+    try {
+        developPanel_->finishPendingEdit();
+    } catch (const std::exception& error) {
+        QMessageBox::warning(this, title, QString::fromUtf8(error.what()));
+        return;
+    }
+    const std::size_t listed = open_->session.snapshots().entries.size();
+    const std::size_t unreadable = open_->session.unreadableSnapshots();
+    if (listed + unreadable >= maximumSnapshots) {
+        QMessageBox::warning(
+            this, title,
+            tr("This photograph has %1 snapshots and %2 unreadable entries; at most %3 are kept. "
+               "Delete a snapshot, or remove the unreadable entries, first.")
+                .arg(listed)
+                .arg(unreadable)
+                .arg(maximumSnapshots));
+        return;
+    }
+    const std::optional<std::string> name = askSnapshotName(
+        tr("New Snapshot"), QLocale().toString(QDateTime::currentDateTime(), QLocale::ShortFormat));
+    // The dialog ran an event loop: the photograph may have changed meanwhile.
+    if (!name || !open_ || open_->serial != serial || previewing() ||
+        open_->structuralTicket.has_value()) {
+        return;
+    }
+    try {
+        submitSnapshotWrite(open_->session.prepareCreateSnapshot(*name), true);
+    } catch (const std::exception& error) {
+        QMessageBox::warning(this, title, QString::fromUtf8(error.what()));
+    }
+}
+
+void MainWindow::renameSelectedSnapshot() {
+    const auto id = selectedSnapshot();
+    if (!id || !open_ ||
+        !mayChangeSnapshots(hasPixels(), open_->structuralTicket.has_value(),
+                            photoView_->isCropMode(), photoView_->isMaskMode())) {
+        return;
+    }
+    const Snapshot* snapshot = open_->session.snapshots().find(*id);
+    if (snapshot == nullptr) {
+        return;
+    }
+    const std::uint64_t serial = open_->serial;
+    const std::string current = snapshot->name;
+    const std::optional<std::string> name =
+        askSnapshotName(tr("Rename Snapshot"), QString::fromStdString(current));
+    if (!name || *name == current || !open_ || open_->serial != serial ||
+        open_->structuralTicket.has_value()) {
+        return;
+    }
+    try {
+        submitSnapshotWrite(open_->session.prepareRenameSnapshot(*id, *name), true);
+    } catch (const std::exception& error) {
+        QMessageBox::warning(this, tr("Cannot Rename Snapshot"), QString::fromUtf8(error.what()));
+    }
+}
+
+void MainWindow::deleteSelectedSnapshot() {
+    const auto id = selectedSnapshot();
+    if (!id || !open_ ||
+        !mayChangeSnapshots(hasPixels(), open_->structuralTicket.has_value(),
+                            photoView_->isCropMode(), photoView_->isMaskMode())) {
+        return;
+    }
+    const SnapshotCollection& collection = open_->session.snapshots();
+    const Snapshot* snapshot = collection.find(*id);
+    if (snapshot == nullptr) {
+        return;
+    }
+    const std::uint64_t serial = open_->serial;
+    const auto children = std::ranges::count_if(
+        collection.entries, [&](const Snapshot& each) { return each.parent == *id; });
+    QStringList details;
+    if (children > 0) {
+        details << tr("Its %n snapshot(s) move to its parent and keep their looks.", nullptr,
+                      static_cast<int>(children));
+    }
+    if (open_->session.baseSnapshot() == *id) {
+        details << tr("The current look keeps its settings and will be based on its parent.");
+    }
+    details << tr("This cannot be undone.");
+    QMessageBox box(QMessageBox::Question, tr("Delete Snapshot"),
+                    tr("Delete snapshot “%1”?").arg(QString::fromStdString(snapshot->name)),
+                    QMessageBox::NoButton, this);
+    box.setInformativeText(details.join(QLatin1Char(' ')));
+    QPushButton* remove = box.addButton(tr("Delete"), QMessageBox::DestructiveRole);
+    QPushButton* cancel = box.addButton(QMessageBox::Cancel);
+    box.setDefaultButton(cancel);
+    box.setEscapeButton(cancel);
+    box.exec();
+    if (box.clickedButton() != remove || !open_ || open_->serial != serial ||
+        open_->structuralTicket.has_value()) {
+        return;
+    }
+    try {
+        submitSnapshotWrite(open_->session.prepareDeleteSnapshot(*id), true);
+    } catch (const std::exception& error) {
+        QMessageBox::warning(this, tr("Cannot Delete Snapshot"), QString::fromUtf8(error.what()));
+    }
+}
+
+void MainWindow::discardUnreadableSnapshots() {
+    if (!open_ || open_->session.unreadableSnapshots() == 0 ||
+        !mayChangeSnapshots(hasPixels(), open_->structuralTicket.has_value(),
+                            photoView_->isCropMode(), photoView_->isMaskMode())) {
+        return;
+    }
+    const std::uint64_t serial = open_->serial;
+    const std::size_t count = open_->session.unreadableSnapshots();
+    QMessageBox box(
+        QMessageBox::Question, tr("Remove Unreadable Entries"),
+        tr("Remove %n unreadable snapshot entries from %1?", nullptr, static_cast<int>(count))
+            .arg(toQString(sidecarPath(open_->session.photo().path()).filename())),
+        QMessageBox::NoButton, this);
+    box.setInformativeText(
+        tr("They are damaged or were written by another program or a newer arraw, and cannot be "
+           "shown. The snapshots listed here are kept. This cannot be undone."));
+    QPushButton* remove = box.addButton(tr("Remove"), QMessageBox::DestructiveRole);
+    QPushButton* cancel = box.addButton(QMessageBox::Cancel);
+    box.setDefaultButton(cancel);
+    box.setEscapeButton(cancel);
+    box.exec();
+    if (box.clickedButton() != remove || !open_ || open_->serial != serial ||
+        open_->structuralTicket.has_value()) {
+        return;
+    }
+    try {
+        submitSnapshotWrite(open_->session.prepareDiscardUnreadableSnapshots(), true);
+    } catch (const std::exception& error) {
+        QMessageBox::warning(this, tr("Cannot Remove Unreadable Snapshot Entries"),
+                             QString::fromUtf8(error.what()));
+    }
+}
+
+void MainWindow::snapshotWriteLanded(const SnapshotWriteResult& result) {
+    const bool thumbnail = std::holds_alternative<SnapshotThumbnailPatch>(result.write.change);
+    const bool failed = result.failure != SnapshotWriteResult::Failure::None;
+    if (open_ && open_->structuralTicket == result.ticket) {
+        open_->structuralTicket.reset();
+    }
+    // The write happened whether or not the session it was for is still open.
+    if (result.stamp) {
+        filmStrip_->noteOwnWrite(result.write.photo, *result.stamp);
+    }
+    const QString file = toQString(result.write.photo.filename());
+    QString title;
+    if (std::holds_alternative<SnapshotCreate>(result.write.change)) {
+        title = tr("Cannot Create Snapshot");
+    } else if (std::holds_alternative<SnapshotRename>(result.write.change)) {
+        title = tr("Cannot Rename Snapshot");
+    } else if (std::holds_alternative<SnapshotDelete>(result.write.change)) {
+        title = tr("Cannot Delete Snapshot");
+    } else {
+        title = tr("Cannot Remove Unreadable Snapshot Entries");
+    }
+    const QString reason = QString::fromStdString(result.error);
+    if (open_ && result.owner != open_->serial &&
+        open_->session.photo().path() == result.write.photo && !thumbnail) {
+        // The same photograph, reopened since: the session that asked is gone, but the write
+        // changed the file this one is a view of.
+        if (const SnapshotUpdate* update =
+                result.outcome.update ? &*result.outcome.update : nullptr;
+            update != nullptr && !failed) {
+            open_->session.adoptSnapshots(update->collection, update->unreadable);
+            refreshSnapshotUi();
+            requestSnapshotThumbnails();
+        } else if (result.failure == SnapshotWriteResult::Failure::Conflict && result.fresh) {
+            open_->session.adoptSnapshots(result.fresh->collection, result.fresh->unreadable);
+            refreshSnapshotUi();
+            requestSnapshotThumbnails();
+        }
+        return;
+    }
+    if (!open_ || result.owner != open_->serial ||
+        open_->session.photo().path() != result.write.photo) {
+        if (failed && !thumbnail && result.failure != SnapshotWriteResult::Failure::Conflict) {
+            statusLine_->showMessage(tr("%1 (%2): %3").arg(title, file, reason), 10000);
+        }
+        return;
+    }
+    EditSession& session = open_->session;
+    switch (result.failure) {
+    case SnapshotWriteResult::Failure::None: {
+        bool anchored = true;
+        try {
+            anchored = session.finishSnapshotWrite(result.write, result.outcome);
+            if (!thumbnail && open_->thumbnailWritesFailed) {
+                // The file is writable again: ask for the pictures that were not stored.
+                open_->thumbnailWritesFailed = false;
+                beginSnapshotThumbnails();
+            }
+        } catch (const std::exception& error) {
+            QMessageBox::warning(this, title,
+                                 tr("%1\n\n%2").arg(file, QString::fromUtf8(error.what())));
+            break;
+        }
+        if (const auto* create = std::get_if<SnapshotCreate>(&result.write.change)) {
+            QString message =
+                tr("Created snapshot “%1”.").arg(QString::fromStdString(create->draft.name));
+            if (!anchored) {
+                message += QLatin1Char(' ') +
+                           tr("The look changed while it was written, so the current look is "
+                              "not based on it.");
+            }
+            statusLine_->showMessage(message, 8000);
+        }
+        break;
+    }
+    case SnapshotWriteResult::Failure::Conflict:
+        if (result.fresh) {
+            session.adoptSnapshots(result.fresh->collection, result.fresh->unreadable);
+        }
+        statusLine_->showMessage(
+            tr("The snapshots of %1 were changed by another program. The list is refreshed; "
+               "nothing was changed.")
+                .arg(file),
+            10000);
+        break;
+    default:
+        if (thumbnail) {
+            qWarning().noquote() << "Cannot store a snapshot thumbnail in" << file << ":" << reason;
+            // A stuck lock would make the writer wait for it once per snapshot; pictures are still
+            // rendered and shown, only their storing stops.
+            if (result.failure != SnapshotWriteResult::Failure::Refused) {
+                open_->thumbnailWritesFailed = true;
+            }
+        } else {
+            updateSnapshotPanel();
+            QMessageBox::warning(this, title, tr("%1\n\n%2").arg(file, reason));
+        }
+        break;
+    }
+    if (!open_ || open_->session.photo().path() != result.write.photo) {
+        return; // The message box ran an event loop in which the photograph was left.
+    }
+    if (thumbnail) {
+        if (!failed && result.outcome.written) {
+            refreshSnapshotModel(true);
+        }
+        return;
+    }
+    refreshSnapshotUi();
+    requestSnapshotThumbnails();
+}
+
+void MainWindow::snapshotThumbnailLanded(const SnapshotThumbnailResult& result) {
+    if (!open_ || result.generation != open_->snapshotGeneration ||
+        result.primary != open_->session.photo().path()) {
+        return;
+    }
+    QImage picture;
+    picture.loadFromData(reinterpret_cast<const uchar*>(result.thumbnail.jpeg.data()),
+                         static_cast<int>(result.thumbnail.jpeg.size()), "JPEG");
+    snapshotModel_->setRendered(result.id, picture);
+    if (open_->thumbnailWritesFailed) {
+        return;
+    }
+    try {
+        if (auto write = open_->session.prepareSnapshotThumbnail(result.id, result.thumbnail)) {
+            open_->requestedKeys[result.id.value] = result.thumbnail.renderKey;
+            submitSnapshotWrite(std::move(*write), false);
+        }
+    } catch (const std::exception& error) {
+        qWarning().noquote() << "Cannot prepare a snapshot thumbnail:" << error.what();
+    }
+}
+
+void MainWindow::requestSnapshotThumbnails() {
+    if (!open_) {
+        return;
+    }
+    const std::filesystem::path path = open_->session.photo().path();
+    for (const Snapshot& snapshot : open_->session.snapshots().entries) {
+        const std::string key = snapshot.thumbnail ? snapshot.thumbnail->renderKey : std::string();
+        const auto known = open_->requestedKeys.find(snapshot.id.value);
+        if (known != open_->requestedKeys.end() && known->second == key) {
+            continue;
+        }
+        open_->requestedKeys[snapshot.id.value] = key;
+        // The worker works out the render key and drops the job when the stored one is current.
+        filmStrip_->requestSnapshotThumbnail(path, recipeOf(snapshot), open_->snapshotGeneration,
+                                             key);
+    }
+}
+
+void MainWindow::beginSnapshotThumbnails() {
+    if (!open_) {
+        return;
+    }
+    open_->snapshotGeneration = filmStrip_->beginSnapshots();
+    open_->requestedKeys.clear();
+    requestSnapshotThumbnails();
 }
 
 void MainWindow::updatePasteAction() {
@@ -1548,7 +2258,7 @@ void MainWindow::guarded(const std::function<void()>& action) {
 }
 
 void MainWindow::showPanel() {
-    const Photo& photo = open_->session.photo();
+    const Photo& photo = shownPhoto();
     const bool raw = !std::holds_alternative<NamedEncoding>(photo.metadata().encoding);
     PanelContext context{raw,
                          std::nullopt,
@@ -1579,7 +2289,8 @@ void MainWindow::refreshPanel(std::chrono::milliseconds renderDelay) {
     showPanel();
     syncMasks();
     updateHistoryActions();
-    saveAction_->setEnabled(open_->session.hasUnsavedChanges());
+    // A preview shows a look the save would not store: it waits for the preview to close.
+    saveAction_->setEnabled(!previewing() && open_->session.hasUnsavedChanges());
     updateTitle();
     syncDecode();
     if (renderDelay.count() > 0) {
@@ -1960,6 +2671,8 @@ void MainWindow::buildFilmStripDock() {
     });
     connect(filmStrip_, &FilmStrip::sidecarChangedExternally, this,
             &MainWindow::sidecarChangedOnDisk);
+    connect(filmStrip_, &FilmStrip::snapshotThumbnailReady, this,
+            &MainWindow::snapshotThumbnailLanded);
 }
 
 void MainWindow::writeMarks(const std::filesystem::path& primary, const PhotoMarks& marks) {
@@ -1979,6 +2692,39 @@ void MainWindow::sidecarChangedOnDisk(const QString& primary) {
         return; // The strip has refreshed the marks; nothing else is open on it.
     }
     const QString name = toQString(path.filename());
+    // Read first: a change that leaves the session's view of the disk intact interrupts nothing.
+    std::optional<OpenDocument> read;
+    try {
+        DebugDiagnostics log(debugLog_.diagnostics);
+        read.emplace(openDocument(path, log));
+    } catch (const std::exception& error) {
+        statusLine_->showMessage(
+            tr("Cannot reload the sidecar of %1: %2").arg(name, QString::fromUtf8(error.what())),
+            10000);
+        return;
+    }
+    OpenDocument& document = *read;
+    const auto adoptDiskSnapshots = [&] {
+        if (document.snapshots != open_->session.snapshots() ||
+            document.unreadableSnapshots != open_->session.unreadableSnapshots()) {
+            open_->session.adoptSnapshots(document.snapshots, document.unreadableSnapshots);
+            refreshSnapshotUi();
+            requestSnapshotThumbnails();
+        }
+    };
+    {
+        const Photo& photo = document.photo;
+        const Photo& saved = open_->session.saved();
+        if (photo.state() == saved.state() && photo.negative() == saved.negative() &&
+            photo.marks() == saved.marks()) {
+            // Own writes, a touch and snapshot-only changes end up here, whatever the dirty state.
+            adoptDiskSnapshots();
+            if (document.savedBase == open_->session.savedBaseSnapshot()) {
+                return;
+            }
+        }
+    }
+    // The active settings or the saved base changed elsewhere.
     leaveCropMode(true);
     // A gesture under way belongs to the state being replaced.
     photoView_->maskOverlay().cancelGesture();
@@ -1988,42 +2734,32 @@ void MainWindow::sidecarChangedOnDisk(const QString& primary) {
         // The edit stays open, and counts as unsaved below.
     }
     if (open_->session.hasUnsavedChanges()) {
+        // Snapshots are durable whatever the dirty state is.
+        adoptDiskSnapshots();
         statusLine_->showMessage(
             tr("The sidecar of %1 changed on disk; your unsaved edits are kept.").arg(name), 10000);
         return;
     }
     try {
-        DebugDiagnostics log(debugLog_.diagnostics);
-        OpenDocument document = openDocument(path, log);
-        const Photo& photo = document.photo;
-        const Photo& saved = open_->session.saved();
-        // Thumbnails are the app's own writes and do not count as a change.
-        const auto withoutThumbnails = [](SnapshotCollection collection) {
-            for (Snapshot& snapshot : collection.entries) {
-                snapshot.thumbnail.reset();
-            }
-            return collection;
-        };
-        if (photo.state() == saved.state() && photo.negative() == saved.negative() &&
-            photo.marks() == saved.marks() &&
-            document.savedBase == open_->session.savedBaseSnapshot()) {
-            if (withoutThumbnails(document.snapshots) !=
-                withoutThumbnails(open_->session.snapshots())) {
-                // Only the list changed: the session reads it again and keeps its history.
-                open_->session.refreshSnapshots();
-            }
-            return; // Touched, or the list alone changed: keep the history.
-        }
         // The pixels are the same file's; only the settings and marks are read again, and the
         // view stays where it is.
         auto decoded = open_->decoded;
         const DecodeOptions decodedOptions = open_->decodedOptions;
         auto cameraPreview = std::move(open_->cameraPreview);
         auto lastCropImage = std::move(open_->lastCropImage);
+        const auto ticket = open_->structuralTicket;
         open_.emplace(OpenPhoto{EditSession(std::move(document), lensDatabase_), std::move(decoded),
                                 decodedOptions, std::move(cameraPreview),
                                 std::move(lastCropImage)});
-        refreshPanel(); // Re-decodes if the sidecar's negative is not the shown pixels'.
+        // A new session: results of the old one are dropped, and any preview is over.
+        open_->serial = ++sessionSerial_;
+        // A structural write still in flight keeps the actions off until its result is dropped.
+        open_->structuralTicket = ticket;
+        snapshotModel_->clear();
+        shownSnapshots_.reset();
+        updateEditingActions(); // The preview, if any, is over.
+        refreshPanel();         // Re-decodes if the sidecar's negative is not the shown pixels'.
+        beginSnapshotThumbnails();
         statusLine_->showMessage(tr("Reloaded %1: its sidecar changed on disk.").arg(name), 5000);
     } catch (const std::exception& error) {
         statusLine_->showMessage(
@@ -2482,11 +3218,30 @@ bool MainWindow::confirmLeavingPhoto() {
     if (!open_->session.hasUnsavedChanges()) {
         return true;
     }
-    QMessageBox box(
-        QMessageBox::Question, tr("Unsaved Changes"),
-        tr("Save changes to %1?").arg(toQString(open_->session.photo().path().filename())),
-        QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel, this);
-    box.setInformativeText(tr("Your adjustments will be lost if you do not save them."));
+    const EditSession& session = open_->session;
+    // The adjustments are in the sidecar already; only the snapshot the look is based on differs.
+    const bool baseOnly = session.photo().state() == session.saved().state() &&
+                          session.photo().negative() == session.saved().negative();
+    QMessageBox box(QMessageBox::Question, tr("Unsaved Changes"),
+                    tr("Save changes to %1?").arg(toQString(session.photo().path().filename())),
+                    QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel, this);
+    if (baseOnly) {
+        const Snapshot* base =
+            session.baseSnapshot() ? session.snapshots().find(*session.baseSnapshot()) : nullptr;
+        box.setInformativeText(
+            tr("The adjustments are already saved. Only the snapshot the current look is based on "
+               "has changed (now %1). Save to remember it; Discard to keep the previous one. "
+               "Snapshots are kept either way.")
+                .arg(base != nullptr
+                         ? QStringLiteral("\u201c%1\u201d").arg(QString::fromStdString(base->name))
+                         : tr("none")));
+    } else {
+        QString text = tr("Your adjustments will be lost if you do not save them.");
+        if (!session.snapshots().entries.empty()) {
+            text += QLatin1Char(' ') + tr("Snapshots are already stored and are kept either way.");
+        }
+        box.setInformativeText(text);
+    }
     box.setDefaultButton(QMessageBox::Save);
     box.setEscapeButton(QMessageBox::Cancel);
     switch (box.exec()) {
@@ -2549,7 +3304,7 @@ void MainWindow::closeEvent(QCloseEvent* event) {
 
 void MainWindow::requestRender() {
     // Nothing to render until the pixels land; decodeLanded asks then.
-    if (!editable()) {
+    if (!hasPixels()) {
         return;
     }
     // Any pending resize or interaction is covered by this request.
@@ -2557,12 +3312,12 @@ void MainWindow::requestRender() {
     interactionTimer_.stop();
     noiseReductionTimer_.stop();
     const LensView& lens = lensView();
-    if (lens.status.loading && open_->session.photo().negative().lens.any()) {
+    if (lens.status.loading && shownPhoto().negative().lens.any()) {
         // The photograph asks for corrections the database has to resolve; a picture without them
         // would be a wrong one. lensDatabaseLoaded asks again.
         return;
     }
-    const DevelopState& state = open_->session.photo().state();
+    const DevelopState& state = shownPhoto().state();
     const qreal ratio = photoView_->devicePixelRatioF();
     if (photoView_->isCropMode()) {
         // The photograph turned and flipped, neither straightened nor cropped:
@@ -2589,7 +3344,10 @@ void MainWindow::requestRender() {
     PreviewView view{.region = std::nullopt,
                      .outputSize = photoView_->devicePixels(),
                      .devicePixelRatio = ratio,
-                     .thumbnailEdge = stroking && !committingStroke_ ? 0 : ThumbnailCache::maxEdge,
+                     // No thumbnail of a preview: the strip shows the working look.
+                     .thumbnailEdge = (stroking && !committingStroke_) || previewing()
+                                          ? 0
+                                          : ThumbnailCache::maxEdge,
                      .reduced = false};
     try {
         // The crop may have changed the frame; the view keeps its zoom and centre.
@@ -2776,7 +3534,7 @@ void MainWindow::showResult(const PreviewResult& result) {
 }
 
 void MainWindow::followWithThumbnail(const PreviewResult& result) {
-    if (!open_) {
+    if (!open_ || previewing()) {
         return;
     }
     // Reduced on the worker (ADR 043), and only for a render of the whole frame: a zoomed
@@ -2810,6 +3568,10 @@ void MainWindow::showPhoto(OpenDocument document) {
     const DecodeOptions decodeOptions = decodeOptionsFor(document.photo, false);
     open_.emplace(OpenPhoto{EditSession(std::move(document), lensDatabase_), nullptr, decodeOptions,
                             std::nullopt, std::nullopt});
+    open_->serial = ++sessionSerial_;
+    // Another photograph's pictures must not carry over to snapshots of the same numbers.
+    snapshotModel_->clear();
+    shownSnapshots_.reset();
     redecodeRequest_ = 0;
     failedOptions_.reset();
     renderProgress_->setPhotoOpen(true);
@@ -2830,6 +3592,8 @@ void MainWindow::showPhoto(OpenDocument document) {
     renderIndicator_->report(0.0, ProgressStep::Decode);
     updateEditingActions();
     refreshPanel(); // The sidecar's state at once; the render waits for the pixels.
+    // The worker serves the snapshots behind the visible shots' developed thumbnails.
+    beginSnapshotThumbnails();
     // The strip's folder, not the photograph's: with subfolders it may lie below it.
     if (!filmStrip_->folder().empty()) {
         rememberFolder(filmStrip_->folder());
@@ -2941,7 +3705,7 @@ void MainWindow::lensDatabaseLoaded(const LensDatabase* database) {
     }
     // A photograph opened before the database loaded records at its next lens step.
     open_->session.setLensDatabase(database);
-    if (!editable() || !open_->session.photo().negative().lens.any()) {
+    if (!hasPixels() || !shownPhoto().negative().lens.any()) {
         // Nothing shown depends on it but the lens rows (and a decode still to come asks for its
         // own render).
         showPanel();
@@ -2954,7 +3718,7 @@ void MainWindow::lensDatabaseLoaded(const LensDatabase* database) {
 
 const LensView& MainWindow::lensView() {
     OpenPhoto& open = *open_;
-    const Photo& photo = open.session.photo();
+    const Photo& photo = shownPhoto();
     // The profile is resolved at 0 or 100, whatever the amount in between, so that a drag of the
     // amount scales the held profile and never asks lensfun again.
     const float amount = photo.negative().lens.vignettingAmount;
@@ -3041,7 +3805,7 @@ void MainWindow::syncDecode() {
     if (!open_ || !open_->decoded) {
         return;
     }
-    const Photo& photo = open_->session.photo();
+    const Photo& photo = shownPhoto();
     const DecodeOptions wanted = decodeOptionsFor(photo, false);
     if (wanted == open_->decodedOptions) {
         // Back on the shown pixels: a failure of another choice is not this one's.
@@ -3077,7 +3841,10 @@ void MainWindow::closePhoto() {
     setPicking(false);
     filmStrip_->releaseLiveThumbnail();
     filmStrip_->clearActive();
+    // The snapshot thumbnails still queued are of the photograph being left.
+    filmStrip_->beginSnapshots();
     open_.reset();
+    shownSnapshots_.reset();
     renderProgress_->setPhotoOpen(false);
     photoLoader_.cancelDecode();
     decodeRequest_ = 0;
@@ -3100,8 +3867,9 @@ void MainWindow::closePhoto() {
 void MainWindow::updateEditingActions() {
     const bool ready = editable();
     developDock_->setEnabled(ready);
-    exportAction_->setEnabled(ready);
-    exportPresetMenu_->menuAction()->setEnabled(ready);
+    // An export writes the working look, not the one on screen during a preview.
+    exportAction_->setEnabled(hasPixels() && !previewing());
+    exportPresetMenu_->menuAction()->setEnabled(hasPixels() && !previewing());
     cropAction_->setEnabled(ready);
     maskAction_->setEnabled(ready);
     copyAction_->setEnabled(ready);
@@ -3110,6 +3878,7 @@ void MainWindow::updateEditingActions() {
         action->setEnabled(ready);
     }
     updateZoomControls();
+    updateSnapshotPanel();
 }
 
 } // namespace arraw::app

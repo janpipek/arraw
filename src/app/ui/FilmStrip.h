@@ -24,6 +24,7 @@
 #include <functional>
 #include <optional>
 #include <set>
+#include <string>
 #include <vector>
 
 class QComboBox;
@@ -203,6 +204,38 @@ public:
     /// @param photo The photograph whose sidecar was just written.
     void noteOwnWrite(const std::filesystem::path& photo);
 
+    /// @brief Tells the watcher that the application wrote a photograph's sidecar, and the stamp
+    /// the file had right after the write.
+    ///
+    /// For a writer on another thread, which reads the stamp itself so that it belongs to its own
+    /// commit (::arraw::app::FolderWatcher::noteOwnWrite).
+    /// @param photo The photograph whose sidecar was just written.
+    /// @param stamp ::arraw::app::fileStamp of the sidecar right after the write.
+    void noteOwnWrite(const std::filesystem::path& photo, std::int64_t stamp);
+
+    /// @brief Starts a new snapshot generation, for another photograph or a fresh start.
+    ///
+    /// Drops every queued snapshot thumbnail job (::arraw::app::ThumbnailWorker::beginSnapshots).
+    /// @return The new snapshot generation.
+    std::uint64_t beginSnapshots();
+
+    /// @brief Gives the current snapshot generation.
+    [[nodiscard]] std::uint64_t snapshotGeneration() const noexcept {
+        return thumbnails_.snapshotGeneration();
+    }
+
+    /// @brief Queues the thumbnail of a snapshot, behind the visible shots' developed thumbnails.
+    ///
+    /// The result arrives as ::arraw::app::FilmStrip::snapshotThumbnailReady; none does when the
+    /// stored one is current (::arraw::app::ThumbnailWorker::requestSnapshotThumbnail).
+    /// @param primary Photograph the snapshot belongs to.
+    /// @param recipe Recipe to render.
+    /// @param generation Generation from ::arraw::app::FilmStrip::beginSnapshots.
+    /// @param storedKey Render key of the thumbnail the sidecar holds, empty for none.
+    /// @return False, with nothing queued, when @p generation is not the current one.
+    bool requestSnapshotThumbnail(const std::filesystem::path& primary, SnapshotRecipe recipe,
+                                  std::uint64_t generation, std::string storedKey = {});
+
     /// @brief Sets the rating of the target shots.
     /// @param rating 0 to 5, or -1 for a reject.
     void rate(int rating);
@@ -291,6 +324,12 @@ public:
     [[nodiscard]] QSize sizeHint() const override;
 
 signals:
+    /// @brief Delivers a snapshot thumbnail the worker made, on the GUI thread.
+    ///
+    /// The receiver compares the generation and the photograph with its own before using it.
+    /// @param result The thumbnail.
+    void snapshotThumbnailReady(arraw::app::SnapshotThumbnailResult result);
+
     /// @brief Announces that the strip was given a folder (not a change of the subfolder flag).
     void folderChanged();
 

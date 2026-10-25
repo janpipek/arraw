@@ -374,7 +374,7 @@ and committed:
 3. **[x] Thumbnails.** Render explicit snapshot recipes at low priority, validate/cache bounded
    JPEGs, and patch only the matching node by ID and render key. Verify stale results, size bounds,
    and that completion does not alter active edits or dirty state.
-4. **[ ] GUI.** Add one `SnapshotModel` tree above History, preview without session mutation, explicit
+4. **[x] GUI.** Add one `SnapshotModel` tree above History, preview without session mutation, explicit
    Restore, and create/rename/delete actions. Verify preview versus restore, edit disabling, and
    refresh after external changes. Also a way to discard unreadable snapshot entries: they stay in
    the sidecar and count toward the 32-snapshot limit, and the errors now say so, but nothing

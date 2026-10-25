@@ -1132,6 +1132,7 @@ struct SnapshotList {
     QDomElement property;           ///< The `arraw:snapshots` element, null when absent.
     QDomElement sequence;           ///< Its `rdf:Seq`, null when there is none yet.
     std::vector<QDomElement> items; ///< The `rdf:li` of the sequence, in order.
+    std::size_t rawItems = 0;       ///< The `rdf:li` of every occurrence of the property.
 };
 
 /// @brief One list item as read.
@@ -1147,6 +1148,7 @@ struct SnapshotRead {
     SnapshotCollection collection;
     std::optional<SnapshotId> savedBase;
     bool damaged = false;
+    std::size_t unreadable = 0; ///< Raw entries that cannot be used (see SidecarContents).
     SnapshotList list;
     std::vector<SnapshotNode> nodes;
 };
@@ -1170,6 +1172,18 @@ SnapshotList locateList(const std::vector<QDomElement>& descriptions) {
     }
     list.present = true;
     list.usable = found.size() == 1 && !found.back().element.isNull();
+    for (const Occurrence& occurrence : found) {
+        if (occurrence.element.isNull()) {
+            continue;
+        }
+        const QDomElement sequence = sequenceIn(occurrence.element);
+        for (QDomElement item = sequence.firstChildElement(); !item.isNull();
+             item = item.nextSiblingElement()) {
+            if (isNamed(item, rdfNamespace, "li"_L1)) {
+                ++list.rawItems;
+            }
+        }
+    }
     if (found.back().element.isNull()) {
         return list;
     }
@@ -1314,6 +1328,11 @@ SnapshotRead readSnapshotsIn(const std::vector<QDomElement>& descriptions, Diagn
         }
         read.nodes.push_back(node);
     }
+
+    read.unreadable = read.list.present && !read.list.usable
+                          ? std::max<std::size_t>(1, read.list.rawItems)
+                          : static_cast<std::size_t>(std::ranges::count_if(
+                                read.nodes, [](const SnapshotNode& node) { return !node.usable; }));
 
     // Parents that are not there make roots; a cycle is cut where it closes.
     std::map<std::uint64_t, std::size_t> index;
@@ -1467,6 +1486,7 @@ std::optional<SidecarContents> arraw::readSidecar(const std::filesystem::path& p
     contents.snapshots = std::move(snapshots.collection);
     contents.savedBase = snapshots.savedBase;
     contents.snapshotsDamaged = snapshots.damaged;
+    contents.unreadableSnapshots = snapshots.unreadable;
     contents.negative = negativeIn(descriptions, log, photo);
     readUnknownKeys(descriptions, log, photo);
     contents.marks = marksIn(descriptions, log, photo);
@@ -1595,6 +1615,9 @@ public:
         : file_(qtPath(sidecar) + QStringLiteral(".lock")) {
         file_.setStaleLockTime(detail::sidecarStaleLock);
         if (file_.tryLock(detail::sidecarLockTimeout)) {
+            if (detail::sidecarLockHeldHook) {
+                detail::sidecarLockHeldHook();
+            }
             return;
         }
         if (file_.error() == QLockFile::LockFailedError) {
@@ -1884,6 +1907,7 @@ editSnapshots(const std::filesystem::path& photo, std::uint64_t expectedRevision
         checkSubtreeSize(after);
         result.collection = std::move(after.collection);
         result.savedBase = after.savedBase;
+        result.unreadable = after.unreadable;
         return true;
     });
     return result;
@@ -1891,8 +1915,8 @@ editSnapshots(const std::filesystem::path& photo, std::uint64_t expectedRevision
 
 /// @brief Says, for an error message, that the list holds entries that cannot be read.
 ///
-/// Empty when every entry is usable. Such entries stay in the file and count toward the limit;
-/// there is no way to discard them yet.
+/// Empty when every entry is usable. Such entries stay in the file and count toward the limit
+/// until ::arraw::discardUnreadableSnapshots removes them.
 std::string unreadableNote(const SnapshotRead& read) {
     const auto unreadable = static_cast<std::size_t>(
         std::ranges::count_if(read.nodes, [](const SnapshotNode& node) { return !node.usable; }));
@@ -2058,10 +2082,15 @@ SnapshotUpdate arraw::deleteSnapshot(const std::filesystem::path& photo,
         });
 }
 
-bool arraw::setSnapshotThumbnail(const std::filesystem::path& photo, SnapshotId id,
-                                 SnapshotThumbnail thumbnail, std::string_view expectedKey) {
-    validate(thumbnail);
-    bool written = false;
+std::vector<bool> arraw::setSnapshotThumbnails(const std::filesystem::path& photo,
+                                               std::span<const ThumbnailPatchByKey> patches) {
+    std::vector<bool> written(patches.size(), false);
+    if (patches.empty()) {
+        return written;
+    }
+    for (const ThumbnailPatchByKey& patch : patches) {
+        validate(patch.thumbnail);
+    }
     updateSidecar(photo, false, [&](Document& document) {
         const SnapshotRead read =
             readSnapshotsIn(document.descriptions, discardedDiagnostics(), document.path);
@@ -2070,15 +2099,119 @@ bool arraw::setSnapshotThumbnail(const std::filesystem::path& photo, SnapshotId 
                                      " holds a snapshot list that cannot be edited without losing "
                                      "data, so it was left alone");
         }
-        const Snapshot* snapshot = read.collection.find(id);
-        if (snapshot == nullptr || expectedKey != thumbnail.renderKey) {
+        bool any = false;
+        for (std::size_t i = 0; i < patches.size(); ++i) {
+            const ThumbnailPatchByKey& patch = patches[i];
+            if (read.collection.find(patch.id) == nullptr ||
+                patch.expectedKey != patch.thumbnail.renderKey) {
+                continue;
+            }
+            setThumbnailFields(nodeOf(read, patch.id).holder, patch.thumbnail);
+            written[i] = true;
+            any = true;
+        }
+        if (!any) {
             return false;
         }
-        setThumbnailFields(nodeOf(read, id).holder, std::move(thumbnail));
         checkSubtreeSize(
             readSnapshotsIn(document.descriptions, discardedDiagnostics(), document.path));
-        written = true;
         return true;
     });
     return written;
+}
+
+bool arraw::setSnapshotThumbnail(const std::filesystem::path& photo, SnapshotId id,
+                                 SnapshotThumbnail thumbnail, std::string_view expectedKey) {
+    const ThumbnailPatchByKey patch{id, std::move(thumbnail), std::string(expectedKey)};
+    return setSnapshotThumbnails(photo, std::span(&patch, 1)).front();
+}
+
+std::optional<SnapshotUpdate> arraw::discardUnreadableSnapshots(const std::filesystem::path& photo,
+                                                                std::uint64_t expectedRevision) {
+    std::optional<SnapshotUpdate> result;
+    updateSidecar(photo, false, [&](Document& document) {
+        const SnapshotRead read =
+            readSnapshotsIn(document.descriptions, discardedDiagnostics(), document.path);
+        if (read.collection.revision != expectedRevision) {
+            throw SnapshotRevisionConflict(expectedRevision, read.collection.revision);
+        }
+        if (read.unreadable == 0) {
+            return false;
+        }
+        const std::vector<QDomElement>& descriptions = document.descriptions;
+        // Every raw id of every occurrence, so that the counter clears all of them.
+        std::uint64_t highest = 0;
+        for (const Occurrence& occurrence :
+             occurrencesOf(descriptions, arrawProperty("snapshots"))) {
+            if (occurrence.element.isNull()) {
+                continue;
+            }
+            const QDomElement sequence = sequenceIn(occurrence.element);
+            for (QDomElement item = sequence.firstChildElement(); !item.isNull();
+                 item = item.nextSiblingElement()) {
+                if (!isNamed(item, rdfNamespace, "li"_L1)) {
+                    continue;
+                }
+                const auto id = fieldOf(fieldHolder(item), "id");
+                if (id && id->simple) {
+                    highest = std::max(highest, decimalIn(id->text).value_or(0));
+                }
+            }
+        }
+        if (!read.list.usable) {
+            for (const Occurrence& occurrence :
+                 occurrencesOf(descriptions, arrawProperty("snapshots"))) {
+                remove(occurrence);
+            }
+        } else {
+            for (const SnapshotNode& node : read.nodes) {
+                if (!node.usable) {
+                    QDomElement item = node.item;
+                    item.parentNode().removeChild(item);
+                }
+            }
+            // Parents as the reader repaired them.
+            for (const SnapshotNode& node : read.nodes) {
+                if (!node.usable) {
+                    continue;
+                }
+                const Snapshot& snapshot = *read.collection.find(SnapshotId{node.rawId});
+                const auto field = fieldOf(node.holder, "parent");
+                if (!field) {
+                    continue;
+                }
+                const auto raw = field->simple ? decimalIn(field->text) : std::nullopt;
+                const bool readable = raw && *raw != 0 && *raw != node.rawId;
+                const std::optional<std::uint64_t> wanted =
+                    snapshot.parent ? std::optional{snapshot.parent->value} : std::nullopt;
+                if (!readable || raw != wanted) {
+                    setField(node.holder, "parent",
+                             wanted ? std::optional{QString::number(*wanted)} : std::nullopt);
+                }
+            }
+        }
+        if (!read.savedBase && !occurrencesOf(descriptions, arrawProperty("savedBase")).empty()) {
+            setProperty(descriptions, document.home, arrawProperty("savedBase"), std::nullopt);
+        }
+        const std::uint64_t floor =
+            highest == std::numeric_limits<std::uint64_t>::max() ? highest : highest + 1;
+        setProperty(descriptions, document.home, arrawProperty("snapshotRevision"),
+                    QString::number(read.collection.revision + 1));
+        setProperty(descriptions, document.home, arrawProperty("snapshotNextId"),
+                    QString::number(std::max(read.collection.nextId, floor)));
+        SnapshotRead after = readSnapshotsIn(descriptions, discardedDiagnostics(), document.path);
+        if (after.unreadable != 0 || after.damaged || !after.list.usable) {
+            throw std::runtime_error("sidecar " + document.path.string() +
+                                     " still holds snapshot content that cannot be used after "
+                                     "removing it, so it was left alone");
+        }
+        validate(after.collection);
+        SnapshotUpdate update;
+        update.collection = std::move(after.collection);
+        update.savedBase = after.savedBase;
+        update.unreadable = 0;
+        result = std::move(update);
+        return true;
+    });
+    return result;
 }

@@ -149,7 +149,8 @@ OpenDocument arraw::openDocument(const std::filesystem::path& path, DiagnosticLo
             const NegativeSettings negative =
                 sidecar->negative.value_or(defaultNegativeFor(metadata));
             return {Photo(path, std::move(metadata), negative, std::move(state), sidecar->marks),
-                    std::move(sidecar->snapshots), sidecar->savedBase};
+                    std::move(sidecar->snapshots), sidecar->savedBase,
+                    sidecar->unreadableSnapshots};
         }
     } catch (const std::runtime_error& error) {
         // An unreadable sidecar costs the photograph its state, not its life. Nothing is lost by
@@ -159,7 +160,7 @@ OpenDocument arraw::openDocument(const std::filesystem::path& path, DiagnosticLo
                     .subject = path,
                     .values = {std::string(error.what())}});
     }
-    return {Photo(path, std::move(metadata)), {}, std::nullopt};
+    return {Photo(path, std::move(metadata)), {}, std::nullopt, 0};
 }
 
 Photo arraw::openPhoto(const std::filesystem::path& path, DiagnosticLog& log) {

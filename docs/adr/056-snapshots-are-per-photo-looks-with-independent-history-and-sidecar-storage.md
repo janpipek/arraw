@@ -96,3 +96,27 @@ versus restore; and CLI/Python parity. Add frozen v2 fixtures rather than editin
   falls back to an unlocked write.
 - UI polish such as split A/B viewing, multi-snapshot CLI export, snapshot film-strip badges, and
   save-as-preset remain outside this decision.
+
+## Addendum, 2026-10-25: Gate 4 (GUI)
+
+Proposed with [snapshots-gui-plan.md](../ideas/snapshots-gui-plan.md), whose section 7 is the full
+text. In short:
+
+11. GUI snapshot sidecar writes run on one writer thread: `EditSession` splits them into a pure
+    prepare, a `SnapshotWrite` value carried out by `writeSnapshotChange`, and a finish; the
+    synchronous methods remain for the CLI and Python. Requests and results keep their order, one
+    structural request per window is in flight, and thumbnail patches of one photograph are
+    batched. Ordinary Save and marks writes stay synchronous.
+12. Create anchors the new snapshot only if the session is still at the captured position, look
+    and base; otherwise the snapshot is listed and the base is unchanged.
+13. A Create with identical pixels leaves the session dirty; the Save prompt says when only the
+    base changed and that snapshots are kept either way.
+14. Snapshot thumbnail jobs run after the visible developed thumbnails; render keys are worked out
+    off the UI thread.
+15. `discardUnreadableSnapshots` is the one explicit, revision-checked, user-confirmed path that
+    drops unusable raw snapshot content; decision 7 holds for every other writer.
+16. Writers note the sidecar stamp after their commit; a sidecar event that leaves the session's
+    active settings, marks and saved base unchanged ends no gesture, and a snapshot-only change is
+    adopted whatever the dirty state.
+17. Preview renders a separate shown photograph; editing, undo, Create and Save are disabled until
+    it closes.

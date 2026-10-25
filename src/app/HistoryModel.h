@@ -13,6 +13,15 @@
 
 namespace arraw::app {
 
+/// @brief Words an ordinary edit between two steps, as the History list does.
+///
+/// Shared with the snapshot tree, so that the two lists never word a change differently. The
+/// wording is of the settings that differ; two equal steps give "Edit".
+/// @param before Step the change starts from.
+/// @param after Step the change leads to.
+/// @return The wording.
+[[nodiscard]] QString wordEdit(const HistoryStep& before, const HistoryStep& after);
+
 /// @brief Steps of an edit session's history as a list, newest on top.
 ///
 /// Holds a copy of the history (states are cheap to copy), fed by

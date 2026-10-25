@@ -10,6 +10,7 @@
 #include <Photo.h>
 #include <Sidecar.h>
 #include <SnapshotThumbnails.h>
+#include <SnapshotWrites.h>
 #include <Snapshots.h>
 
 #include <QBuffer>
@@ -34,6 +35,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <variant>
 #include <vector>
 
 using namespace arraw;
@@ -799,4 +801,159 @@ TEST_CASE("Stopping the worker abandons the snapshot jobs still queued",
     }
     opener.join();
     CHECK(collector.count() == 0);
+}
+
+TEST_CASE("Preparing a thumbnail write reads no file and ignores a snapshot the session lacks",
+          "[snapshotthumbnails][session][prepare]") {
+    Rig rig;
+    EditSession session = rig.open();
+    session.setState(exposed(1.0F));
+    const SnapshotId a = session.createSnapshot("A");
+    const Snapshot recipe = *session.snapshots().find(a);
+    const SnapshotThumbnail thumbnail = renderOf(rig.photo, recipe.state, recipe.negative);
+    const Observed before = observe(session);
+
+    // The photograph is gone: preparing must not need it, as the key is worked out by the write.
+    fs::remove(rig.photo);
+    const auto write = session.prepareSnapshotThumbnail(a, thumbnail);
+    REQUIRE(write);
+    const auto& patch = std::get<SnapshotThumbnailPatch>(write->change);
+    CHECK(patch.id == a);
+    CHECK(patch.state == recipe.state);
+    CHECK(patch.negative == recipe.negative);
+    CHECK(patch.thumbnail == thumbnail);
+    CHECK_FALSE(session.prepareSnapshotThumbnail(SnapshotId{99}, thumbnail));
+    CHECK(observe(session) == before);
+
+    SnapshotThumbnail bad = thumbnail;
+    bad.jpeg.assign(5, std::byte{0});
+    CHECK_THROWS_AS(session.prepareSnapshotThumbnail(a, bad), std::invalid_argument);
+    CHECK_THROWS_AS(session.prepareSnapshotThumbnail(SnapshotId{99}, bad), std::invalid_argument);
+
+    // And the write, without the photograph to work the key out from, writes nothing.
+    const SnapshotWriteOutcome outcome = writeSnapshotChange(*write);
+    CHECK_FALSE(outcome.written);
+    CHECK(session.finishSnapshotWrite(*write, outcome));
+    CHECK_FALSE(session.snapshots().find(a)->thumbnail);
+}
+
+TEST_CASE("Finishing a thumbnail write changes no history, base, dirty state or revision",
+          "[snapshotthumbnails][session][prepare]") {
+    Rig rig;
+    EditSession session = rig.open();
+    session.setState(exposed(1.0F));
+    const SnapshotId a = session.createSnapshot("A");
+    session.setState(exposed(2.0F));
+    session.begin();
+    session.update(exposed(3.0F)); // a gesture, unsaved
+    const Observed before = observe(session);
+    const OnDisk diskBefore = diskOf(rig.photo);
+    const Snapshot recipe = *session.snapshots().find(a);
+    const SnapshotThumbnail thumbnail = renderOf(rig.photo, recipe.state, recipe.negative);
+
+    const auto write = session.prepareSnapshotThumbnail(a, thumbnail);
+    REQUIRE(write);
+    const SnapshotWriteOutcome outcome = writeSnapshotChange(*write);
+    REQUIRE(outcome.written);
+    CHECK_FALSE(outcome.update);
+    CHECK(session.finishSnapshotWrite(*write, outcome));
+
+    CHECK(observe(session) == before);
+    CHECK(diskOf(rig.photo) == diskBefore);
+    CHECK(session.snapshots().find(a)->thumbnail == thumbnail);
+    CHECK(session.snapshots() == openDocument(rig.photo).snapshots);
+
+    SECTION("a snapshot deleted meanwhile is not brought back") {
+        const SnapshotWrite another = *session.prepareSnapshotThumbnail(
+            a, renderOf(rig.photo, recipe.state, recipe.negative));
+        session.deleteSnapshot(a);
+        const Observed afterDelete = observe(session);
+        session.finishSnapshotWrite(another, SnapshotWriteOutcome{true, std::nullopt});
+        CHECK(observe(session) == afterDelete);
+        CHECK(session.snapshots().find(a) == nullptr);
+    }
+}
+
+TEST_CASE("The worker serves snapshots after the visible developed thumbnails and before the rest",
+          "[snapshotthumbnails][worker]") {
+    const Rig rig;
+    const test::TempDir folder;
+    const test::TempDir cacheRoot;
+    const auto shot = [&](const std::string& name) {
+        const fs::path path = folder.file(name);
+        fs::copy_file(test::fixture(fixtureName), path);
+        return path;
+    };
+    const fs::path gateShot = shot("IMG_gate.dng");
+    const fs::path visibleShot = shot("IMG_visible.dng");
+    const fs::path offShot = shot("IMG_off.dng");
+    const fs::path urgentShot = shot("IMG_urgent.dng");
+
+    std::mutex mutex;
+    std::vector<std::string> served;
+    const auto note = [&](std::string entry) {
+        const std::scoped_lock lock(mutex);
+        served.push_back(std::move(entry));
+    };
+    Gate gate;
+    app::ThumbnailWorker worker(
+        app::ThumbnailCache(cacheRoot.path()),
+        [&](app::ThumbnailResult result) {
+            if (result.kind == app::ThumbnailKind::Embedded && result.primary == gateShot) {
+                gate.wait();
+            }
+            note(std::string(result.kind == app::ThumbnailKind::Embedded ? "embedded "
+                                                                         : "developed ") +
+                 result.primary.stem().string());
+        },
+        false, {}, [&](app::SnapshotThumbnailResult) { note("snapshot"); });
+    worker.setShots({gateShot});
+    const GateGuard guard([&] { gate.release(); });
+    REQUIRE(waitUntil([&] { return gate.entered(); }));
+
+    // The worker is held inside the first result; everything else queues behind it.
+    worker.addShots({visibleShot, offShot, urgentShot});
+    worker.setVisible({visibleShot});
+    worker.invalidate(urgentShot);
+    const std::uint64_t generation = worker.beginSnapshots();
+    REQUIRE(
+        worker.requestSnapshotThumbnail(rig.photo, {SnapshotId{1}, exposed(1.0F), {}}, generation));
+    gate.release();
+
+    REQUIRE(waitUntil([&] { return worker.pendingJobs() == 0; }));
+    const std::scoped_lock lock(mutex);
+    CHECK(served == std::vector<std::string>{"embedded IMG_gate", "developed IMG_urgent",
+                                             "embedded IMG_visible", "embedded IMG_off",
+                                             "developed IMG_visible", "snapshot",
+                                             "developed IMG_gate", "developed IMG_off"});
+}
+
+TEST_CASE("A snapshot request whose stored key is current is dropped without a render",
+          "[snapshotthumbnails][worker]") {
+    const Rig rig;
+    const test::TempDir cacheRoot;
+    Collector collector;
+    app::ThumbnailWorker worker(
+        app::ThumbnailCache(cacheRoot.path()), [](app::ThumbnailResult) {}, false, {},
+        collector.callback());
+    const std::uint64_t generation = worker.beginSnapshots();
+    const SnapshotRecipe recipe{SnapshotId{1}, exposed(1.0F), {}};
+    const std::string key = *snapshotThumbnailKey(rig.photo, recipe.state, recipe.negative);
+
+    REQUIRE(worker.requestSnapshotThumbnail(rig.photo, recipe, generation, key));
+    REQUIRE(waitUntil([&] { return worker.pendingJobs() == 0; }));
+    CHECK(collector.count() == 0);
+    // Not rendered, so not cached either.
+    CHECK_FALSE(app::ThumbnailCache(cacheRoot.path()).loadSnapshot(key));
+
+    SECTION("another stored key is stale and is made again") {
+        REQUIRE(worker.requestSnapshotThumbnail(rig.photo, recipe, generation, "stale-key"));
+        REQUIRE(waitUntil([&] { return collector.count() == 1 && worker.pendingJobs() == 0; }));
+        CHECK(collector.results()[0].thumbnail.renderKey == key);
+    }
+    SECTION("no stored key means there is none to match") {
+        REQUIRE(worker.requestSnapshotThumbnail(rig.photo, recipe, generation));
+        REQUIRE(waitUntil([&] { return collector.count() == 1 && worker.pendingJobs() == 0; }));
+        CHECK(collector.results()[0].thumbnail.renderKey == key);
+    }
 }

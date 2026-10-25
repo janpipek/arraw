@@ -4,6 +4,7 @@
 #include <Snapshots.h>
 
 #include <cstddef>
+#include <functional>
 
 namespace arraw::detail {
 
@@ -15,5 +16,9 @@ inline int sidecarLockTimeout = sidecarLockTimeoutMilliseconds;
 
 /// @brief Age after which the sidecar lock is stale, in milliseconds; lowered only by tests.
 inline int sidecarStaleLock = sidecarStaleLockMilliseconds;
+
+/// @brief Function called by every writer right after it has the sidecar lock; set only by tests,
+/// before any writer runs, to hold a writer inside its lock.
+inline std::function<void()> sidecarLockHeldHook;
 
 } // namespace arraw::detail

@@ -271,7 +271,13 @@ FilmStrip::FilmStrip(QWidget* parent, ThumbnailCache cache, LensDatabaseSource l
                   this, [this, result = std::move(result)] { receiveThumbnail(result); },
                   Qt::QueuedConnection);
           },
-          true, std::move(lensDatabase)) {
+          true, std::move(lensDatabase),
+          [this](SnapshotThumbnailResult result) {
+              // On the worker thread, as the shots' thumbnails.
+              QMetaObject::invokeMethod(
+                  this, [this, result = std::move(result)] { emit snapshotThumbnailReady(result); },
+                  Qt::QueuedConnection);
+          }) {
     proxy_.setSourceModel(&model_);
 
     auto* layout = new QHBoxLayout(this);
@@ -934,6 +940,25 @@ void FilmStrip::noteOwnWrite(const fs::path& photo) {
     } catch (const std::exception&) {
         // A photograph with no sidecar name has none that could change.
     }
+}
+
+void FilmStrip::noteOwnWrite(const fs::path& photo, std::int64_t stamp) {
+    try {
+        watcher_.noteOwnWrite(sidecarPath(photo), stamp);
+        model_.noteSidecarWritten(photo);
+    } catch (const std::exception&) {
+        // A photograph with no sidecar name has none that could change.
+    }
+}
+
+std::uint64_t FilmStrip::beginSnapshots() {
+    return thumbnails_.beginSnapshots();
+}
+
+bool FilmStrip::requestSnapshotThumbnail(const fs::path& primary, SnapshotRecipe recipe,
+                                         std::uint64_t generation, std::string storedKey) {
+    return thumbnails_.requestSnapshotThumbnail(primary, std::move(recipe), generation,
+                                                std::move(storedKey));
 }
 
 void FilmStrip::setLiveThumbnail(const fs::path& primary, QImage thumbnail) {

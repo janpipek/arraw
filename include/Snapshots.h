@@ -158,6 +158,12 @@ struct OpenDocument {
 
     /// @brief Snapshot the saved recipe was based on, if the sidecar says and it still exists.
     std::optional<SnapshotId> savedBase;
+
+    /// @brief Count of raw snapshot entries the sidecar holds that this arraw cannot use.
+    ///
+    /// As ::arraw::SidecarContents::unreadableSnapshots; they are kept in the file until
+    /// ::arraw::discardUnreadableSnapshots removes them.
+    std::size_t unreadableSnapshots = 0;
 };
 
 /// @brief Opens a photograph with its snapshots, reading the image metadata and the sidecar once.

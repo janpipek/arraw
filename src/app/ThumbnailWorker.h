@@ -17,6 +17,7 @@
 #include <functional>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <thread>
 #include <unordered_set>
 #include <vector>
@@ -82,7 +83,9 @@ struct SnapshotThumbnailResult {
 ///
 /// Snapshot thumbnails (ADR 056, decision 9) are a third kind of job, apart from the shots above.
 /// Each is made from an explicit, immutable ::arraw::SnapshotRecipe the caller hands over, never
-/// from the sidecar, and is served after the embedded jobs and before the developed ones. They
+/// from the sidecar, and is served after the embedded jobs and the developed jobs of the visible
+/// shots, and before the developed jobs of the rest (ADR 056, decision 14). The order is: urgent,
+/// embedded (visible first), developed of visible shots, snapshots, the other developed. They
 /// belong to a *snapshot generation* the caller starts with
 /// ::arraw::app::ThumbnailWorker::beginSnapshots when it opens another photograph, and a result
 /// of an older one is never delivered. A new folder leaves them alone.
@@ -106,9 +109,9 @@ public:
     /// consumer that posts the result to another thread must compare
     /// ::arraw::app::SnapshotThumbnailResult::generation with
     /// ::arraw::app::ThumbnailWorker::snapshotGeneration and the primary with its session's path
-    /// there. It should call ::arraw::EditSession::applySnapshotThumbnail under a try block and
-    /// then ::arraw::app::FilmStrip::noteOwnWrite for the photograph, so that its own write is not
-    /// taken for an external change. Must not throw. Empty to drop them.
+    /// there. It then hands the thumbnail to the snapshot writer
+    /// (::arraw::EditSession::prepareSnapshotThumbnail, ::arraw::app::SnapshotWriter), which
+    /// reports the stamp of its own write. Must not throw. Empty to drop them.
     ThumbnailWorker(ThumbnailCache cache, std::function<void(ThumbnailResult)> onResult,
                     bool pruneAtStart = true, LensDatabaseSource lensDatabase = {},
                     std::function<void(SnapshotThumbnailResult)> onSnapshotResult = {});
@@ -154,15 +157,19 @@ public:
 
     /// @brief Queues the thumbnail of a snapshot, rendered from the recipe given here.
     ///
-    /// Asking again for a snapshot that is still queued replaces the earlier request. The
-    /// thumbnail is looked up in the cache by ::arraw::snapshotThumbnailKey first.
+    /// Asking again for a snapshot that is still queued replaces the earlier request. The worker
+    /// works out the render key (::arraw::snapshotThumbnailKey, which reads the file, so not on
+    /// the caller's thread) and drops the job, with no result and no render, when it equals
+    /// @p storedKey; otherwise the thumbnail is looked up in the cache by the key first.
     /// @param primary Photograph the snapshot belongs to.
     /// @param recipe Immutable recipe to render; copied.
     /// @param generation Snapshot generation the caller got from
     /// ::arraw::app::ThumbnailWorker::beginSnapshots.
+    /// @param storedKey Render key of the thumbnail the sidecar holds for the snapshot; empty for
+    /// none.
     /// @return False, with nothing queued, when @p generation is not the current one.
     bool requestSnapshotThumbnail(const std::filesystem::path& primary, SnapshotRecipe recipe,
-                                  std::uint64_t generation);
+                                  std::uint64_t generation, std::string storedKey = {});
 
     /// @brief Gives the current snapshot generation.
     /// @return The generation.
@@ -186,6 +193,8 @@ private:
         std::filesystem::path primary;
         SnapshotRecipe recipe;
         std::uint64_t generation = 0;
+        /// Key of the thumbnail the sidecar holds; empty for none.
+        std::string storedKey;
     };
 
     /// @brief One thing to make.

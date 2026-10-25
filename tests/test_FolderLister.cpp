@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -1716,3 +1717,53 @@ TEST_CASE("Switching the subfolders off drops the marks and EXIF still queued fo
 }
 
 #endif
+
+TEST_CASE("Several own stamps of a sidecar are remembered, newest four", "[watcher][refresh]") {
+    const test::TempDir folder;
+    const fs::path photo = addJpeg(folder.file("IMG_1.jpg"));
+    const fs::path sidecar = sidecarPath(photo);
+    const QString primary = QString::fromStdU16String(photo.u16string());
+
+    ShotModel model;
+    FolderWatcher watcher(model, std::chrono::milliseconds(20));
+    int external = 0;
+    QObject::connect(&watcher, &FolderWatcher::sidecarChangedExternally, &watcher,
+                     [&](const QString&) { ++external; });
+    const auto reported = [&](qint64 stamp) {
+        const int before = external;
+        emit model.sidecarRefreshed(primary, stamp);
+        return external != before;
+    };
+
+    SECTION("two writers noting out of order are both quiet") {
+        watcher.noteOwnWrite(sidecar, 200);
+        watcher.noteOwnWrite(sidecar, 100);
+        CHECK_FALSE(reported(100));
+        CHECK_FALSE(reported(200));
+        CHECK(reported(300)); // another program's
+    }
+    SECTION("a fifth stamp evicts the oldest") {
+        for (std::int64_t stamp = 1; stamp <= 5; ++stamp) {
+            watcher.noteOwnWrite(sidecar, stamp);
+        }
+        CHECK(reported(1));
+        for (std::int64_t stamp = 2; stamp <= 5; ++stamp) {
+            CHECK_FALSE(reported(stamp));
+        }
+    }
+    SECTION("noting a stamp again keeps it among the newest") {
+        for (std::int64_t stamp : {1, 2, 3, 4, 1, 5}) {
+            watcher.noteOwnWrite(sidecar, stamp);
+        }
+        // 2 is the oldest now; 1 was refreshed.
+        CHECK(reported(2));
+        CHECK_FALSE(reported(1));
+        CHECK_FALSE(reported(5));
+    }
+    SECTION("the overload without a stamp reads the file's") {
+        writeSidecarMarks(photo, {.rating = 2});
+        watcher.noteOwnWrite(sidecar);
+        CHECK_FALSE(reported(fileStamp(sidecar).value()));
+        CHECK(reported(7));
+    }
+}

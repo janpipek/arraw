@@ -9,6 +9,7 @@
 #include <NegativeSettings.h>
 #include <Photo.h>
 #include <Sidecar.h>
+#include <SnapshotWrites.h>
 #include <Snapshots.h>
 
 #include <QLockFile>
@@ -21,9 +22,11 @@
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <variant>
 #include <vector>
 
 using namespace arraw;
@@ -96,6 +99,40 @@ struct HeldLock {
         REQUIRE(lock.tryLock(1000));
     }
 };
+
+std::string slurp(const fs::path& path) {
+    std::ifstream stream(path, std::ios::binary);
+    return {std::istreambuf_iterator<char>(stream), {}};
+}
+
+/// Everything a pure operation must leave alone.
+struct Observed {
+    Photo photo;
+    Photo saved;
+    std::vector<HistoryStep> history;
+    std::size_t position;
+    bool editing;
+    bool dirty;
+    SnapshotCollection snapshots;
+    std::optional<SnapshotId> base;
+    std::optional<SnapshotId> savedBase;
+    std::size_t unreadable;
+
+    friend bool operator==(const Observed&, const Observed&) = default;
+};
+
+Observed observe(const EditSession& session) {
+    return {session.photo(),
+            session.saved(),
+            session.history(),
+            session.position(),
+            session.editing(),
+            session.hasUnsavedChanges(),
+            session.snapshots(),
+            session.baseSnapshot(),
+            session.savedBaseSnapshot(),
+            session.unreadableSnapshots()};
+}
 
 /// A snapshot as another process would add one.
 Snapshot theirs(const std::string& name) {
@@ -954,4 +991,263 @@ TEST_CASE("A session made from a bare photo leaves the saved base as the file ha
     CHECK(rig.disk().savedBase == a);
     CHECK(rig.disk().photo.state() == exposed(1.0F));
     CHECK(rig.disk().snapshots.entries.size() == 1);
+}
+
+TEST_CASE("Preparing a snapshot write changes nothing and touches no file",
+          "[session][snapshots][prepare]") {
+    const Rig rig;
+    EditSession session = rig.open();
+    session.setState(exposed(1.0F));
+    const SnapshotId a = session.createSnapshot("A");
+    const std::string sidecar = slurp(sidecarPath(rig.photo));
+    const auto stamp = fs::last_write_time(sidecarPath(rig.photo));
+    const Observed before = observe(session);
+
+    const auto untouched = [&] {
+        CHECK(observe(session) == before);
+        CHECK(slurp(sidecarPath(rig.photo)) == sidecar);
+        CHECK(fs::last_write_time(sidecarPath(rig.photo)) == stamp);
+    };
+    SECTION("Create") {
+        const SnapshotWrite write = session.prepareCreateSnapshot("B");
+        const auto& create = std::get<SnapshotCreate>(write.change);
+        CHECK(write.photo == rig.photo);
+        CHECK(write.expectedRevision == session.snapshots().revision);
+        CHECK(create.draft.name == "B");
+        CHECK(create.draft.parent == a);
+        CHECK(create.draft.state == exposed(1.0F));
+        CHECK(create.position == session.position());
+        untouched();
+    }
+    SECTION("Rename") {
+        const SnapshotWrite write = session.prepareRenameSnapshot(a, "Renamed");
+        CHECK(std::get<SnapshotRename>(write.change).name == "Renamed");
+        untouched();
+    }
+    SECTION("Delete") {
+        const SnapshotWrite write = session.prepareDeleteSnapshot(a);
+        CHECK(std::get<SnapshotDelete>(write.change).id == a);
+        untouched();
+    }
+    SECTION("discarding unusable entries") {
+        const SnapshotWrite write = session.prepareDiscardUnreadableSnapshots();
+        CHECK(std::holds_alternative<SnapshotDiscardUnreadable>(write.change));
+        CHECK(write.expectedRevision == session.snapshots().revision);
+        untouched();
+    }
+    SECTION("an invalid request fails before anything is prepared") {
+        CHECK_THROWS_AS(session.prepareCreateSnapshot(""), std::invalid_argument);
+        CHECK_THROWS_AS(session.prepareRenameSnapshot(a, ""), std::invalid_argument);
+        CHECK_THROWS_AS(session.prepareRenameSnapshot(SnapshotId{9}, "x"), std::invalid_argument);
+        CHECK_THROWS_AS(session.prepareDeleteSnapshot(SnapshotId{9}), std::invalid_argument);
+        untouched();
+    }
+    SECTION("a gesture under way refuses Create and is left open") {
+        session.begin();
+        session.update(exposed(2.0F));
+        const Observed open = observe(session);
+        CHECK_THROWS_AS(session.prepareCreateSnapshot("B"), std::logic_error);
+        CHECK(observe(session) == open);
+        // The others are allowed while a gesture is open, and leave it open.
+        CHECK_NOTHROW(static_cast<void>(session.prepareRenameSnapshot(a, "R")));
+        CHECK_NOTHROW(static_cast<void>(session.prepareDeleteSnapshot(a)));
+        CHECK(observe(session) == open);
+    }
+}
+
+TEST_CASE("Finishing a Create anchors it only to the position it was prepared at",
+          "[session][snapshots][prepare]") {
+    const Rig rig;
+    EditSession session = rig.open();
+    session.setState(exposed(1.0F));
+    const SnapshotId other = session.createSnapshot("Other");
+    session.setState(exposed(2.0F));
+    const std::size_t steps = session.history().size();
+
+    const SnapshotWrite write = session.prepareCreateSnapshot("New");
+    const SnapshotWriteOutcome outcome = writeSnapshotChange(write);
+    REQUIRE(outcome.update);
+    const SnapshotId made = outcome.update->id;
+
+    const auto listedButNotAnchored = [&] {
+        CHECK_FALSE(session.finishSnapshotWrite(write, outcome));
+        REQUIRE(session.snapshots().find(made) != nullptr);
+        CHECK(session.snapshots() == rig.disk().snapshots);
+        for (const HistoryStep& step : session.history()) {
+            CHECK(step.baseSnapshot != made);
+        }
+        CHECK(session.baseSnapshot() != made);
+    };
+
+    SECTION("the session is unchanged") {
+        CHECK(session.finishSnapshotWrite(write, outcome));
+        CHECK(session.baseSnapshot() == made);
+        CHECK(session.history()[session.position()].baseSnapshot == made);
+        CHECK(session.history().size() == steps);
+        CHECK(session.snapshots().find(made)->parent == other);
+        CHECK(session.hasUnsavedChanges());
+    }
+    SECTION("an edit was made meanwhile") {
+        session.setState(exposed(3.0F));
+        listedButNotAnchored();
+        CHECK(session.baseSnapshot() == other);
+    }
+    SECTION("an undo moved the position meanwhile") {
+        session.undo();
+        listedButNotAnchored();
+        CHECK(session.baseSnapshot() == other);
+    }
+    SECTION("a Restore happened meanwhile") {
+        session.restoreSnapshot(other);
+        REQUIRE(session.baseSnapshot() == other);
+        listedButNotAnchored();
+    }
+    SECTION("a gesture is open") {
+        session.begin();
+        listedButNotAnchored();
+    }
+    SECTION("an edit followed by an undo back to the same position anchors") {
+        session.setState(exposed(3.0F));
+        session.undo();
+        REQUIRE(session.position() == steps - 1);
+        CHECK(session.finishSnapshotWrite(write, outcome));
+        CHECK(session.baseSnapshot() == made);
+        CHECK(session.history()[session.position()].baseSnapshot == made);
+        // The step that was undone is still there to redo, with its own base.
+        CHECK(session.canRedo());
+        CHECK(session.history().back().baseSnapshot == other);
+    }
+    SECTION("a write for another photograph is refused") {
+        SnapshotWrite foreign = write;
+        foreign.photo = rig.directory.file("IMG_2.dng");
+        CHECK_THROWS_AS(session.finishSnapshotWrite(foreign, outcome), std::invalid_argument);
+    }
+}
+
+TEST_CASE("Finishing a Delete remaps every reference to the parent",
+          "[session][snapshots][prepare]") {
+    const Rig rig;
+    EditSession session = rig.open();
+    const SnapshotId a = session.createSnapshot("A");
+    session.setState(exposed(1.0F));
+    const SnapshotId b = session.createSnapshot("B");
+    session.save();
+    session.begin();
+    session.update(exposed(2.0F)); // the open edit remembers its base too
+    REQUIRE(session.baseSnapshot() == b);
+    REQUIRE(session.savedBaseSnapshot() == b);
+
+    const SnapshotWrite write = session.prepareDeleteSnapshot(b);
+    const SnapshotWriteOutcome outcome = writeSnapshotChange(write);
+    CHECK(session.finishSnapshotWrite(write, outcome));
+
+    CHECK(session.snapshots().find(b) == nullptr);
+    CHECK(session.snapshots() == rig.disk().snapshots);
+    CHECK(session.baseSnapshot() == a);
+    CHECK(session.savedBaseSnapshot() == a);
+    for (const HistoryStep& step : session.history()) {
+        CHECK(step.baseSnapshot != b);
+    }
+    CHECK(session.history().back().baseSnapshot == a);
+    session.cancel();
+    CHECK(session.baseSnapshot() == a); // the baseline was remapped as well
+    CHECK(session.photo().state() == exposed(1.0F));
+}
+
+TEST_CASE("Finishing a Rename or a discard adopts the collection",
+          "[session][snapshots][prepare]") {
+    const Rig rig;
+    EditSession session = rig.open();
+    const SnapshotId a = session.createSnapshot("A");
+    const Observed before = observe(session);
+
+    const SnapshotWrite rename = session.prepareRenameSnapshot(a, "Renamed");
+    CHECK(session.finishSnapshotWrite(rename, writeSnapshotChange(rename)));
+    CHECK(session.snapshots().find(a)->name == "Renamed");
+    CHECK(session.snapshots() == rig.disk().snapshots);
+    CHECK(session.photo() == before.photo);
+    CHECK(session.history() == before.history);
+    CHECK(session.baseSnapshot() == a);
+
+    // A discard on a clean list writes nothing and changes nothing.
+    const std::string text = slurp(sidecarPath(rig.photo));
+    const SnapshotWrite discard = session.prepareDiscardUnreadableSnapshots();
+    const SnapshotWriteOutcome outcome = writeSnapshotChange(discard);
+    CHECK_FALSE(outcome.written);
+    CHECK(session.finishSnapshotWrite(discard, outcome));
+    CHECK(slurp(sidecarPath(rig.photo)) == text);
+    CHECK(session.snapshots().find(a)->name == "Renamed");
+}
+
+TEST_CASE("Adopting a collection another process changed remaps like a refresh",
+          "[session][snapshots][prepare]") {
+    const Rig rig;
+    EditSession session = rig.open();
+    const SnapshotId a = session.createSnapshot("A");
+    session.setState(exposed(1.0F));
+    const SnapshotId b = session.createSnapshot("B");
+    session.save();
+    session.begin();
+    session.update(exposed(2.0F));
+    REQUIRE(session.baseSnapshot() == b);
+
+    // Another process deletes the base and adds a snapshot of its own.
+    deleteSnapshot(rig.photo, session.snapshots().revision, b);
+    const SnapshotId added =
+        addSnapshot(rig.photo, session.snapshots().revision + 1, theirs("Theirs")).id;
+    const OpenDocument disk = rig.disk();
+    session.adoptSnapshots(disk.snapshots, 3);
+
+    CHECK(session.snapshots() == disk.snapshots);
+    CHECK(session.snapshots().find(added) != nullptr);
+    CHECK(session.unreadableSnapshots() == 3);
+    CHECK(session.baseSnapshot() == a);
+    CHECK(session.savedBaseSnapshot() == a);
+    CHECK(session.editing());
+    for (const HistoryStep& step : session.history()) {
+        CHECK(step.baseSnapshot != b);
+    }
+    session.cancel();
+    CHECK(session.baseSnapshot() == a);
+}
+
+TEST_CASE("The synchronous snapshot methods are the three parts in turn",
+          "[session][snapshots][prepare]") {
+    const Rig rig;
+    EditSession sync = rig.open();
+    sync.setState(exposed(1.0F));
+    const SnapshotId a = sync.createSnapshot("A");
+
+    // The same operations by hand end in the same session.
+    const test::TempDir otherFolder;
+    const fs::path photo = otherFolder.file("IMG_1.dng");
+    fs::copy_file(test::fixture("linear-32x24-neutral.dng"), photo);
+    EditSession manual{openDocument(photo)};
+    manual.setState(exposed(1.0F));
+    const SnapshotWrite write = manual.prepareCreateSnapshot("A");
+    CHECK(manual.finishSnapshotWrite(write, writeSnapshotChange(write)));
+
+    CHECK(manual.history() == sync.history());
+    CHECK(manual.baseSnapshot() == sync.baseSnapshot());
+    CHECK(manual.snapshots().entries.size() == 1);
+    CHECK(manual.snapshots().find(a)->name == "A");
+    CHECK(manual.snapshots().revision == sync.snapshots().revision);
+}
+
+TEST_CASE("A conflict on a prepared write leaves the session alone until it adopts",
+          "[session][snapshots][prepare]") {
+    const Rig rig;
+    EditSession session = rig.open();
+    session.setState(exposed(1.0F));
+    const SnapshotWrite write = session.prepareCreateSnapshot("Mine");
+    const Observed before = observe(session);
+
+    addSnapshot(rig.photo, 0, theirs("Theirs")); // another process wins the race
+    CHECK_THROWS_AS(writeSnapshotChange(write), SnapshotRevisionConflict);
+    CHECK(observe(session) == before);
+    CHECK(rig.disk().snapshots.entries.size() == 1);
+
+    session.adoptSnapshots(rig.disk().snapshots, 0);
+    CHECK(session.snapshots().entries.size() == 1);
+    CHECK(session.history() == before.history);
 }
