@@ -64,6 +64,7 @@ tree or the rows have the focus. Selecting a row previews the snapshot; the prev
 | `Enter` / double-click | Restore the snapshot as the working look (one undoable step) |
 | `F2` | Rename the selected snapshot |
 | `Delete` | Delete the selected snapshot, after a confirmation |
+| `Menu` / right-click | Open the snapshot menu (the snapshot actions that fit the row) on the selected / clicked row; a right-click previews nothing |
 | `Esc` | End the preview (window-level, on only while a snapshot is previewed) |
 
 ## Wiring rules

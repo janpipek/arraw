@@ -475,3 +475,28 @@ def test_cli_snapshot_export_keeps_the_snapshot_negative(bayer_detail_dng, cli, 
     assert np.array_equal(arraw.load(py_out).pixels, arraw.load(cli_out).pixels)
     saved, saved_out = export_with_cli(cli, path, tmp_path / "saved")
     assert not np.array_equal(arraw.load(saved_out).pixels, arraw.load(cli_out).pixels)
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="forges a Qt lock file as Linux writes it")
+def test_a_held_lock_times_out_save(made, photo_path):
+    session, first, _ = made
+    session.begin()
+    session.update(exposed(0.5))
+    session.commit()
+    assert session.has_unsaved_changes
+    sidecar = Path(arraw.sidecar_path(photo_path))
+    before = sidecar.read_bytes()
+    holder, lock = hold_lock(photo_path)
+    try:
+        started = time.monotonic()
+        with pytest.raises(arraw.SidecarLockTimeout):
+            session.save()
+        assert 1.5 <= time.monotonic() - started < 30
+        assert sidecar.read_bytes() == before
+        assert session.has_unsaved_changes  # nothing was saved, nothing was lost
+    finally:
+        holder.kill()
+        holder.wait()
+        lock.unlink(missing_ok=True)
+    session.save()
+    assert not session.has_unsaved_changes

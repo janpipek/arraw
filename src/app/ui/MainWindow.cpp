@@ -51,6 +51,7 @@
 #include <QActionGroup>
 #include <QApplication>
 #include <QCloseEvent>
+#include <QContextMenuEvent>
 #include <QDateTime>
 #include <QDockWidget>
 #include <QEvent>
@@ -70,7 +71,10 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QMetaObject>
+#include <QMouseEvent>
+#include <QPointer>
 #include <QPushButton>
+#include <QScopeGuard>
 #include <QScreen>
 #include <QScrollArea>
 #include <QScrollBar>
@@ -109,6 +113,9 @@
 namespace arraw::app {
 
 namespace {
+
+/// Where the snapshot menu opens in the tree's viewport when no row is selected.
+const QPoint kEmptyTreeMenuAnchor(8, 8);
 
 /// Index of the Adjustments tab of the develop dock.
 constexpr int adjustmentsTab = 0;
@@ -399,6 +406,32 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
     if (watched == photoView_ && open_ &&
         (event->type() == QEvent::Resize || event->type() == QEvent::DevicePixelRatioChange)) {
         resizeTimer_.start();
+    }
+    if (snapshotTree_ != nullptr) {
+        if (event->type() == QEvent::MouseButtonPress ||
+            event->type() == QEvent::MouseButtonDblClick) {
+            if (watched == snapshotTree_->viewport() &&
+                static_cast<QMouseEvent*>(event)->button() == Qt::RightButton) {
+                return true;
+            }
+        } else if (event->type() == QEvent::ContextMenu && watched == snapshotTree_ &&
+                   static_cast<QContextMenuEvent*>(event)->reason() ==
+                       QContextMenuEvent::Keyboard) {
+            // The menu key: the selected row is the target, and the menu opens below it.
+            const QModelIndexList rows = snapshotTree_->selectionModel()->selectedRows();
+            QPoint where = kEmptyTreeMenuAnchor;
+            std::optional<SnapshotId> id;
+            if (!rows.isEmpty()) {
+                id = snapshotModel_->idOf(rows.first());
+                snapshotTree_->scrollTo(rows.first());
+                where = snapshotTree_->visualRect(rows.first()).bottomLeft();
+                const QRect inside = snapshotTree_->viewport()->rect();
+                where = {std::clamp(where.x(), inside.left(), inside.right()),
+                         std::clamp(where.y(), inside.top(), inside.bottom())};
+            }
+            showSnapshotContextMenu(snapshotTree_->viewport()->mapToGlobal(where), id);
+            return true;
+        }
     }
     return QMainWindow::eventFilter(watched, event);
 }
@@ -1399,6 +1432,15 @@ QWidget* MainWindow::buildSnapshotPanel() {
     };
     addTreeKey(Qt::Key_F2, &MainWindow::renameSelectedSnapshot);
     addTreeKey(Qt::Key_Delete, &MainWindow::deleteSelectedSnapshot);
+    // The context menu reuses the actions above. A right-press must not select (= preview) the
+    // row, so the viewport's filter swallows it; the menu acts on the row under the pointer.
+    snapshotTree_->setContextMenuPolicy(Qt::CustomContextMenu);
+    snapshotTree_->viewport()->installEventFilter(this);
+    snapshotTree_->installEventFilter(this);
+    connect(snapshotTree_, &QWidget::customContextMenuRequested, this, [this](const QPoint& where) {
+        const auto id = snapshotModel_->idOf(snapshotTree_->indexAt(where));
+        showSnapshotContextMenu(snapshotTree_->viewport()->mapToGlobal(where), id);
+    });
     column->addWidget(snapshotTree_, 1);
 
     closePreviewShortcut_ = new QShortcut(Qt::Key_Escape, this);
@@ -1568,11 +1610,63 @@ void MainWindow::goToHistoryRow(const QModelIndex& row) {
 }
 
 std::optional<SnapshotId> MainWindow::selectedSnapshot() const {
+    if (contextSnapshot_) {
+        // The lend holds only for the session it was made in and while the row still exists.
+        const bool valid = open_ && open_->serial == contextSerial_ &&
+                           open_->session.snapshots().find(*contextSnapshot_) != nullptr;
+        return valid ? contextSnapshot_ : std::nullopt;
+    }
     if (snapshotTree_ == nullptr) {
         return std::nullopt;
     }
     const QModelIndexList rows = snapshotTree_->selectionModel()->selectedRows();
     return rows.isEmpty() ? std::nullopt : snapshotModel_->idOf(rows.first());
+}
+
+void MainWindow::showSnapshotContextMenu(const QPoint& globalPosition,
+                                         std::optional<SnapshotId> target) {
+    if (!open_ || !snapshotPanel_->isEnabled() || contextMenu_ != nullptr) {
+        return;
+    }
+    // The actions read their row from selectedSnapshot(); the menu lends them its target
+    // without selecting it, which would start a preview.
+    const QPointer<MainWindow> self(this);
+    const QString restoreText = restoreSnapshotAction_->text();
+    contextSnapshot_ = target;
+    contextSerial_ = open_->serial;
+    if (target) {
+        // A right-click selects nothing, so the entry names the look it restores.
+        const Snapshot* snapshot = open_->session.snapshots().find(*target);
+        if (snapshot != nullptr) {
+            restoreSnapshotAction_->setText(
+                tr("Re&store “%1”").arg(QString::fromStdString(snapshot->name)));
+        }
+    }
+    const QScopeGuard end([self, restoreText] {
+        if (self) {
+            self->contextSnapshot_.reset();
+            self->contextMenu_.clear();
+            self->restoreSnapshotAction_->setText(restoreText);
+            self->updateSnapshotPanel();
+        }
+    });
+    updateSnapshotPanel();
+    const QPointer<QMenu> menu(new QMenu(this));
+    contextMenu_ = menu;
+    if (target) {
+        menu->addAction(restoreSnapshotAction_);
+        menu->addAction(renameSnapshotAction_);
+        menu->addAction(deleteSnapshotAction_);
+        menu->addSeparator();
+    }
+    menu->addAction(createSnapshotAction_);
+    if (open_->session.unreadableSnapshots() > 0) {
+        menu->addAction(discardUnreadableAction_);
+    }
+    menu->exec(globalPosition);
+    if (menu) {
+        menu->deleteLater();
+    }
 }
 
 void MainWindow::syncSnapshotSelection() {
