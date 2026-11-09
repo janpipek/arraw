@@ -303,28 +303,6 @@ void encode(QIODevice& device, const QImage& image, ImageFileFormat format,
 
 } // namespace
 
-QImage arraw::encodedForOutput(const ImageBuffer& image, NamedEncoding encoding,
-                               QImage::Format format) {
-    // A camera-native buffer has no colour space Qt could name, and no output
-    // profile could describe one sensor's primaries to a viewer. Refusing here
-    // says which stage is missing rather than which enumerator is unknown.
-    const auto* sourceEncoding = std::get_if<NamedEncoding>(&image.encoding());
-    if (sourceEncoding == nullptr) {
-        throw std::invalid_argument(
-            "A camera-native buffer must pass white balance before it can be exported");
-    }
-    QImage source = qtimage::toImage(image);
-    if (source.isNull()) {
-        throw std::invalid_argument("Unsupported or invalid image buffer");
-    }
-    source.setColorSpace(qtimage::toColorSpace(*sourceEncoding));
-    QImage converted = source.convertedToColorSpace(qtimage::toColorSpace(encoding), format);
-    if (converted.isNull()) {
-        throw std::runtime_error("Cannot prepare image for export");
-    }
-    return converted;
-}
-
 void arraw::exportImage(const ImageBuffer& image, const std::filesystem::path& path,
                         const ExportOptions& options, const std::optional<ExportMetadata>& metadata,
                         DiagnosticLog& log) {

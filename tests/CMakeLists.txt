@@ -88,6 +88,7 @@ add_executable(arraw-tests
         test_MasksModel.cpp
         test_ImageBuffer.cpp
         test_ImageExport.cpp
+        test_EncodedForOutput.cpp
         test_OutputHistogram.cpp
         test_ImagePyramid.cpp
         test_NegativeSettings.cpp

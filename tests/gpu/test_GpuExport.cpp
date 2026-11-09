@@ -21,6 +21,7 @@
 #include <iterator>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <vector>
 
@@ -235,7 +236,12 @@ TEST_CASE("Export with lens corrections runs on the GPU, within rounding of the 
                     test::illConditionedRelativeTolerance);
                 CAPTURE(difference.worstCodes, difference.worstExcess);
                 REQUIRE(difference.worstExcess <= 1.0);
-                // And the correction is in the picture.
+                // And the correction is in the picture. This fixture's chromatic aberration is
+                // under one 8-bit code everywhere; the exact output conversion (ADR 057) no longer
+                // turns it into a difference there, as Qt's coarse one did by accident.
+                if (bitDepth == 8 && std::string_view(corrections) == "ca") {
+                    continue;
+                }
                 const Exported plain =
                     exportWith("gpu", raw.string(), bitDepth, {"--lens-corrections", "none"});
                 REQUIRE(plain.code == cli::Success);

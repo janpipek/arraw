@@ -819,19 +819,19 @@ Sources: [pyramid](../src/core/ImagePyramid.cpp), [preview renderer](../src/app/
 
 ## 9.2 Display conversion
 
-The GUI converts the developed RGBA float, linear Rec.2020 image through Qt to **8-bit sRGB RGBA**. This is a colour conversion, not relabelling the working numbers as sRGB. The implementation does not provide a selectable proof profile or an explicit custom-monitor transform at this conversion boundary; subsequent presentation depends on the platform.
+The GUI converts the developed RGBA float, linear Rec.2020 image to **8-bit sRGB RGBA** with arraw's own conversion ([ADR 057](adr/057-output-encoding-is-computed-by-arraw-and-qt-only-labels-the-colour-space.md)). This is a colour conversion, not relabelling the working numbers as sRGB. The implementation does not provide a selectable proof profile or an explicit custom-monitor transform at this conversion boundary; subsequent presentation depends on the platform.
 
 For orientation, the standard positive-range sRGB encoding of a linear sRGB channel $x$ is
 
 $$e(x)=\begin{cases}12.92x&x\le .0031308\\1.055x^{1/2.4}-.055&x>.0031308.\end{cases}$$
 
-This differs from the editing power $x^{1/2.2}$. The output primaries must be converted **before** applying the appropriate output transfer. Qt implements the actual profile conversion, rounding and representable-range handling. Colours outside the target gamut cannot all survive unchanged in a bounded RGB file; Arraw adds no separate perceptual gamut-compression stage here.
+This differs from the editing power $x^{1/2.2}$. The output primaries must be converted **before** applying the appropriate output transfer. arraw computes the conversion in double (exact curves, primaries derived from chromaticities, one rounding) and clamps integer outputs to the representable range; Qt only labels the result's colour space. Colours outside the target gamut cannot all survive unchanged in a bounded RGB file; Arraw adds no separate perceptual gamut-compression stage here.
 
-Source: [DisplayImage.cpp](../src/app/DisplayImage.cpp). Further reading: [ICC sRGB characterization](https://www.color.org/chardata/rgb/srgb.xalter) and [Qt colour-space conversion](https://doc.qt.io/qt-6/qimage.html#convertedToColorSpace).
+Source: [EncodedForOutput.cpp](../src/core/EncodedForOutput.cpp). Further reading: [ICC sRGB characterization](https://www.color.org/chardata/rgb/srgb.xalter).
 
 ## 9.3 Export precision, profiles and compression
 
-Export converts developed working pixels to sRGB, Display P3 or Adobe RGB using Qt. Display P3 here is Qt's Display P3 encoding, not cinema DCI-P3. The internal linear Rec.2020 and gamma-2.2 curve-tap encodings are rejected as output choices. A camera-native buffer must first be developed into a named colour space.
+Export converts developed working pixels to sRGB, Display P3 or Adobe RGB with arraw's own conversion. Display P3 here is the D65 Display P3 encoding, not cinema DCI-P3. The internal linear Rec.2020 and gamma-2.2 curve-tap encodings are rejected as output choices. A camera-native buffer must first be developed into a named colour space.
 
 PNG/TIFF permit 8- or 16-bit samples; JPEG requires 8 bits and fully opaque pixels. There is no automatic white/black matte for transparent JPEG output. Profile embedding defaults on. Disabling it removes the tag **after conversion**; it does not preserve working-space values. A viewer then has less information with which to interpret the file.
 

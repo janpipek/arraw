@@ -332,6 +332,8 @@ add_library(arraw STATIC
         src/core/ExportSettings.cpp
         src/core/ImageExport.cpp
         src/core/EncodedForOutput.h
+        src/core/EncodedForOutput.cpp
+        src/core/TransferFunctions.h
         include/OutputHistogram.h
         src/core/OutputHistogram.cpp
         src/core/OutputHistogramCount.h

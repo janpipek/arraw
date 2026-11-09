@@ -1,5 +1,7 @@
 #include "OutputHistogramCount.h"
 
+#include "TransferFunctions.h"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -33,20 +35,10 @@ struct LumaTable {
 /// Cells of the luma lookup over linear luminance 0..1.
 constexpr std::size_t lumaCells = 65536;
 
-/// @brief Decodes an sRGB (and Display P3) transfer function value to linear.
-double decodeSrgb(double encoded) {
-    return encoded <= 0.04045 ? encoded / 12.92 : std::pow((encoded + 0.055) / 1.055, 2.4);
-}
-
-/// @brief Decodes an Adobe RGB (1998) value to linear.
-double decodeAdobe(double encoded) {
-    return std::pow(encoded, 563.0 / 256.0);
-}
-
 LumaTable buildTable(NamedEncoding encoding) {
     LumaTable table;
     std::array<double, 3> y{};
-    double (*decode)(double) = decodeSrgb;
+    transfer::Curve decode = transfer::decodeSrgb;
     switch (encoding) {
     case NamedEncoding::Srgb:
         y = {0.2126729, 0.7151522, 0.0721750};
@@ -56,7 +48,7 @@ LumaTable buildTable(NamedEncoding encoding) {
         break;
     case NamedEncoding::AdobeRgb:
         y = {0.2973769, 0.6273491, 0.0752741};
-        decode = decodeAdobe;
+        decode = transfer::decodeAdobe;
         break;
     default:
         throw std::invalid_argument(

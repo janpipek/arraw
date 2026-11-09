@@ -2137,6 +2137,28 @@ TEST_CASE("The noise reduction flags set their fields, and the filter is a name"
     }
 }
 
+/// @brief Tells whether two 8-bit images are the same picture, give or take one code per channel.
+///
+/// The flags and a sidecar reach the same settings by different routes, which can leave a float
+/// differing in its last bits. The exact output conversion (ADR 057) keeps that difference, where
+/// Qt's coarse one hid it, so a pixel on a rounding edge differs by one code.
+bool samePictureWithinOneCode(const QImage& a, const QImage& b) {
+    if (a.size() != b.size() || a.format() != b.format()) {
+        return false;
+    }
+    for (int y = 0; y < a.height(); ++y) {
+        for (int x = 0; x < a.width(); ++x) {
+            const QRgb p = a.pixel(x, y);
+            const QRgb q = b.pixel(x, y);
+            if (std::abs(qRed(p) - qRed(q)) > 1 || std::abs(qGreen(p) - qGreen(q)) > 1 ||
+                std::abs(qBlue(p) - qBlue(q)) > 1 || qAlpha(p) != qAlpha(q)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 TEST_CASE("Grain the photograph has keeps its pattern, and only the flags turning it on reseed",
           "[cli][sidecar][grain]") {
     // Enlarged and coarse, so the grain shows in an 8-bit PNG.
@@ -2164,11 +2186,12 @@ TEST_CASE("Grain the photograph has keeps its pattern, and only the flags turnin
         DevelopSettings settings;
         settings.effects.grain = {.amount = 80.0F};
         sidecarWith(grainy, settings);
-        REQUIRE(exportedPng(grainy, with({})) == fixed);
-        REQUIRE(exportedPng(grainy, with({})) == fixed);
+        REQUIRE(samePictureWithinOneCode(exportedPng(grainy, with({})), fixed));
+        REQUIRE(samePictureWithinOneCode(exportedPng(grainy, with({})), fixed));
         // Changing its amount does not turn it on, so it keeps the pattern.
-        REQUIRE(exportedPng(grainy, with({"--grain-amount", "40"})) ==
-                exportedPng(bare, with({"--grain-amount", "40", "--grain-seed", "0"})));
+        REQUIRE(samePictureWithinOneCode(
+            exportedPng(grainy, with({"--grain-amount", "40"})),
+            exportedPng(bare, with({"--grain-amount", "40", "--grain-seed", "0"}))));
     }
     SECTION("grain the flags turn on gets a random pattern per export") {
         const QImage first = exportedPng(bare, with({"--grain-amount", "80"}));
@@ -2179,7 +2202,8 @@ TEST_CASE("Grain the photograph has keeps its pattern, and only the flags turnin
         const auto off = copyRaw(directory, "off.dng");
         sidecarWith(off, DevelopSettings{});
         REQUIRE(exportedPng(off, with({"--grain-amount", "80"})) != fixed);
-        REQUIRE(exportedPng(off, with({"--grain-amount", "80", "--grain-seed", "0"})) == fixed);
+        REQUIRE(samePictureWithinOneCode(
+            exportedPng(off, with({"--grain-amount", "80", "--grain-seed", "0"})), fixed));
     }
 }
 
