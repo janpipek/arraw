@@ -4,6 +4,7 @@
 #include "TerminalStyle.h"
 
 #include <LensDatabase.h>
+#include <ShortestDecimal.h>
 
 #include <QCommandLineParser>
 #include <QString>
@@ -49,16 +50,6 @@ void configure(QCommandLineParser& parser) {
         {"info", "Show the database's directory, stamp and counts instead of lenses."});
 }
 
-/// @brief Spells a number without trailing zeros.
-std::string plain(double value) {
-    std::string text = std::to_string(value);
-    text.erase(text.find_last_not_of('0') + 1);
-    if (!text.empty() && text.back() == '.') {
-        text.pop_back();
-    }
-    return text;
-}
-
 /// @brief Writes one lens as a line.
 void write(std::ostream& out, const LensEntry& lens) {
     out << lens.model;
@@ -70,11 +61,11 @@ void write(std::ostream& out, const LensEntry& lens) {
     for (std::size_t index = 0; index < lens.mounts.size(); ++index) {
         out << (index > 0 ? ", " : "") << lens.mounts[index];
     }
-    out << "; crop " << plain(lens.cropFactor);
+    out << "; crop " << shortestText(lens.cropFactor);
     if (lens.maxFocal > 0.0) {
-        out << "; " << plain(lens.minFocal);
+        out << "; " << shortestText(lens.minFocal);
         if (lens.maxFocal != lens.minFocal) {
-            out << "-" << plain(lens.maxFocal);
+            out << "-" << shortestText(lens.maxFocal);
         }
         out << " mm";
     }
@@ -125,7 +116,7 @@ int list(const QCommandLineParser& parser, std::ostream& out, std::ostream& err)
         mount = camera->mount;
         out << (camera->model.starts_with(camera->maker) ? "" : camera->maker + " ")
             << camera->model << ": mount " << camera->mount << ", crop "
-            << plain(camera->cropFactor) << "\n";
+            << shortestText(camera->cropFactor) << "\n";
     }
     for (const LensEntry& lens : lenses.lenses(parser.value("search").toStdString(), mount)) {
         write(out, lens);
