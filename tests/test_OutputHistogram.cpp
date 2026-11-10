@@ -1,3 +1,4 @@
+#include "ColorSpaces.h"
 #include "OutputHistogramCount.h"
 #include "support/TempDir.h"
 #include "support/TestImages.h"
@@ -280,12 +281,9 @@ TEST_CASE("luma from the lookup equals a binary search over the half-code bounda
     const auto encoding =
         GENERATE(NamedEncoding::Srgb, NamedEncoding::DisplayP3, NamedEncoding::AdobeRgb);
     // The reference: the method the lookup replaced, spelled out here independently.
-    std::array<double, 3> y{0.2126729, 0.7151522, 0.0721750};
-    if (encoding == NamedEncoding::DisplayP3) {
-        y = {0.2289746, 0.6917385, 0.0792869};
-    } else if (encoding == NamedEncoding::AdobeRgb) {
-        y = {0.2973769, 0.6273491, 0.0752741};
-    }
+    // Luma weights are row Y of the encoding's RGB-to-XYZ matrix (ADR 057).
+    const auto toXyz = colorspaces::rgbToXyz(colorspaces::primariesOf(encoding));
+    const std::array<double, 3> y{toXyz[3], toXyz[4], toXyz[5]};
     const auto decode = [&](double v) {
         if (encoding == NamedEncoding::AdobeRgb) {
             return std::pow(v, 563.0 / 256.0);

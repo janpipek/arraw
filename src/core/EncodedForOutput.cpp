@@ -68,7 +68,7 @@ Pixel convert(const Plan& plan, Pixel pixel) {
     return pixel;
 }
 
-/// @brief Reads pixels of a source row of 8-bit samples.
+/// @brief Reader of pixels from a source row of 8-bit samples.
 template <std::size_t Channels> struct ReadU8 {
     Pixel operator()(const uchar* row, int x) const {
         const uchar* p = row + Channels * static_cast<std::size_t>(x);
@@ -76,7 +76,7 @@ template <std::size_t Channels> struct ReadU8 {
     }
 };
 
-/// @brief Reads pixels of a source row of RGBA 16-bit samples.
+/// @brief Reader of pixels from a source row of RGBA 16-bit samples.
 struct ReadU16 {
     Pixel operator()(const uchar* row, int x) const {
         std::array<std::uint16_t, 4> p{};
@@ -85,7 +85,7 @@ struct ReadU16 {
     }
 };
 
-/// @brief Reads pixels of a source row of RGBA float samples.
+/// @brief Reader of pixels from a source row of RGBA float samples.
 struct ReadF32 {
     Pixel operator()(const uchar* row, int x) const {
         std::array<float, 4> p{};
@@ -94,7 +94,7 @@ struct ReadF32 {
     }
 };
 
-/// @brief Writes pixels of an 8-bit target row, with or without alpha.
+/// @brief Writer of pixels to an 8-bit target row, with or without alpha.
 template <std::size_t Channels> struct WriteU8 {
     void operator()(uchar* row, int x, const Pixel& pixel) const {
         uchar* p = row + Channels * static_cast<std::size_t>(x);
@@ -107,7 +107,7 @@ template <std::size_t Channels> struct WriteU8 {
     }
 };
 
-/// @brief Writes pixels of a 16-bit target row; without alpha the fourth sample is full.
+/// @brief Writer of pixels to a 16-bit target row; without alpha the fourth sample is full.
 template <bool HasAlpha> struct WriteU16 {
     void operator()(uchar* row, int x, const Pixel& pixel) const {
         const std::array<std::uint16_t, 4> p{
@@ -118,7 +118,7 @@ template <bool HasAlpha> struct WriteU16 {
     }
 };
 
-/// @brief Writes pixels of a float target row, as they are.
+/// @brief Writer of pixels to a float target row, as they are.
 struct WriteF32 {
     void operator()(uchar* row, int x, const Pixel& pixel) const {
         const std::array<float, 4> p{static_cast<float>(pixel[0]), static_cast<float>(pixel[1]),
@@ -150,23 +150,62 @@ void convertImage(const QImage& source, QImage& target, const Plan& plan, Read r
                           });
 }
 
-/// @brief Picks the writer for a target layout and converts.
-template <typename Read>
-void convertTo(const QImage& source, QImage& target, const Plan& plan, Read read) {
-    switch (target.format()) {
+/// @brief Calls @p body with the reader of a source layout.
+/// @throws std::invalid_argument if the layout is not one ::arraw::qtimage::toImage gives.
+template <typename Body> void withReader(QImage::Format format, Body&& body) {
+    switch (format) {
     case QImage::Format_RGB888:
-        return convertImage(source, target, plan, read, WriteU8<3>{});
+        return body(ReadU8<3>{});
     case QImage::Format_RGBA8888:
-        return convertImage(source, target, plan, read, WriteU8<4>{});
-    case QImage::Format_RGBX64:
-        return convertImage(source, target, plan, read, WriteU16<false>{});
+        return body(ReadU8<4>{});
     case QImage::Format_RGBA64:
-        return convertImage(source, target, plan, read, WriteU16<true>{});
+        return body(ReadU16{});
     case QImage::Format_RGBA32FPx4:
-        return convertImage(source, target, plan, read, WriteF32{});
+        return body(ReadF32{});
     default:
+        throw std::invalid_argument("Unsupported source layout");
+    }
+}
+
+/// @brief Calls @p body with the writer of a target layout, if it is one.
+/// @return Whether @p format is a layout the conversion writes. The one list of them.
+template <typename Body> bool withWriter(QImage::Format format, Body&& body) {
+    switch (format) {
+    case QImage::Format_RGB888:
+        body(WriteU8<3>{});
+        return true;
+    case QImage::Format_RGBA8888:
+        body(WriteU8<4>{});
+        return true;
+    case QImage::Format_RGBX64:
+        body(WriteU16<false>{});
+        return true;
+    case QImage::Format_RGBA64:
+        body(WriteU16<true>{});
+        return true;
+    case QImage::Format_RGBA32FPx4:
+        body(WriteF32{});
+        return true;
+    default:
+        return false;
+    }
+}
+
+/// @brief Converts @p source into a new image of a layout, by a plan.
+/// @throws std::invalid_argument if @p format is not a layout that is written.
+/// @throws std::runtime_error if the result cannot be allocated.
+QImage convertedBy(const QImage& source, const Plan& plan, QImage::Format format) {
+    if (!withWriter(format, [](auto) {})) {
         throw std::invalid_argument("Unsupported output layout");
     }
+    QImage target(source.size(), format);
+    if (target.isNull()) {
+        throw std::runtime_error("Cannot prepare image for export");
+    }
+    withReader(source.format(), [&](auto read) {
+        withWriter(format, [&](auto write) { convertImage(source, target, plan, read, write); });
+    });
+    return target;
 }
 
 } // namespace
@@ -185,38 +224,29 @@ QImage arraw::encodedForOutput(const ImageBuffer& image, NamedEncoding encoding,
     if (source.isNull()) {
         throw std::invalid_argument("Unsupported or invalid image buffer");
     }
-    const bool floating = format == QImage::Format_RGBA32FPx4;
-    if (!floating && format != QImage::Format_RGB888 && format != QImage::Format_RGBA8888 &&
-        format != QImage::Format_RGBX64 && format != QImage::Format_RGBA64) {
-        throw std::invalid_argument("Unsupported output layout");
-    }
-
     const Plan plan{.decode = transfer::decoderFor(*sourceEncoding),
                     .encode = transfer::encoderFor(encoding),
                     .matrix = colorspaces::between(*sourceEncoding, encoding),
-                    .samePrimaries = &colorspaces::primariesOf(*sourceEncoding) ==
-                                     &colorspaces::primariesOf(encoding),
-                    .clamp = !floating};
-
-    QImage target(source.size(), format);
-    if (target.isNull()) {
-        throw std::runtime_error("Cannot prepare image for export");
-    }
-    switch (source.format()) {
-    case QImage::Format_RGB888:
-        convertTo(source, target, plan, ReadU8<3>{});
-        break;
-    case QImage::Format_RGBA8888:
-        convertTo(source, target, plan, ReadU8<4>{});
-        break;
-    case QImage::Format_RGBA64:
-        convertTo(source, target, plan, ReadU16{});
-        break;
-    default:
-        convertTo(source, target, plan, ReadF32{});
-        break;
-    }
+                    .samePrimaries = colorspaces::primariesOf(*sourceEncoding) ==
+                                     colorspaces::primariesOf(encoding),
+                    .clamp = format != QImage::Format_RGBA32FPx4};
+    QImage target = convertedBy(source, plan, format);
     // Qt only labels: the numbers are ours (ADR 057), the profile says what they mean.
     target.setColorSpace(qtimage::toColorSpace(encoding));
+    return target;
+}
+
+QImage arraw::quantisedForOutput(const QImage& floats, QImage::Format format) {
+    if (floats.format() != QImage::Format_RGBA32FPx4) {
+        throw std::invalid_argument("Only a float image can be quantised for output");
+    }
+    // Both curves and both primaries are the image's own, so only the clamp and the rounding act.
+    const Plan plan{.decode = transfer::identity,
+                    .encode = transfer::identity,
+                    .matrix = {},
+                    .samePrimaries = true,
+                    .clamp = format != QImage::Format_RGBA32FPx4};
+    QImage target = convertedBy(floats, plan, format);
+    target.setColorSpace(floats.colorSpace());
     return target;
 }

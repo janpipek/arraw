@@ -1,5 +1,6 @@
 #include "OutputHistogramCount.h"
 
+#include "ColorSpaces.h"
 #include "TransferFunctions.h"
 
 #include <algorithm>
@@ -37,23 +38,19 @@ constexpr std::size_t lumaCells = 65536;
 
 LumaTable buildTable(NamedEncoding encoding) {
     LumaTable table;
-    std::array<double, 3> y{};
-    transfer::Curve decode = transfer::decodeSrgb;
     switch (encoding) {
     case NamedEncoding::Srgb:
-        y = {0.2126729, 0.7151522, 0.0721750};
-        break;
     case NamedEncoding::DisplayP3:
-        y = {0.2289746, 0.6917385, 0.0792869};
-        break;
     case NamedEncoding::AdobeRgb:
-        y = {0.2973769, 0.6273491, 0.0752741};
-        decode = transfer::decodeAdobe;
         break;
     default:
         throw std::invalid_argument(
             "An output histogram counts sRGB, Display P3 or Adobe RGB pictures");
     }
+    const transfer::Curve decode = transfer::decoderFor(encoding);
+    // Row Y of the encoding's RGB-to-XYZ matrix.
+    const colorspaces::Matrix3d toXyz = colorspaces::rgbToXyz(colorspaces::primariesOf(encoding));
+    const std::array<double, 3> y{toXyz[3], toXyz[4], toXyz[5]};
     const double sum = y[0] + y[1] + y[2];
     for (std::size_t i = 0; i < 3; ++i) {
         table.weights[i] = static_cast<float>(y[i] / sum);

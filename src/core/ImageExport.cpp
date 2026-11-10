@@ -2,7 +2,6 @@
 
 #include "EncodedForOutput.h"
 #include "MetadataEmbedding.h"
-#include "QtImage.h"
 #include "RowBands.h"
 #include "TimingTrace.h"
 
@@ -25,8 +24,6 @@
 #include <stdexcept>
 #include <string>
 #include <system_error>
-#include <utility>
-#include <variant>
 #include <vector>
 
 using namespace arraw;
@@ -276,7 +273,7 @@ QImage prepareExportImage(const ImageBuffer& image, ImageFileFormat format,
         // Sharpen the output-encoded values in float, before they are quantised.
         QImage floats = encodedForOutput(image, options.encoding, QImage::Format_RGBA32FPx4);
         sharpenInPlace(floats, options.sharpening);
-        prepared = floats.convertedTo(outputFormat);
+        prepared = quantisedForOutput(floats, outputFormat);
     } else {
         prepared = encodedForOutput(image, options.encoding, outputFormat);
     }

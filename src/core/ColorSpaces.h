@@ -74,6 +74,9 @@ struct Primaries {
     double redX, redY;     ///< Chromaticity of red.
     double greenX, greenY; ///< Chromaticity of green.
     double blueX, blueY;   ///< Chromaticity of blue.
+
+    /// @brief Compares the chromaticities by value.
+    bool operator==(const Primaries&) const = default;
 };
 
 /// D65 white point, shared by every space arraw names, so none needs chromatic adaptation.

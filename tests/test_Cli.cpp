@@ -1556,6 +1556,14 @@ std::filesystem::path copyRaw(const test::TempDir& directory, const std::string&
     return path;
 }
 
+/// @brief Gives the settings a photograph opens with when it has no sidecar.
+///
+/// What a sidecar must start from to say the same as the flags do: a RAW opens with colour noise
+/// reduction on, which `DevelopSettings{}` does not have.
+DevelopSettings photoDefaults(const std::filesystem::path& photo) {
+    return openPhoto(photo).state().settings;
+}
+
 /// @brief Writes a sidecar holding @p settings beside a photograph.
 void sidecarWith(const std::filesystem::path& photo, const DevelopSettings& settings) {
     writeSidecar(openPhoto(photo).with(DevelopState{settings}));
@@ -1581,8 +1589,9 @@ QImage exportedPng(const std::filesystem::path& input, std::vector<std::string> 
 }
 
 /// @brief Settings that change every part of the picture the flags below can name.
-DevelopSettings editedSettings() {
-    DevelopSettings settings;
+/// @param photo Photograph they are for, which they start from the defaults of.
+DevelopSettings editedSettings(const std::filesystem::path& photo) {
+    DevelopSettings settings = photoDefaults(photo);
     settings.tone.exposure = 0.5F;
     settings.tone.shadows = 30.0F;
     settings.color.whiteBalance = WhiteBalanceMode::Custom;
@@ -1608,7 +1617,7 @@ std::vector<std::string> withNoSidecar(std::vector<std::string> flags) {
 TEST_CASE("An export renders through the photograph's own sidecar", "[cli][sidecar]") {
     const test::TempDir directory;
     const auto raw = copyRaw(directory, "frame.dng");
-    sidecarWith(raw, editedSettings());
+    sidecarWith(raw, editedSettings(raw));
 
     const QImage fromSidecar = exportedPng(raw, {});
     const QImage fromFlags = exportedPng(raw, withNoSidecar(editedFlags));
@@ -1623,7 +1632,7 @@ TEST_CASE("The --no-sidecar flag ignores the sidecar and equals a file without o
           "[cli][sidecar]") {
     const test::TempDir directory;
     const auto edited = copyRaw(directory, "edited.dng");
-    sidecarWith(edited, editedSettings());
+    sidecarWith(edited, editedSettings(edited));
     const auto bare = copyRaw(directory, "bare.dng");
 
     const QImage ignored = exportedPng(edited, {"--no-sidecar", "--contrast", "20"});
@@ -1634,7 +1643,7 @@ TEST_CASE("The --no-sidecar flag ignores the sidecar and equals a file without o
 TEST_CASE("A flag overrides its own key and keeps the rest of the sidecar", "[cli][sidecar]") {
     const test::TempDir directory;
     const auto raw = copyRaw(directory, "frame.dng");
-    DevelopSettings settings;
+    DevelopSettings settings = photoDefaults(raw);
     settings.tone.exposure = 1.0F;
     settings.tone.contrast = 20.0F;
     sidecarWith(raw, settings);
@@ -1649,7 +1658,7 @@ TEST_CASE("Flips and geometry keys the flags do not name stay as the sidecar has
           "[cli][sidecar]") {
     const test::TempDir directory;
     const auto raw = copyRaw(directory, "frame.dng");
-    DevelopSettings settings;
+    DevelopSettings settings = photoDefaults(raw);
     settings.geometry.flipHorizontal = true;
     settings.geometry.crop.rectangle = UprightCropRect{0.1, 0.1, 0.5, 0.9};
     sidecarWith(raw, settings);
@@ -1666,7 +1675,7 @@ TEST_CASE("Flips and geometry keys the flags do not name stay as the sidecar has
 TEST_CASE("A --crop on a sidecar with an aspect leaves the aspect free", "[cli][sidecar]") {
     const test::TempDir directory;
     const auto raw = copyRaw(directory, "frame.dng");
-    DevelopSettings settings;
+    DevelopSettings settings = photoDefaults(raw);
     settings.geometry.crop.aspect = CropRatio{1.0};
     sidecarWith(raw, settings);
 
@@ -1681,7 +1690,7 @@ TEST_CASE("A --crop on a sidecar with an aspect leaves the aspect free", "[cli][
 TEST_CASE("The --crop and --crop-aspect flags together are taken as given", "[cli][sidecar]") {
     const test::TempDir directory;
     const auto raw = copyRaw(directory, "frame.dng");
-    DevelopSettings settings;
+    DevelopSettings settings = photoDefaults(raw);
     settings.geometry.crop.aspect = CropRatio{1.0};
     sidecarWith(raw, settings);
 
@@ -1695,7 +1704,7 @@ TEST_CASE("A --rotate that turns the frame carries a sidecar's crop with the con
           "[cli][sidecar]") {
     const test::TempDir directory;
     const auto raw = copyRaw(directory, "frame.dng");
-    DevelopSettings settings;
+    DevelopSettings settings = photoDefaults(raw);
     /// Square on the 4:3 image; the ratio stays square once the image is a quarter-turn.
     settings.geometry.crop.rectangle = UprightCropRect{0.2, 0.1, 0.8, 0.9};
     settings.geometry.crop.aspect = CropRatio{1.0};
@@ -1715,7 +1724,7 @@ TEST_CASE("A flip flag mirrors a sidecar's crop, and --no-flip undoes a sidecar'
           "[cli][sidecar]") {
     const test::TempDir directory;
     const auto raw = copyRaw(directory, "frame.dng");
-    DevelopSettings plain;
+    DevelopSettings plain = photoDefaults(raw);
     plain.geometry.crop.rectangle = UprightCropRect{0.0, 0.1, 0.5, 0.6};
     DevelopSettings flipped = plain;
     flipped.geometry.flipHorizontal = true;
@@ -1750,7 +1759,7 @@ TEST_CASE("The --rotate flag replaces both the quarter-turn and the straighten o
           "[cli][sidecar]") {
     const test::TempDir directory;
     const auto raw = copyRaw(directory, "frame.dng");
-    DevelopSettings settings;
+    DevelopSettings settings = photoDefaults(raw);
     settings.geometry.rotation = QuarterTurn::Clockwise180;
     settings.geometry.straighten = 3.0;
     sidecarWith(raw, settings);
@@ -1762,7 +1771,7 @@ TEST_CASE("The --rotate flag replaces both the quarter-turn and the straighten o
 TEST_CASE("A --tint alone keeps the temperature of a Custom sidecar", "[cli][sidecar]") {
     const test::TempDir directory;
     const auto raw = copyRaw(directory, "frame.dng");
-    DevelopSettings settings;
+    DevelopSettings settings = photoDefaults(raw);
     settings.color.whiteBalance = WhiteBalanceMode::Custom;
     settings.color.temperature = 4200.0F;
     sidecarWith(raw, settings);
@@ -1778,7 +1787,7 @@ TEST_CASE(
     "[cli][sidecar]") {
     const test::TempDir directory;
     const auto raw = copyRaw(directory, "frame.dng");
-    DevelopSettings settings;
+    DevelopSettings settings = photoDefaults(raw);
     /// As shot, but with a temperature a Custom photograph would have used.
     settings.color.temperature = 3000.0F;
     sidecarWith(raw, settings);
@@ -1790,7 +1799,7 @@ TEST_CASE(
 TEST_CASE("The --white-balance as-shot flag overrides a Custom sidecar", "[cli][sidecar]") {
     const test::TempDir directory;
     const auto raw = copyRaw(directory, "frame.dng");
-    DevelopSettings settings;
+    DevelopSettings settings = photoDefaults(raw);
     settings.color.whiteBalance = WhiteBalanceMode::Custom;
     settings.color.temperature = 4200.0F;
     settings.color.tint = 10.0F;
@@ -1807,7 +1816,7 @@ TEST_CASE("A temperature on a non-RAW still fails that file with a sidecar prese
     const test::TempDir directory;
     const auto png = directory.file("card.png");
     std::filesystem::copy_file(test::fixture(card), png);
-    sidecarWith(png, {});
+    sidecarWith(png, photoDefaults(png));
 
     int code = 0;
     std::string err;
@@ -1900,9 +1909,9 @@ TEST_CASE("A batch renders each file through its own sidecar", "[cli][sidecar]")
     const test::TempDir directory;
     const auto first = copyRaw(directory, "first.dng");
     const auto second = copyRaw(directory, "second.dng");
-    DevelopSettings brighter;
+    DevelopSettings brighter = photoDefaults(first);
     brighter.tone.exposure = 1.0F;
-    DevelopSettings darker;
+    DevelopSettings darker = photoDefaults(second);
     darker.tone.exposure = -1.0F;
     sidecarWith(first, brighter);
     sidecarWith(second, darker);
@@ -1925,7 +1934,7 @@ TEST_CASE("A batch renders each file through its own sidecar", "[cli][sidecar]")
 TEST_CASE("The command line never writes or changes a sidecar", "[cli][sidecar]") {
     const test::TempDir directory;
     const auto edited = copyRaw(directory, "edited.dng");
-    sidecarWith(edited, editedSettings());
+    sidecarWith(edited, editedSettings(edited));
     const auto bare = copyRaw(directory, "bare.dng");
     const auto slurp = [](const std::filesystem::path& path) {
         std::ifstream stream(path, std::ios::binary);
@@ -2137,28 +2146,6 @@ TEST_CASE("The noise reduction flags set their fields, and the filter is a name"
     }
 }
 
-/// @brief Tells whether two 8-bit images are the same picture, give or take one code per channel.
-///
-/// The flags and a sidecar reach the same settings by different routes, which can leave a float
-/// differing in its last bits. The exact output conversion (ADR 057) keeps that difference, where
-/// Qt's coarse one hid it, so a pixel on a rounding edge differs by one code.
-bool samePictureWithinOneCode(const QImage& a, const QImage& b) {
-    if (a.size() != b.size() || a.format() != b.format()) {
-        return false;
-    }
-    for (int y = 0; y < a.height(); ++y) {
-        for (int x = 0; x < a.width(); ++x) {
-            const QRgb p = a.pixel(x, y);
-            const QRgb q = b.pixel(x, y);
-            if (std::abs(qRed(p) - qRed(q)) > 1 || std::abs(qGreen(p) - qGreen(q)) > 1 ||
-                std::abs(qBlue(p) - qBlue(q)) > 1 || qAlpha(p) != qAlpha(q)) {
-                return false;
-            }
-        }
-    }
-    return true;
-}
-
 TEST_CASE("Grain the photograph has keeps its pattern, and only the flags turning it on reseed",
           "[cli][sidecar][grain]") {
     // Enlarged and coarse, so the grain shows in an 8-bit PNG.
@@ -2183,15 +2170,14 @@ TEST_CASE("Grain the photograph has keeps its pattern, and only the flags turnin
     }
     SECTION("a sidecar with grain and seed 0 is the fixed pattern, every time") {
         const auto grainy = copyRaw(directory, "grainy.dng");
-        DevelopSettings settings;
+        DevelopSettings settings = photoDefaults(grainy);
         settings.effects.grain = {.amount = 80.0F};
         sidecarWith(grainy, settings);
-        REQUIRE(samePictureWithinOneCode(exportedPng(grainy, with({})), fixed));
-        REQUIRE(samePictureWithinOneCode(exportedPng(grainy, with({})), fixed));
+        REQUIRE(exportedPng(grainy, with({})) == fixed);
+        REQUIRE(exportedPng(grainy, with({})) == fixed);
         // Changing its amount does not turn it on, so it keeps the pattern.
-        REQUIRE(samePictureWithinOneCode(
-            exportedPng(grainy, with({"--grain-amount", "40"})),
-            exportedPng(bare, with({"--grain-amount", "40", "--grain-seed", "0"}))));
+        REQUIRE(exportedPng(grainy, with({"--grain-amount", "40"})) ==
+                exportedPng(bare, with({"--grain-amount", "40", "--grain-seed", "0"})));
     }
     SECTION("grain the flags turn on gets a random pattern per export") {
         const QImage first = exportedPng(bare, with({"--grain-amount", "80"}));
@@ -2200,10 +2186,9 @@ TEST_CASE("Grain the photograph has keeps its pattern, and only the flags turnin
         REQUIRE(first != second);
         // Even when the sidecar's grain is off with seed 0, and it is named explicitly then.
         const auto off = copyRaw(directory, "off.dng");
-        sidecarWith(off, DevelopSettings{});
+        sidecarWith(off, photoDefaults(off));
         REQUIRE(exportedPng(off, with({"--grain-amount", "80"})) != fixed);
-        REQUIRE(samePictureWithinOneCode(
-            exportedPng(off, with({"--grain-amount", "80", "--grain-seed", "0"})), fixed));
+        REQUIRE(exportedPng(off, with({"--grain-amount", "80", "--grain-seed", "0"})) == fixed);
     }
 }
 
@@ -2416,7 +2401,7 @@ TEST_CASE("A --crop-aspect on a sidecar with a rectangle fits the largest crop o
           "[cli][sidecar]") {
     const test::TempDir directory;
     const auto raw = copyRaw(directory, "frame.dng");
-    DevelopSettings settings;
+    DevelopSettings settings = photoDefaults(raw);
     settings.geometry.crop.rectangle = UprightCropRect{0.2, 0.1, 0.8, 0.9};
     settings.geometry.crop.aspect = CropRatio{1.0};
     sidecarWith(raw, settings);

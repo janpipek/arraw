@@ -236,16 +236,15 @@ TEST_CASE("Export with lens corrections runs on the GPU, within rounding of the 
                     test::illConditionedRelativeTolerance);
                 CAPTURE(difference.worstCodes, difference.worstExcess);
                 REQUIRE(difference.worstExcess <= 1.0);
-                // And the correction is in the picture. This fixture's chromatic aberration is
-                // under one 8-bit code everywhere; the exact output conversion (ADR 057) no longer
-                // turns it into a difference there, as Qt's coarse one did by accident.
-                if (bitDepth == 8 && std::string_view(corrections) == "ca") {
-                    continue;
+                // And the correction is in the picture, which only 16 bits show for every
+                // correction: this fixture's chromatic aberration is under one 8-bit code
+                // everywhere. The 8-bit sections above are the parity check.
+                if (bitDepth == 16) {
+                    const Exported plain =
+                        exportWith("gpu", raw.string(), bitDepth, {"--lens-corrections", "none"});
+                    REQUIRE(plain.code == cli::Success);
+                    REQUIRE(plain.image != gpu.image);
                 }
-                const Exported plain =
-                    exportWith("gpu", raw.string(), bitDepth, {"--lens-corrections", "none"});
-                REQUIRE(plain.code == cli::Success);
-                REQUIRE(plain.image != gpu.image);
             }
         }
     }

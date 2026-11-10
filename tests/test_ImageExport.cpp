@@ -417,6 +417,29 @@ TEST_CASE("Sharpening leaves a flat image unchanged", "[ImageExport][sharpen]") 
     }
 }
 
+TEST_CASE("A sharpened export of a flat picture is the unsharpened file, code for code",
+          "[ImageExport][sharpen]") {
+    // Both paths round with the one quantiser (ADR 057), so a sharpening that changes nothing
+    // changes no code, at either depth and with partial alpha.
+    const test::TempDir directory;
+    ImageBuffer flat({9, 5}, PixelFormat::RgbaF32, workingEncoding);
+    const float alpha = GENERATE(1.0F, 0.5F);
+    const int depth = GENERATE(8, 16);
+    const auto samples = flat.samples<float>();
+    for (std::size_t i = 0; i < samples.size(); i += 4) {
+        samples[i] = 0.18F;
+        samples[i + 1] = 0.036F;
+        samples[i + 2] = 0.7F;
+        samples[i + 3] = alpha;
+    }
+    const auto plain = directory.file("plain.png");
+    const auto sharp = directory.file("sharp.png");
+    exportImage(flat, plain, {.bitDepth = depth});
+    exportImage(flat, sharp, {.bitDepth = depth, .sharpening = 100});
+
+    REQUIRE(QImage(QFile(sharp).fileName()) == QImage(QFile(plain).fileName()));
+}
+
 TEST_CASE("Sharpening overshoots both sides of an edge, more with more amount",
           "[ImageExport][sharpen]") {
     const test::TempDir directory;

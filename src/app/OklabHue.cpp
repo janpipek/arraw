@@ -3,6 +3,7 @@
 #include "ColorAdjustments.h"
 #include "ColorGrading.h"
 #include "ColorSpaces.h"
+#include "TransferFunctions.h"
 
 #include <ColorGradingSettings.h>
 
@@ -15,8 +16,7 @@ namespace {
 
 /// @brief Encodes a linear sRGB channel with the sRGB transfer function, held to 0 to 1.
 double encodedSrgb(float linear) {
-    const double value = std::clamp(static_cast<double>(linear), 0.0, 1.0);
-    return value <= 0.0031308 ? 12.92 * value : 1.055 * std::pow(value, 1.0 / 2.4) - 0.055;
+    return transfer::encodeSrgb(std::clamp(static_cast<double>(linear), 0.0, 1.0));
 }
 
 /// @brief Checks that a linear sRGB colour is inside the gamut, within rounding.

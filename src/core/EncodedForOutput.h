@@ -24,4 +24,17 @@ namespace arraw {
 [[nodiscard]] QImage encodedForOutput(const ImageBuffer& image, NamedEncoding encoding,
                                       QImage::Format format);
 
+/// @brief Rounds a float image that is already in its output encoding to a layout.
+///
+/// The final step of ::arraw::encodedForOutput on its own, for an image that was changed in float
+/// after it, such as a sharpened one: the same clamp, the same rounding and the same alpha as it
+/// gives, so that no value of an output comes from Qt (ADR 057). The colour space is kept.
+/// @param floats Straight-alpha `Format_RGBA32FPx4` image in the encoding the result is to have.
+/// @param format QImage layout of the result: RGB888, RGBA8888, RGBX64, RGBA64 or RGBA32FPx4.
+/// @return The image in @p format.
+/// @throws std::invalid_argument if @p floats is not `Format_RGBA32FPx4` or @p format is not one
+/// of those above.
+/// @throws std::runtime_error if the result cannot be allocated.
+[[nodiscard]] QImage quantisedForOutput(const QImage& floats, QImage::Format format);
+
 } // namespace arraw

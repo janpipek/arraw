@@ -250,7 +250,8 @@ source, which `resample` consumes.
 - **Not threaded: Qt's colour conversion on export.** An export of 24 MP from
   floats spent 0.9 to 1.2 s in it. Banding it was tried first and did not
   help, as Qt already runs it on several threads of its own: a profiled run
-  took 12.6 s of CPU in 3.7 s of wall time. The conversion was left to Qt then; ADR 057 replaced it with a banded conversion of our own.
+  took 12.6 s of CPU in 3.7 s of wall time. The conversion was left to Qt then;
+  ADR 057 replaced it with a banded conversion of our own.
 
 ## What was rejected, and why
 

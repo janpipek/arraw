@@ -1,8 +1,9 @@
 #include "ColorSpaces.h"
 #include "EncodedForOutput.h"
+#include "ProcessingPlan.h"
+#include "TransferFunctions.h"
 #include "support/RowBandLimit.h"
 
-#include <Diagnostics.h>
 #include <ImageBuffer.h>
 
 #include <QColorSpace>
@@ -18,6 +19,8 @@
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
+#include <thread>
+#include <utility>
 #include <vector>
 
 using namespace arraw;
@@ -55,22 +58,24 @@ double refEncodeSrgb(double v) {
     return v <= 0.0031308 ? 12.92 * v : 1.055 * std::pow(v, 1.0 / 2.4) - 0.055;
 }
 
+/// @brief Adobe RGB (1998) encoding, written here independently of the library's.
 double refEncodeAdobe(double v) {
     return std::pow(v, 256.0 / 563.0);
 }
 
-/// @brief Linear Rec.2020 to linear target, by solving for the primaries in the test's own way.
-///
-/// Primaries and white as chromaticities; RGB-to-XYZ found by Cramer's rule on the white point,
-/// not by the library's inverse.
+/// @brief 3x3 matrix, row by row, for the test's own colour maths.
 using Mat = std::array<std::array<double, 3>, 3>;
 
+/// @brief Gives the determinant of a matrix.
 double det(const Mat& m) {
     return m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) -
            m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) +
            m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
 }
 
+/// @brief Gives the RGB-to-XYZ matrix of primaries and the D65 white, by Cramer's rule.
+///
+/// Primaries and white as chromaticities, solved here and not by the library's inverse.
 Mat rgbToXyz(std::array<std::array<double, 2>, 3> xy) {
     Mat cols{};
     for (int i = 0; i < 3; ++i) {
@@ -97,6 +102,7 @@ Mat rgbToXyz(std::array<std::array<double, 2>, 3> xy) {
     return result;
 }
 
+/// @brief Gives the inverse of a matrix, by cofactors.
 Mat inverse(const Mat& m) {
     const double d = det(m);
     Mat r{};
@@ -109,14 +115,18 @@ Mat inverse(const Mat& m) {
     return r;
 }
 
+/// @brief Gives the RGB-to-XYZ matrix of Rec.2020.
 Mat rec2020ToXyz() {
     return rgbToXyz({{{0.708, 0.292}, {0.170, 0.797}, {0.131, 0.046}}});
 }
 
-/// @brief Linear Rec.2020 into a target's linear primaries.
-std::array<double, 3> toPrimaries(const Mat& targetToXyz, std::array<double, 3> rgb) {
+/// @brief Gives a linear colour of one set of primaries in another's.
+/// @param sourceToXyz RGB-to-XYZ matrix of the colour's own primaries.
+/// @param targetToXyz RGB-to-XYZ matrix of the primaries it is wanted in.
+std::array<double, 3> toPrimaries(const Mat& sourceToXyz, const Mat& targetToXyz,
+                                  std::array<double, 3> rgb) {
     const Mat to = inverse(targetToXyz);
-    const Mat from = rec2020ToXyz();
+    const Mat& from = sourceToXyz;
     std::array<double, 3> xyz{};
     std::array<double, 3> out{};
     for (int r = 0; r < 3; ++r) {
@@ -205,8 +215,8 @@ TEST_CASE("Linear Rec.2020 converts to each output encoding exactly, primaries i
     for (const auto& target : targets) {
         const QImage out = encodedForOutput(image, target.encoding, QImage::Format_RGBA64);
         for (std::size_t i = 0; i < pixels.size(); ++i) {
-            const auto linear =
-                toPrimaries(target.toXyz, {pixels[i][0], pixels[i][1], pixels[i][2]});
+            const auto linear = toPrimaries(rec2020ToXyz(), target.toXyz,
+                                            {pixels[i][0], pixels[i][1], pixels[i][2]});
             const auto p = codes16(out, static_cast<int>(i));
             for (std::size_t c = 0; c < 3; ++c) {
                 const double clamped = std::clamp(linear[c], 0.0, 1.0);
@@ -360,6 +370,162 @@ TEST_CASE("The result carries the target's colour space", "[EncodedForOutput]") 
             QColorSpace(QColorSpace::SRgb));
 }
 
+TEST_CASE("A non-linear source changes primaries over many pixels", "[EncodedForOutput]") {
+    // Adobe RGB codes to sRGB: the source curve, the primaries and the target curve all act.
+    constexpr std::uint32_t count = 3000;
+    ImageBuffer image({count, 1}, PixelFormat::RgbaU16, NamedEncoding::AdobeRgb);
+    std::vector<std::uint16_t> codes(count * 4);
+    std::uint32_t state = 777;
+    for (auto& code : codes) {
+        state = state * 1664525U + 1013904223U;
+        code = static_cast<std::uint16_t>(state >> 16);
+    }
+    std::memcpy(image.bytes().data(), codes.data(), codes.size() * sizeof(std::uint16_t));
+    const Mat adobe = rgbToXyz({{{0.64, 0.33}, {0.21, 0.71}, {0.15, 0.06}}});
+    const Mat srgb = rgbToXyz({{{0.64, 0.33}, {0.30, 0.60}, {0.15, 0.06}}});
+
+    const QImage out = encodedForOutput(image, NamedEncoding::Srgb, QImage::Format_RGBA64);
+
+    for (std::uint32_t i = 0; i < count; ++i) {
+        std::array<double, 3> linear{};
+        for (std::size_t c = 0; c < 3; ++c) {
+            linear[c] = std::pow(codes[i * 4 + c] / 65535.0, 563.0 / 256.0);
+        }
+        const auto converted = toPrimaries(adobe, srgb, linear);
+        for (std::size_t c = 0; c < 3; ++c) {
+            const double expected =
+                std::floor(65535.0 * refEncodeSrgb(std::clamp(converted[c], 0.0, 1.0)) + 0.5);
+            REQUIRE(static_cast<double>(codes16(out, static_cast<int>(i))[c]) == expected);
+        }
+    }
+}
+
+TEST_CASE("The gamma and linear Rec.2020 encodings are integer targets", "[EncodedForOutput]") {
+    const auto pixels = colours(500);
+    const auto image = floatImage(pixels, NamedEncoding::LinearRec2020);
+    const QImage gamma =
+        encodedForOutput(image, NamedEncoding::Rec2020Gamma22, QImage::Format_RGBA64);
+    const QImage linear =
+        encodedForOutput(image, NamedEncoding::LinearRec2020, QImage::Format_RGBA64);
+    for (std::size_t i = 0; i < pixels.size(); ++i) {
+        for (std::size_t c = 0; c < 3; ++c) {
+            const double v = std::clamp(static_cast<double>(pixels[i][c]), 0.0, 1.0);
+            REQUIRE(codes16(gamma, static_cast<int>(i))[c] ==
+                    std::floor(65535.0 * std::pow(v, 1.0 / 2.2) + 0.5));
+            REQUIRE(codes16(linear, static_cast<int>(i))[c] == std::floor(65535.0 * v + 0.5));
+        }
+    }
+}
+
+TEST_CASE("RGB888 rows of an odd width and a padded stride convert pixel by pixel",
+          "[EncodedForOutput]") {
+    // 5 pixels of 3 bytes is 15 per row, which QImage pads to 16; the source rows have their own
+    // stride. A wrong stride on either side shifts every row after the first.
+    constexpr std::uint32_t width = 5;
+    constexpr std::uint32_t height = 3;
+    SECTION("float source") {
+        ImageBuffer image({width, height}, PixelFormat::RgbaF32, NamedEncoding::LinearRec2020);
+        std::vector<Rgba> pixels;
+        for (std::uint32_t i = 0; i < width * height; ++i) {
+            const float v = static_cast<float>(i + 1) / 16.0F;
+            pixels.push_back({v, v, v, 1.0F});
+        }
+        std::memcpy(image.bytes().data(), pixels.data(), pixels.size() * sizeof(Rgba));
+        const QImage out = encodedForOutput(image, NamedEncoding::Srgb, QImage::Format_RGB888);
+        REQUIRE(out.size() == QSize(width, height));
+        for (int y = 0; y < static_cast<int>(height); ++y) {
+            for (int x = 0; x < static_cast<int>(width); ++x) {
+                const double v = pixels[static_cast<std::size_t>(y) * width + x][0];
+                const auto expected = static_cast<int>(std::floor(255.0 * refEncodeSrgb(v) + 0.5));
+                for (int c = 0; c < 3; ++c) {
+                    REQUIRE(out.constScanLine(y)[3 * x + c] == expected);
+                }
+            }
+        }
+    }
+    SECTION("8-bit RGB source, same encoding") {
+        ImageBuffer image({width, height}, PixelFormat::RgbU8, NamedEncoding::Srgb);
+        auto samples = image.samples<std::uint8_t>();
+        for (std::size_t i = 0; i < samples.size(); ++i) {
+            samples[i] = static_cast<std::uint8_t>(i * 5 + 3);
+        }
+        const QImage out = encodedForOutput(image, NamedEncoding::Srgb, QImage::Format_RGB888);
+        for (int y = 0; y < static_cast<int>(height); ++y) {
+            for (int x = 0; x < static_cast<int>(width); ++x) {
+                for (int c = 0; c < 3; ++c) {
+                    REQUIRE(out.constScanLine(y)[3 * x + c] ==
+                            samples[(static_cast<std::size_t>(y) * width + x) * 3 + c]);
+                }
+            }
+        }
+    }
+}
+
+TEST_CASE("Quantising a float image in its output encoding rounds it once", "[EncodedForOutput]") {
+    constexpr int count = 400;
+    std::vector<Rgba> pixels;
+    for (int i = 0; i < count; ++i) {
+        // From below zero to above one, so that the clamp is exercised on both sides.
+        const float v = -0.1F + 1.2F * static_cast<float>(i) / (count - 1);
+        pixels.push_back({v, 1.0F - v, v * 0.5F, std::clamp(v, 0.0F, 1.0F)});
+    }
+    pixels.push_back({std::nanf(""), 0.5F, 0.5F, 1.0F});
+    QImage floatsImage(static_cast<int>(pixels.size()), 1, QImage::Format_RGBA32FPx4);
+    floatsImage.setColorSpace(QColorSpace(QColorSpace::DisplayP3));
+    std::memcpy(floatsImage.bits(), pixels.data(), pixels.size() * sizeof(Rgba));
+
+    const QImage i16 = quantisedForOutput(floatsImage, QImage::Format_RGBA64);
+    const QImage x64 = quantisedForOutput(floatsImage, QImage::Format_RGBX64);
+    const QImage i8 = quantisedForOutput(floatsImage, QImage::Format_RGBA8888);
+    const QImage rgb = quantisedForOutput(floatsImage, QImage::Format_RGB888);
+    const QImage same = quantisedForOutput(floatsImage, QImage::Format_RGBA32FPx4);
+    REQUIRE(i16.colorSpace() == QColorSpace(QColorSpace::DisplayP3));
+    for (std::size_t i = 0; i < pixels.size(); ++i) {
+        const int x = static_cast<int>(i);
+        for (std::size_t c = 0; c < 4; ++c) {
+            // Not-a-number is zero in an integer layout.
+            const double v =
+                std::isnan(pixels[i][c]) ? 0.0 : std::clamp<double>(pixels[i][c], 0.0, 1.0);
+            REQUIRE(codes16(i16, x)[c] == std::floor(65535.0 * v + 0.5));
+            REQUIRE(i8.constScanLine(0)[4 * x + static_cast<int>(c)] ==
+                    std::floor(255.0 * v + 0.5));
+            if (c < 3) {
+                REQUIRE(codes16(x64, x)[c] == codes16(i16, x)[c]);
+                REQUIRE(rgb.constScanLine(0)[3 * x + static_cast<int>(c)] ==
+                        i8.constScanLine(0)[4 * x + static_cast<int>(c)]);
+            }
+        }
+        REQUIRE(codes16(x64, x)[3] == 65535);
+        if (!std::isnan(pixels[i][0])) {
+            REQUIRE(floats(same, x)[0] == pixels[i][0]);
+        }
+    }
+    QImage notFloat(1, 1, QImage::Format_RGBA64);
+    REQUIRE_THROWS_AS(quantisedForOutput(notFloat, QImage::Format_RGBA8888), std::invalid_argument);
+    REQUIRE_THROWS_AS(quantisedForOutput(floatsImage, QImage::Format_ARGB32),
+                      std::invalid_argument);
+}
+
+TEST_CASE("The float perceptual curve is the double one", "[EncodedForOutput]") {
+    // Two precisions of the one curve: the exponent comes from transfer::perceptualGamma.
+    for (int i = 0; i <= 1000; ++i) {
+        const float v = static_cast<float>(i) / 1000.0F;
+        REQUIRE(toPerceptualSigned(v) == Approx(transfer::encodeGamma22(v)).epsilon(1e-6));
+        REQUIRE(fromPerceptualSigned(v) == Approx(transfer::decodeGamma22(v)).epsilon(1e-6));
+        REQUIRE(toPerceptualSigned(-v) == Approx(transfer::encodeGamma22(-v)).epsilon(1e-6));
+    }
+}
+
+TEST_CASE("The luma weights of the output histogram follow the Rec.709 primaries",
+          "[EncodedForOutput]") {
+    // The published Rec.709 luma weights, which the derivation from the chromaticities meets to
+    // within the rounding of the standard's own matrix.
+    const auto y = colorspaces::rgbToXyz(colorspaces::primariesOf(NamedEncoding::Srgb));
+    REQUIRE(y[3] == Approx(0.2126).margin(1e-4));
+    REQUIRE(y[4] == Approx(0.7152).margin(1e-4));
+    REQUIRE(y[5] == Approx(0.0722).margin(1e-4));
+}
+
 TEST_CASE("Unsupported inputs are refused", "[EncodedForOutput]") {
     const auto image = floatImage({{0.2F, 0.2F, 0.2F, 1.0F}}, NamedEncoding::LinearRec2020);
     REQUIRE_THROWS_AS(encodedForOutput(image, NamedEncoding::Srgb, QImage::Format_ARGB32),
@@ -402,5 +568,67 @@ TEST_CASE("Measure converting 24 MP float to 16-bit sRGB", "[.bench][encoded-ben
         const std::chrono::duration<double> took = std::chrono::steady_clock::now() - start;
         std::printf("encodedForOutput 24 MP RgbaF32 -> RGBA64 sRGB: %.3f s\n", took.count());
         REQUIRE(!out.isNull());
+    }
+}
+
+TEST_CASE("Measure the display conversion at window sizes, against Qt's",
+          "[.bench][display-bench]") {
+    // What a preview frame pays: working-encoding floats to 8-bit sRGB (ADR 057).
+    const auto time = [](auto&& convert) {
+        double best = 1e9;
+        for (int run = 0; run < 5; ++run) {
+            const auto start = std::chrono::steady_clock::now();
+            const QImage out = convert();
+            const std::chrono::duration<double, std::milli> took =
+                std::chrono::steady_clock::now() - start;
+            REQUIRE(!out.isNull());
+            best = std::min(best, took.count());
+        }
+        return best;
+    };
+    for (const auto [width, height] : {std::pair{1920U, 1080U}, std::pair{2560U, 1440U},
+                                       std::pair{3840U, 2160U}, std::pair{5120U, 2880U}}) {
+        ImageBuffer image({width, height}, PixelFormat::RgbaF32, NamedEncoding::LinearRec2020);
+        const auto row = colours(static_cast<int>(width));
+        for (std::uint32_t y = 0; y < height; ++y) {
+            std::memcpy(image.bytes().data() + static_cast<std::size_t>(y) * image.rowStride(),
+                        row.data(), row.size() * sizeof(Rgba));
+        }
+        QImage view(reinterpret_cast<const uchar*>(image.bytes().data()), static_cast<int>(width),
+                    static_cast<int>(height), static_cast<qsizetype>(image.rowStride()),
+                    QImage::Format_RGBA32FPx4);
+        view.setColorSpace(
+            QColorSpace(QColorSpace::Primaries::Bt2020, QColorSpace::TransferFunction::Linear));
+        const double qt = time(
+            [&] { return view.convertedToColorSpace(QColorSpace::SRgb, QImage::Format_RGBA8888); });
+        const double ours = time(
+            [&] { return encodedForOutput(image, NamedEncoding::Srgb, QImage::Format_RGBA8888); });
+        std::printf("%ux%u RgbaF32 -> RGBA8888 sRGB: Qt %.1f ms, ours %.1f ms\n", width, height, qt,
+                    ours);
+    }
+}
+
+TEST_CASE("Measure concurrent display conversions", "[.bench][display-bench]") {
+    constexpr std::uint32_t width = 3840;
+    constexpr std::uint32_t height = 2160;
+    ImageBuffer image({width, height}, PixelFormat::RgbaF32, NamedEncoding::LinearRec2020);
+    const auto row = colours(width);
+    for (std::uint32_t y = 0; y < height; ++y) {
+        std::memcpy(image.bytes().data() + static_cast<std::size_t>(y) * image.rowStride(),
+                    row.data(), row.size() * sizeof(Rgba));
+    }
+    for (const int callers : {1, 2, 4}) {
+        const auto start = std::chrono::steady_clock::now();
+        {
+            std::vector<std::jthread> threads;
+            for (int i = 0; i < callers; ++i) {
+                threads.emplace_back([&] {
+                    (void)encodedForOutput(image, NamedEncoding::Srgb, QImage::Format_RGBA8888);
+                });
+            }
+        }
+        const std::chrono::duration<double, std::milli> took =
+            std::chrono::steady_clock::now() - start;
+        std::printf("%d concurrent 3840x2160 conversions: %.1f ms wall\n", callers, took.count());
     }
 }
