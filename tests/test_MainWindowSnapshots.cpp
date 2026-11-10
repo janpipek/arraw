@@ -20,18 +20,22 @@
 #include <QAbstractButton>
 #include <QAction>
 #include <QApplication>
+#include <QContextMenuEvent>
 #include <QCoreApplication>
 #include <QDockWidget>
 #include <QDoubleSpinBox>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QInputDialog>
 #include <QListView>
 #include <QLockFile>
+#include <QMap>
 #include <QMenu>
 #include <QMessageBox>
 #include <QMouseEvent>
 #include <QPushButton>
 #include <QSplitter>
+#include <QStringList>
 #include <QTest>
 #include <QTimer>
 #include <QTreeView>
@@ -117,6 +121,75 @@ std::function<void(QWidget*)> clicking(const QString& text) {
         FAIL("no button " << text.toStdString());
     };
 }
+
+/// Entry of a popup menu for a MenuProbe to trigger, by its text.
+struct Choice {
+    QString text;
+};
+
+/// Watcher of the next popup menu, which records its entries, acts on it and closes it.
+///
+/// A popup that never shows is no hang: after the deadline the probe closes any menu and leaves
+/// `shown` false, so the test fails on its `REQUIRE`.
+struct MenuProbe {
+    QTimer timer;
+    QElapsedTimer age;
+    bool shown = false;
+    bool chosen = false;
+    QStringList texts;
+    QMap<QString, bool> enabled;
+
+    explicit MenuProbe(std::function<void(QMenu&)> act = {}) {
+        start(std::move(act));
+    }
+
+    explicit MenuProbe(Choice choice) {
+        start([this, choice](QMenu& menu) {
+            for (QAction* entry : menu.actions()) {
+                if (entry->text().remove('&') == choice.text) {
+                    chosen = true;
+                    entry->trigger();
+                    return;
+                }
+            }
+        });
+    }
+
+private:
+    void start(std::function<void(QMenu&)> act) {
+        timer.setInterval(10);
+        age.start();
+        QObject::connect(&timer, &QTimer::timeout, [this, act = std::move(act)] {
+            auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+            if (menu == nullptr) {
+                if (age.hasExpired(5000)) {
+                    timer.stop();
+                    for (QWidget* top : QApplication::topLevelWidgets()) {
+                        if (qobject_cast<QMenu*>(top) != nullptr) {
+                            top->close();
+                        }
+                    }
+                }
+                return;
+            }
+            timer.stop();
+            shown = true;
+            for (QAction* entry : menu->actions()) {
+                if (entry->isSeparator()) {
+                    continue;
+                }
+                const QString text = entry->text().remove('&');
+                texts << text;
+                enabled[text] = entry->isEnabled();
+            }
+            if (act) {
+                act(*menu);
+            }
+            menu->close();
+        });
+        timer.start();
+    }
+};
 
 /// A window over one photograph.
 struct Window {
@@ -255,6 +328,29 @@ struct Window {
             QTest::qWaitFor([&] { return disk().snapshots.entries.size() == before + 1; }, 10000));
         REQUIRE(QTest::qWaitFor([&] { return rowNamed(name).isValid(); }, 10000));
         activate();
+    }
+
+    /// Opens the context menu at a row (as a right-click does) and blocks until it closes.
+    void contextMenuAt(const QString& name) const {
+        const QPoint where = tree().visualRect(rowNamed(name)).center();
+        QContextMenuEvent event(QContextMenuEvent::Mouse, where,
+                                tree().viewport()->mapToGlobal(where));
+        QCoreApplication::sendEvent(tree().viewport(), &event);
+    }
+
+    /// Opens the context menu on the empty space under the rows.
+    void contextMenuOnEmptySpace() const {
+        const QPoint where(tree().viewport()->width() / 2, tree().viewport()->height() - 3);
+        REQUIRE_FALSE(tree().indexAt(where).isValid());
+        QContextMenuEvent event(QContextMenuEvent::Mouse, where,
+                                tree().viewport()->mapToGlobal(where));
+        QCoreApplication::sendEvent(tree().viewport(), &event);
+    }
+
+    /// Opens the context menu as the menu key does.
+    void contextMenuFromKeyboard() const {
+        QContextMenuEvent event(QContextMenuEvent::Keyboard, QPoint(), QPoint());
+        QCoreApplication::sendEvent(&tree(), &event);
     }
 
     [[nodiscard]] bool waitForThumbnails() const {
@@ -673,6 +769,327 @@ TEST_CASE("Unreadable snapshot entries are shown and removed after a confirmatio
         CHECK(w.disk().snapshots.entries.size() == 1);
         CHECK(w.model().rowCount() == 1);
         CHECK_FALSE(w.action("discardUnreadableAction").isEnabled());
+    }
+}
+
+TEST_CASE("The snapshot tree's context menu offers the actions that fit the click",
+          "[app][window][snapshots]") {
+    Window w([](const fs::path& photo) {
+        seed(photo, 0, "One", 1.0F);
+        seed(photo, 1, "Two", 2.0F);
+    });
+    REQUIRE(QTest::qWaitFor([&] { return w.model().rowCount() == 2; }, 10000));
+    CHECK(w.tree().contextMenuPolicy() == Qt::CustomContextMenu);
+    const int steps = w.steps();
+    const bool modified = w.window.isWindowModified();
+    auto onRow = [](const QString& name) {
+        return QStringList{"Restore “" + name + "”", "Rename Snapshot…", "Delete Snapshot…",
+                           "New Snapshot…"};
+    };
+
+    SECTION("a row offers all four, and opening the menu changes nothing") {
+        MenuProbe probe;
+        w.contextMenuAt("One");
+        REQUIRE(probe.shown);
+        CHECK(probe.texts == onRow("One"));
+        for (const QString& text : onRow("One")) {
+            CHECK(probe.enabled[text]);
+        }
+        CHECK_FALSE(w.previewing());
+        CHECK_FALSE(w.tree().selectionModel()->hasSelection());
+        CHECK(w.steps() == steps);
+        CHECK(w.window.isWindowModified() == modified);
+        // The actions are back to what the (empty) selection says.
+        CHECK_FALSE(w.action("restoreSnapshotAction").isEnabled());
+        CHECK_FALSE(w.action("renameSnapshotAction").isEnabled());
+        CHECK(w.action("createSnapshotAction").isEnabled());
+        CHECK(w.action("restoreSnapshotAction").text().remove('&') == "Restore Snapshot");
+    }
+    SECTION("the menu entries are the window's own actions") {
+        MenuProbe probe([&](QMenu& menu) {
+            for (QAction* entry : menu.actions()) {
+                if (entry->text().remove('&') == "New Snapshot…") {
+                    CHECK(entry == &w.action("createSnapshotAction"));
+                    CHECK(entry->shortcut() == QKeySequence(Qt::CTRL | Qt::Key_N));
+                }
+                if (entry->text().remove('&') == "Delete Snapshot…") {
+                    CHECK(entry == &w.action("deleteSnapshotAction"));
+                }
+            }
+        });
+        w.contextMenuAt("Two");
+        REQUIRE(probe.shown);
+    }
+    SECTION("while another snapshot is previewed, New is off and the clicked row is the target") {
+        w.select("One");
+        REQUIRE(w.previewing());
+        MenuProbe probe;
+        w.contextMenuAt("Two");
+        REQUIRE(probe.shown);
+        CHECK(probe.texts == onRow("Two"));
+        CHECK(probe.enabled["Restore “Two”"]);
+        CHECK(probe.enabled["Rename Snapshot…"]);
+        CHECK_FALSE(probe.enabled["New Snapshot…"]);
+        // Still previewing One.
+        CHECK(w.previewing());
+        CHECK(w.tree().currentIndex() == w.rowNamed("One"));
+    }
+    SECTION("the empty space offers only New") {
+        MenuProbe probe;
+        w.contextMenuOnEmptySpace();
+        REQUIRE(probe.shown);
+        CHECK(probe.texts == QStringList{"New Snapshot…"});
+        CHECK(probe.enabled["New Snapshot…"]);
+        CHECK_FALSE(w.previewing());
+    }
+    SECTION("a right-press selects nothing and so previews nothing") {
+        const QPoint where = w.tree().visualRect(w.rowNamed("One")).center();
+        QTest::mouseClick(w.tree().viewport(), Qt::RightButton, Qt::NoModifier, where);
+        CHECK_FALSE(w.previewing());
+        CHECK_FALSE(w.tree().selectionModel()->hasSelection());
+    }
+}
+
+TEST_CASE("The context menu's entries have the effects of the actions",
+          "[app][window][snapshots]") {
+    Window w([](const fs::path& photo) {
+        seed(photo, 0, "One", 1.0F);
+        seed(photo, 1, "Two", 2.0F);
+    });
+    REQUIRE(QTest::qWaitFor([&] { return w.model().rowCount() == 2; }, 10000));
+    const int steps = w.steps();
+
+    SECTION("Restore makes the clicked look the working look, with no preview left") {
+        MenuProbe probe(Choice{"Restore “Two”"});
+        w.contextMenuAt("Two");
+        REQUIRE(probe.shown);
+        REQUIRE(probe.chosen);
+        CHECK(w.steps() == steps + 1);
+        CHECK(w.window.isWindowModified());
+        CHECK_FALSE(w.previewing());
+        CHECK(w.exposureBox().value() == 2.0);
+    }
+    SECTION("Rename renames the clicked row, not the selected one") {
+        w.select("One");
+        Answer answer(typing("Uno"));
+        MenuProbe probe(Choice{"Rename Snapshot…"});
+        w.contextMenuAt("Two");
+        REQUIRE(probe.shown);
+        REQUIRE(probe.chosen);
+        REQUIRE(answer.answered);
+        CHECK(answer.title == "Rename Snapshot");
+        REQUIRE(QTest::qWaitFor([&] { return w.rowNamed("Uno").isValid(); }, 10000));
+        CHECK_FALSE(w.rowNamed("Two").isValid());
+        CHECK(w.rowNamed("One").isValid());
+        CHECK(w.disk().snapshots.entries.at(1).name == "Uno");
+        CHECK(w.disk().snapshots.entries.front().name == "One");
+    }
+    SECTION("Delete asks first and deletes the clicked row") {
+        Answer answer(clicking("Delete"));
+        MenuProbe probe(Choice{"Delete Snapshot…"});
+        w.contextMenuAt("Two");
+        REQUIRE(probe.shown);
+        REQUIRE(probe.chosen);
+        REQUIRE(answer.answered);
+        CHECK(answer.title == "Delete Snapshot");
+        REQUIRE(QTest::qWaitFor([&] { return !w.rowNamed("Two").isValid(); }, 10000));
+        CHECK(w.disk().snapshots.entries.size() == 1);
+        CHECK(w.rowNamed("One").isValid());
+    }
+    SECTION("New Snapshot creates one") {
+        Answer answer(typing("Three"));
+        MenuProbe probe(Choice{"New Snapshot…"});
+        w.contextMenuOnEmptySpace();
+        REQUIRE(probe.shown);
+        REQUIRE(probe.chosen);
+        REQUIRE(answer.answered);
+        REQUIRE(QTest::qWaitFor([&] { return w.disk().snapshots.entries.size() == 3; }, 10000));
+        CHECK(QTest::qWaitFor([&] { return w.rowNamed("Three").isValid(); }, 10000));
+    }
+}
+
+TEST_CASE("The context menu does not act on a row of another photograph or a removed row",
+          "[app][window][snapshots]") {
+    Window w([](const fs::path& photo) {
+        seed(photo, 0, "One", 1.0F);
+        seed(photo, 1, "Two", 2.0F);
+    });
+    REQUIRE(QTest::qWaitFor([&] { return w.model().rowCount() == 2; }, 10000));
+    const int steps = w.steps();
+
+    SECTION("a photograph change while the menu is open disables the row entries") {
+        // Snapshot ids restart per photograph, so the lent id also names a row of the next one.
+        const fs::path other = w.folder.file("b.dng");
+        fs::copy_file(fs::path(ARRAW_TEST_DATA_DIR) / "preview-32x24.dng", other);
+        seed(other, 0, "Other1", 5.0F);
+        seed(other, 1, "Other2", 4.0F);
+        bool loaded = false;
+        QMap<QString, bool> after;
+        MenuProbe probe([&](QMenu& menu) {
+            w.window.openInitialPath(other);
+            loaded = QTest::qWaitFor([&] { return w.rowNamed("Other2").isValid(); }, 20000);
+            for (QAction* entry : menu.actions()) {
+                after[entry->text().remove('&')] = entry->isEnabled();
+            }
+            for (QAction* entry : menu.actions()) {
+                if (!entry->text().startsWith("New")) {
+                    entry->trigger();
+                }
+            }
+        });
+        w.contextMenuAt("Two");
+        REQUIRE(probe.shown);
+        REQUIRE(loaded);
+        CHECK_FALSE(after["Rename Snapshot…"]);
+        CHECK_FALSE(after["Delete Snapshot…"]);
+        for (auto it = after.begin(); it != after.end(); ++it) {
+            if (it.key().startsWith("Restore")) {
+                CHECK_FALSE(it.value());
+            }
+        }
+        // Nothing was restored, renamed or deleted in the other photograph.
+        CHECK_FALSE(w.window.isWindowModified());
+        CHECK(w.rowNamed("Other1").isValid());
+        CHECK(w.rowNamed("Other2").isValid());
+        CHECK(openDocument(other).snapshots.entries.size() == 2);
+    }
+    SECTION("a row removed while the menu is open disables the row entries") {
+        QMap<QString, bool> after;
+        bool gone = false;
+        MenuProbe probe([&](QMenu& menu) {
+            const OpenDocument before = w.disk();
+            deleteSnapshot(w.photo, before.snapshots.revision, before.snapshots.entries.at(1).id);
+            emit w.strip().sidecarChangedExternally(QString::fromStdU16String(w.photo.u16string()));
+            gone = QTest::qWaitFor([&] { return w.model().rowCount() == 1; }, 10000);
+            for (QAction* entry : menu.actions()) {
+                after[entry->text().remove('&')] = entry->isEnabled();
+                if (!entry->text().contains("New")) {
+                    entry->trigger();
+                }
+            }
+        });
+        w.contextMenuAt("Two");
+        REQUIRE(probe.shown);
+        REQUIRE(gone);
+        for (auto it = after.begin(); it != after.end(); ++it) {
+            if (it.key().startsWith("Restore") || it.key().startsWith("Rename") ||
+                it.key().startsWith("Delete")) {
+                CHECK_FALSE(it.value());
+            }
+        }
+        CHECK(w.steps() == steps);
+        CHECK(w.rowNamed("One").isValid());
+        CHECK(w.disk().snapshots.entries.size() == 1);
+    }
+}
+
+TEST_CASE("The context menu's lend ends after an entry was triggered", "[app][window][snapshots]") {
+    Window w([](const fs::path& photo) {
+        seed(photo, 0, "One", 1.0F);
+        seed(photo, 1, "Two", 2.0F);
+    });
+    REQUIRE(QTest::qWaitFor([&] { return w.model().rowCount() == 2; }, 10000));
+    w.select("One");
+    {
+        Answer answer(typing("Zwei"));
+        MenuProbe probe(Choice{"Rename Snapshot…"});
+        w.contextMenuAt("Two");
+        REQUIRE(probe.shown);
+        REQUIRE(probe.chosen);
+        REQUIRE(answer.answered);
+    }
+    REQUIRE(QTest::qWaitFor([&] { return w.rowNamed("Zwei").isValid(); }, 10000));
+    w.activate();
+    CHECK(w.action("restoreSnapshotAction").text().remove('&') == "Restore Snapshot");
+    // The action is back on the selected row.
+    REQUIRE(w.action("renameSnapshotAction").isEnabled());
+    Answer answer(typing("Eins"));
+    w.action("renameSnapshotAction").trigger();
+    REQUIRE(answer.answered);
+    REQUIRE(QTest::qWaitFor([&] { return w.rowNamed("Eins").isValid(); }, 10000));
+    CHECK(w.rowNamed("Zwei").isValid());
+    CHECK_FALSE(w.rowNamed("One").isValid());
+}
+
+TEST_CASE("The menu key opens the context menu on the selected row", "[app][window][snapshots]") {
+    Window w([](const fs::path& photo) { seed(photo, 0, "One", 1.0F); });
+    REQUIRE(QTest::qWaitFor([&] { return w.model().rowCount() == 1; }, 10000));
+
+    SECTION("with a row selected") {
+        w.select("One");
+        MenuProbe probe;
+        w.contextMenuFromKeyboard();
+        REQUIRE(probe.shown);
+        CHECK(probe.texts == QStringList{"Restore “One”", "Rename Snapshot…", "Delete Snapshot…",
+                                         "New Snapshot…"});
+        CHECK(probe.enabled["Restore “One”"]);
+        CHECK_FALSE(probe.enabled["New Snapshot…"]);
+        CHECK(w.previewing());
+    }
+    SECTION("with none selected, only New") {
+        MenuProbe probe;
+        w.contextMenuFromKeyboard();
+        REQUIRE(probe.shown);
+        CHECK(probe.texts == QStringList{"New Snapshot…"});
+        CHECK_FALSE(w.previewing());
+    }
+    SECTION("an entry acts on the selected row") {
+        w.select("One");
+        Answer answer(typing("Uno"));
+        MenuProbe probe(Choice{"Rename Snapshot…"});
+        w.contextMenuFromKeyboard();
+        REQUIRE(answer.answered);
+        REQUIRE(QTest::qWaitFor([&] { return w.rowNamed("Uno").isValid(); }, 10000));
+    }
+}
+
+TEST_CASE("The context menu lists Remove Unreadable only when there are such entries",
+          "[app][window][snapshots]") {
+    Window w([](const fs::path& photo) {
+        seed(photo, 0, "Fine", 1.0F);
+        QFile file(QString::fromStdU16String(sidecarPath(photo).u16string()));
+        REQUIRE(file.open(QIODevice::ReadWrite));
+        QByteArray text = file.readAll();
+        const qsizetype list = text.indexOf("</arraw:snapshots>");
+        REQUIRE(list > 0);
+        const qsizetype seq = text.lastIndexOf("</rdf:Seq>", list);
+        REQUIRE(seq > 0);
+        text.insert(
+            seq, "<rdf:li rdf:parseType=\"Resource\"><arraw:id>9</arraw:id>"
+                 "<arraw:name>Bad</arraw:name><arraw:created>2026-10-23T12:00:00Z</arraw:created>"
+                 "<arraw:state>{ not json</arraw:state><arraw:negative>{}</arraw:negative>"
+                 "</rdf:li>");
+        file.seek(0);
+        file.resize(0);
+        file.write(text);
+    });
+    REQUIRE(w.disk().unreadableSnapshots == 1);
+
+    SECTION("on the empty space") {
+        MenuProbe probe;
+        w.contextMenuOnEmptySpace();
+        REQUIRE(probe.shown);
+        CHECK(probe.texts == QStringList{"New Snapshot…", "Remove Unreadable Entries…"});
+        CHECK(probe.enabled["Remove Unreadable Entries…"]);
+    }
+    SECTION("on a row") {
+        MenuProbe probe;
+        w.contextMenuAt("Fine");
+        REQUIRE(probe.shown);
+        CHECK(probe.texts.last() == "Remove Unreadable Entries…");
+    }
+    SECTION("the entry removes them after the confirmation") {
+        Answer answer(clicking("Remove"));
+        MenuProbe probe(Choice{"Remove Unreadable Entries…"});
+        w.contextMenuOnEmptySpace();
+        REQUIRE(answer.answered);
+        REQUIRE(QTest::qWaitFor([&] { return w.disk().unreadableSnapshots == 0; }, 10000));
+        REQUIRE(QTest::qWaitFor(
+            [&] { return !w.child("snapshotDamageNotice").isVisibleTo(&w.window); }, 10000));
+        MenuProbe again;
+        w.contextMenuOnEmptySpace();
+        REQUIRE(again.shown);
+        CHECK(again.texts == QStringList{"New Snapshot…"});
     }
 }
 

@@ -27,8 +27,10 @@
 
 #include <QImage>
 #include <QMainWindow>
+#include <QMenu>
 #include <QModelIndex>
 #include <QPointF>
+#include <QPointer>
 #include <QSize>
 #include <QString>
 #include <QStringList>
@@ -51,7 +53,6 @@ class QAction;
 class QActionGroup;
 class QCloseEvent;
 class QDockWidget;
-class QMenu;
 class QLabel;
 class QListView;
 class QToolButton;
@@ -588,7 +589,15 @@ private:
     /// @brief Enables the snapshot panel and its actions, and shows the notice and the banner.
     void updateSnapshotPanel();
 
-    /// @brief Gives the snapshot the tree has selected.
+    /// @brief Shows the snapshot context menu, made of the actions of the menu button.
+    ///
+    /// Nothing is selected or previewed; the actions act on @p target while the menu is open.
+    /// @param globalPosition Where the menu opens.
+    /// @param target Row the menu was asked for, or none for the empty space.
+    void showSnapshotContextMenu(const QPoint& globalPosition, std::optional<SnapshotId> target);
+
+    /// @brief Gives the snapshot the context menu was opened on, else the one the tree has
+    /// selected; none for a menu row of another session or one that no longer exists.
     [[nodiscard]] std::optional<SnapshotId> selectedSnapshot() const;
 
     /// @brief Makes the tree's selection the previewed snapshot, or none.
@@ -898,6 +907,12 @@ private:
     QAction* deleteSnapshotAction_ = nullptr;
     QAction* restoreSnapshotAction_ = nullptr;
     QAction* discardUnreadableAction_ = nullptr;
+    /// Row the open context menu acts on, which is not selected.
+    std::optional<SnapshotId> contextSnapshot_;
+    /// Serial of the session contextSnapshot_ belongs to.
+    std::uint64_t contextSerial_ = 0;
+    /// Open snapshot context menu, if any.
+    QPointer<QMenu> contextMenu_;
     /// Esc while a snapshot is previewed.
     QShortcut* closePreviewShortcut_ = nullptr;
     /// Whether the tree's selection is being set by the window, which is no request to preview.

@@ -383,6 +383,12 @@ and committed:
    collection, and session operations. Verify text/JSON parity, unknown IDs, option conflicts,
    repeated exports, and Python parity.
 
+Known limitation (2026-10-26, decided): the Python snapshot write methods (`create_snapshot`,
+`rename_snapshot`, `delete_snapshot`, `discard_unreadable_snapshots`, and `save`) hold the GIL while
+they wait for the sidecar lock (up to 2000 ms) and rewrite the sidecar, so they block other Python
+threads. Releasing it needs a per-session guard first, because `EditSession` is not thread-safe.
+Revisit if scripts need to overlap snapshot writes with other Python work.
+
 Initial bounds (provisional pending measurement): 32 snapshots per photo; nonempty names up to
 256 UTF-8 bytes; thumbnails at most 256x256 and 64 KiB JPEG; serialized UTF-8 XMP snapshot
 subtree at most 128 MiB, including escaping and base64. IDs/revisions are decimal strings in
