@@ -81,14 +81,19 @@ in a smooth sky is what a photographer would see; the tolerance in that test hid
   It was not built, as it would be a second implementation of the rounding for no gain today.
 - **Threads.** Each call splits its rows into up to one band per hardware thread, started as
   `std::jthread`s for that call (the caller takes the first). A 4K frame is 8 bands, 7 thread
-  starts, negligible against 135 ms. Concurrent callers (preview, histogram, thumbnails) do
-  oversubscribe the cores: 3840x2160 took 135 ms alone, 318 ms for two at once and 606 ms for four,
+  starts, negligible against the 135–150 ms the frame takes. Concurrent callers (preview, histogram, thumbnails) do
+  oversubscribe the cores: 3840x2160 took 135 ms alone in that run, 318 ms for two at once and 606 ms for four,
   so the loss is about 15% on top of sharing, with no cliff. A shared pool would remove it, and is
   a change to `splitRowBands` for every caller, not to this one.
 - **One rounding.** A sharpened export and an unsharpened one, a display and an 8-bit export, round
-  with the same code, so equal inputs give equal files (tests hold this).
+  with the same code. A display and an unsharpened 8-bit sRGB export are byte-identical (tests hold
+  this). A sharpened export stores the encoded values as 32-bit floats before it rounds, so even
+  where sharpening changes nothing about 0.085% of 16-bit samples land one code from the
+  unsharpened file (about 3e-6 at 8 bits).
 - **Luma weights moved slightly.** The histogram's weights are now the exact ones of the primaries
-  (sRGB Y of red 0.212639 where the standard's rounded matrix has 0.2126729), shifting a few
+  (sRGB Y of red 0.212639, from the BT.709 chromaticities and D65 at (0.3127, 0.3290), where the
+  widely copied matrix built on a slightly different D65 has 0.2126729; both round to BT.709's
+  published 0.2126), shifting a few
   pixels per image across a luma code.
 
 ## What was rejected, and why

@@ -19,17 +19,19 @@ namespace arraw {
 /// @param luminance Linear luminance, zero or above.
 /// @return The same brightness, perceptually spaced.
 ///
-/// The curve of ::arraw::transfer::encodeGamma22 in float, so that the exponent is written once.
+/// The curve of ::arraw::transfer::encodeGamma22 in float for inputs of zero and above (it has no
+/// odd extension below zero), so that the exponent is written once.
 /// Mirrored by `src/gpu/shaders/develop.frag`, which must change with it.
 [[nodiscard]] inline float toPerceptual(float luminance) {
     return std::pow(luminance, 1.0F / static_cast<float>(transfer::perceptualGamma));
 }
 
 /// @brief Returns a perceptual value to scene-linear luminance.
-/// @param value Perceptually spaced brightness.
+/// @param value Perceptually spaced brightness, zero or above.
 /// @return The linear luminance it stands for.
 ///
-/// The curve of ::arraw::transfer::decodeGamma22 in float, so that the exponent is written once.
+/// The curve of ::arraw::transfer::decodeGamma22 in float for inputs of zero and above (it has no
+/// odd extension below zero), so that the exponent is written once.
 /// Mirrored by `src/gpu/shaders/develop.frag`, which must change with it.
 [[nodiscard]] inline float toLinear(float value) {
     return std::pow(value, static_cast<float>(transfer::perceptualGamma));

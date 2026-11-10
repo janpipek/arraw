@@ -280,7 +280,7 @@ TEST_CASE("luma from the lookup equals a binary search over the half-code bounda
           "[OutputHistogram]") {
     const auto encoding =
         GENERATE(NamedEncoding::Srgb, NamedEncoding::DisplayP3, NamedEncoding::AdobeRgb);
-    // The reference: the method the lookup replaced, spelled out here independently.
+    // The reference: the binary search the lookup replaced, over the same weights and curves.
     // Luma weights are row Y of the encoding's RGB-to-XYZ matrix (ADR 057).
     const auto toXyz = colorspaces::rgbToXyz(colorspaces::primariesOf(encoding));
     const std::array<double, 3> y{toXyz[3], toXyz[4], toXyz[5]};
