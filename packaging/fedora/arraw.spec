@@ -1,6 +1,6 @@
 Name:           arraw
 # A snapshot is a post-release build: the caret sorts it above the release it follows.
-%global base_version 0.4.2
+%global base_version 0.4.3
 Version:        %{base_version}%{?snapshot:^%{snapshot}}
 Release:        1%{?dist}
 Summary:        RAW photo editor with a GPU preview
@@ -84,6 +84,11 @@ appstreamcli validate --no-net \
 %{_datadir}/icons/hicolor/scalable/apps/io.github.janpipek.arraw.svg
 
 %changelog
+* Tue Nov 10 2026 Jan Pipek <janpipek@users.noreply.github.com> - 0.4.3-1
+- Add snapshots: named per-photo looks with their own history, thumbnails and a context menu, in the window, the CLI and Python
+- Export 16-bit images at full precision: the output colour conversion is exact instead of Qt's coarse lookup table
+- arraw-cli lenses prints numbers the same in every locale
+
 * Wed Oct 21 2026 Jan Pipek <janpipek@users.noreply.github.com> - 0.4.2-1
 - Add a histogram panel with a clipping overlay
 - Add output_histogram to the Python bindings
