@@ -55,6 +55,7 @@ class QCloseEvent;
 class QDockWidget;
 class QLabel;
 class QListView;
+class QPushButton;
 class QToolButton;
 class QEvent;
 class QShortcut;
@@ -125,6 +126,21 @@ public:
     /// @param prompts Answers; a member left empty keeps the real dialog.
     void setExportPrompts(ExportPrompts prompts) {
         exportPrompts_ = std::move(prompts);
+    }
+
+    /// @brief The question resetAllSettings asks, which a test may answer without a dialog.
+    ///
+    /// A member left empty is the real dialog.
+    struct ResetPrompts {
+        /// Tells whether to reset; receives the file name, the number of masks to remove and
+        /// whether lens corrections are on.
+        std::function<bool(const QString&, std::size_t, bool)> confirm;
+    };
+
+    /// @brief Replaces the dialog of resetAllSettings; for tests.
+    /// @param prompts Answers; a member left empty keeps the real dialog.
+    void setResetPrompts(ResetPrompts prompts) {
+        resetPrompts_ = std::move(prompts);
     }
 
     /// @brief Opens a startup file or folder, restoring the last one when none is supplied.
@@ -611,6 +627,15 @@ private:
     /// Tells the status bar what could not be carried.
     void pasteSettings();
 
+    /// @brief Asks, then returns the open photograph to its defaults as one history step.
+    ///
+    /// The settings, the local adjustments and the negative (ADR 039); marks and snapshots stay.
+    void resetAllSettings();
+
+    /// @brief Enables Reset All: a photograph editable, outside the crop mode, and not at its
+    /// defaults.
+    void updateResetAllAction();
+
     /// @brief Enables Paste: with settings held, a photograph open, and outside the crop mode.
     void updatePasteAction();
 
@@ -933,6 +958,9 @@ private:
     QAction* redoAction_ = nullptr;
     QAction* copyAction_ = nullptr;
     QAction* pasteAction_ = nullptr;
+    QAction* resetAllAction_ = nullptr;
+    QPushButton* resetAllButton_ = nullptr;
+    ResetPrompts resetPrompts_;
     /// Settings copied from a photograph; lasts across photographs, which is its use.
     std::optional<SettingsClipboard> clipboard_;
     QAction* exportAction_ = nullptr;

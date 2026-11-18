@@ -56,6 +56,16 @@ struct DevelopState {
 /// @return The state to start from.
 [[nodiscard]] DevelopState defaultStateFor(const ColorEncoding& encoding);
 
+/// @brief Gives the state a photograph returns to when everything is reset.
+///
+/// The defaults of its kind (::arraw::defaultStateFor), with no local adjustments, but with the
+/// counter of @p current: identities never go down, so an undo followed by a redo, or a snapshot,
+/// never sees two adjustments with one identity.
+/// @param current State being reset.
+/// @param encoding Encoding the photograph's decoded pixels are in.
+/// @return The state to reset to.
+[[nodiscard]] DevelopState resetState(const DevelopState& current, const ColorEncoding& encoding);
+
 /// @brief Checks a state.
 ///
 /// The settings by ::arraw::validate(const DevelopSettings&), then the local adjustments (ADR

@@ -274,6 +274,9 @@ QString HistoryModel::textOf(std::size_t index) const {
     case EditOrigin::Preset:
         return tr("Preset: %1").arg(QString::fromStdString(step.detail));
     case EditOrigin::Reset: {
+        if (step.detail == resetAllDetail) {
+            return tr("Reset All");
+        }
         const ChangeDescription change =
             index == 0 ? ChangeDescription{}
                        : describeChange(history_[index - 1].state, step.state);

@@ -16,6 +16,12 @@ arraw::DevelopState arraw::defaultStateFor(const ColorEncoding& encoding) {
     return state;
 }
 
+arraw::DevelopState arraw::resetState(const DevelopState& current, const ColorEncoding& encoding) {
+    DevelopState state = defaultStateFor(encoding);
+    state.nextLocalAdjustmentId = current.nextLocalAdjustmentId;
+    return state;
+}
+
 void arraw::validate(const DevelopState& state) {
     validate(state.settings);
     if (state.nextLocalAdjustmentId.value == 0) {

@@ -58,6 +58,15 @@ TEST_CASE("Each origin has its own wording", "[app][history]") {
     CHECK(textAt(model, 4) == "Crop");
 }
 
+TEST_CASE("A reset with the detail All is named Reset All", "[app][history]") {
+    Built built;
+    built.then([](DevelopSettings& s) { s.tone.exposure = 1.0F; }, EditOrigin::Reset,
+               std::string(resetAllDetail));
+    HistoryModel model;
+    model.setHistory(built.steps, 1, DevelopState{}, {}, std::nullopt);
+    CHECK(textAt(model, 1) == "Reset All");
+}
+
 TEST_CASE("An edit of one setting names it with its value", "[app][history]") {
     Built built;
     built.then([](DevelopSettings& s) { s.tone.exposure = 0.5F; })

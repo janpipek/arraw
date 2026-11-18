@@ -8,7 +8,9 @@
 #include "ui/SettingSlider.h"
 #include "ui/StatusLine.h"
 
+#include <DevelopState.h>
 #include <ImageImport.h>
+#include <LocalAdjustmentEdits.h>
 #include <Photo.h>
 #include <Progress.h>
 #include <Sidecar.h>
@@ -562,4 +564,111 @@ TEST_CASE("An export queued during a re-decode renders the chosen demosaic",
     const QImage after = exportAs("after")();
     CHECK(duringImage != ahd);
     CHECK(duringImage == after);
+}
+
+namespace {
+
+/// Writes a sidecar for a.dng with Vng, an exposure of 1 and one linear mask.
+void writeEditedSidecar(const Window& w) {
+    const Photo bare = openPhoto(w.folder.file("a.dng"));
+    DevelopState state = withLocalAdjustmentAdded(bare.state(), Mask{LinearMask{}});
+    state.settings.tone.exposure = 1.0F;
+    NegativeSettings negative{Demosaic::Vng};
+    negative.lens.distortion = true;
+    writeSidecar(Photo(w.folder.file("a.dng"), bare.metadata(), negative, state));
+}
+
+} // namespace
+
+TEST_CASE("Reset All returns settings, masks and negative in one undoable step",
+          "[app][window][negative][reset]") {
+    Window w(Demosaic::Ahd, false);
+    writeEditedSidecar(w);
+    w.open("a.dng");
+    REQUIRE(w.settled(1));
+    CHECK(w.counter.last() == Demosaic::Vng);
+
+    // The photograph is not at its defaults, so Reset All is on, in the menu and on the dock.
+    REQUIRE(w.action("resetAllAction").isEnabled());
+    auto* button = w.window.findChild<QPushButton*>("resetAllButton");
+    REQUIRE(button != nullptr);
+    CHECK(button->text() == "Reset All");
+    CHECK(button->isEnabled());
+
+    QString asked;
+    std::size_t masks = 0;
+    bool lens = false;
+    int answers = 0;
+    bool answer = false;
+    w.window.setResetPrompts({[&](const QString& file, std::size_t count, bool lensOn) {
+        asked = file;
+        masks = count;
+        lens = lensOn;
+        ++answers;
+        return answer;
+    }});
+    const int rows = w.historyRows();
+
+    // Cancel changes nothing.
+    w.action("resetAllAction").trigger();
+    CHECK(answers == 1);
+    CHECK(asked == "a.dng");
+    CHECK(masks == 1);
+    CHECK(lens);
+    CHECK(w.historyRows() == rows);
+    CHECK(w.shown() == Demosaic::Vng);
+
+    // Confirmed, the button does the same.
+    answer = true;
+    button->click();
+    CHECK(answers == 2);
+    REQUIRE(w.settled(2));
+    CHECK(w.counter.last() == Demosaic::Ahd);
+    CHECK(w.shown() == Demosaic::Ahd);
+    CHECK(w.historyRows() == rows + 1);
+    auto* list = w.window.findChild<QListView*>("historyList");
+    CHECK(list->model()->index(0, 0).data(Qt::DisplayRole).toString() == "Reset All");
+    CHECK(w.window.findChild<QListView*>("maskList")->model()->rowCount() == 0);
+    CHECK_FALSE(w.action("resetAllAction").isEnabled());
+    CHECK_FALSE(button->isEnabled());
+
+    // One undo brings back all three parts, and a redo takes them away again.
+    w.action("undoAction").trigger();
+    REQUIRE(w.settled(3));
+    CHECK(w.shown() == Demosaic::Vng);
+    CHECK(w.window.findChild<QListView*>("maskList")->model()->rowCount() == 1);
+    CHECK(w.action("resetAllAction").isEnabled());
+    w.action("saveAction").trigger();
+    {
+        const Photo undone = openPhoto(w.folder.file("a.dng"));
+        CHECK(undone.state().settings.tone.exposure == 1.0F);
+        CHECK(undone.negative().lens.distortion);
+    }
+    w.action("redoAction").trigger();
+    REQUIRE(w.settled(4));
+    CHECK(w.shown() == Demosaic::Ahd);
+    CHECK(w.window.findChild<QListView*>("maskList")->model()->rowCount() == 0);
+
+    // The counter is kept: the next mask does not reuse the removed one's identity.
+    w.action("saveAction").trigger();
+    const Photo saved = openPhoto(w.folder.file("a.dng"));
+    CHECK(saved.state().localAdjustments.empty());
+    CHECK(saved.state().nextLocalAdjustmentId.value == 2);
+    CHECK(saved.state().settings == defaultStateFor(saved.metadata().encoding).settings);
+    CHECK_FALSE(saved.negative().lens.any());
+}
+
+TEST_CASE("Reset All is off at the defaults and in the crop mode", "[app][window][reset]") {
+    Window w(Demosaic::Ahd, false);
+    w.open("a.dng");
+    REQUIRE(w.settled(1));
+    CHECK_FALSE(w.action("resetAllAction").isEnabled());
+    w.setExposure(0.7);
+    CHECK(w.action("resetAllAction").isEnabled());
+    w.action("cropAction").trigger();
+    CHECK_FALSE(w.action("resetAllAction").isEnabled());
+    CHECK_FALSE(w.window.findChild<QPushButton*>("resetAllButton")->isEnabled());
+    w.action("cropAction").trigger();
+    CHECK(w.action("resetAllAction").isEnabled());
+    CHECK(w.window.findChild<QPushButton*>("resetAllButton")->isEnabled());
 }

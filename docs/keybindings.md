@@ -17,6 +17,7 @@ its rows from *Planned* to *Current* in the same change that wires them.
 | `Ctrl+Shift+Z` | Redo | Edit menu (`QKeySequence::Redo`) |
 | `Ctrl+Shift+C` | Copy settings… (asks which sections) | Edit menu |
 | `Ctrl+Shift+V` | Paste settings (no dialog; off in the crop mode) | Edit menu |
+| `Ctrl+Shift+R` | Reset all settings… (always asks; off in the crop mode and at the defaults; no key on macOS, where Shift+Cmd+R is Refresh Folder) | Edit menu |
 | (platform) | Settings | Edit menu (`QKeySequence::Preferences`; no key on some platforms) |
 | `C` | Crop & Straighten (toggle) | Photo menu |
 | `Ctrl+]` / `Ctrl+[` | Rotate 90° clockwise / counter-clockwise | Photo menu |

@@ -1,5 +1,6 @@
 #include <DevelopState.h>
 #include <EditSession.h>
+#include <LocalAdjustmentEdits.h>
 #include <Photo.h>
 
 #include <catch2/catch_test_macros.hpp>
@@ -77,4 +78,20 @@ TEST_CASE("A session replaces the state of its photograph", "[state][session]") 
     REQUIRE(session.photo().state() == brighter);
     REQUIRE(session.photo().path() == original.path());
     REQUIRE(original.state() == DevelopState{});
+}
+
+TEST_CASE("Resetting gives the defaults of the kind and keeps the id counter", "[state]") {
+    DevelopState edited = withLocalAdjustmentAdded(DevelopState{}, Mask{LinearMask{}});
+    edited = withLocalAdjustmentAdded(edited, Mask{LinearMask{}});
+    edited.settings.tone.exposure = 1.0F;
+    REQUIRE(edited.nextLocalAdjustmentId.value == 3);
+
+    const DevelopState raw = resetState(edited, ColorEncoding{CameraNative{}});
+    CHECK(raw.localAdjustments.empty());
+    CHECK(raw.settings == defaultStateFor(ColorEncoding{CameraNative{}}).settings);
+    CHECK(raw.nextLocalAdjustmentId.value == 3);
+
+    const DevelopState other = resetState(edited, ColorEncoding{});
+    CHECK(other.settings == DevelopSettings{});
+    CHECK(other.nextLocalAdjustmentId.value == 3);
 }

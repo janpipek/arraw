@@ -106,6 +106,8 @@ heavy edits don't collapse saturated colours early in the chain. Practically:
 ## Repeating yourself less
 
 - **Copy / paste settings** between images, with a checklist of which groups to carry over.
+- **Reset All** (Edit menu, Ctrl+Shift+R, or the button above the develop tabs) returns the open
+  image to its defaults after a confirmation: settings, masks and negative, as one undoable step.
 - **Batch paste and batch export** across a multi-selection.
 - **Export presets** — named, whole export settings (format, profile, size, quality,
   metadata), kept in one file that the app, the command line and Python all read. Pick one in

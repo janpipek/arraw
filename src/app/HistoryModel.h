@@ -9,9 +9,13 @@
 
 #include <cstddef>
 #include <optional>
+#include <string_view>
 #include <vector>
 
 namespace arraw::app {
+
+/// @brief Detail of the Reset step that returns a whole photograph to its defaults.
+inline constexpr std::string_view resetAllDetail = "All";
 
 /// @brief Words an ordinary edit between two steps, as the History list does.
 ///

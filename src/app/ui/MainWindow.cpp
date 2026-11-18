@@ -523,6 +523,14 @@ void MainWindow::buildMenu() {
     pasteAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_V));
     pasteAction_->setEnabled(false);
     connect(pasteAction_, &QAction::triggered, this, &MainWindow::pasteSettings);
+    resetAllAction_ = editMenu->addAction(tr("&Reset All Settings…"));
+    resetAllAction_->setObjectName("resetAllAction");
+#ifndef Q_OS_MACOS
+    // Shift+Cmd+R is Refresh Folder on macOS, and two actions on one key run neither.
+    resetAllAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_R));
+#endif
+    resetAllAction_->setEnabled(false);
+    connect(resetAllAction_, &QAction::triggered, this, &MainWindow::resetAllSettings);
 
     editMenu->addSeparator();
     QAction* settingsAction = editMenu->addAction(tr("&Settings…"));
@@ -749,6 +757,13 @@ void MainWindow::buildDevelopDock() {
     columnLayout->setContentsMargins(0, 0, 0, 0);
     columnLayout->setSpacing(0);
     columnLayout->addWidget(histogramSection_);
+    // Above the tabs, so that it shows on both (ADR 048).
+    resetAllButton_ = new QPushButton(tr("Reset All"));
+    resetAllButton_->setObjectName("resetAllButton");
+    resetAllButton_->setToolTip(tr("Puts every setting of the photograph back to its default."));
+    resetAllButton_->setEnabled(false);
+    connect(resetAllButton_, &QPushButton::clicked, this, [this] { resetAllAction_->trigger(); });
+    columnLayout->addWidget(resetAllButton_);
     columnLayout->addWidget(developTabs_, 1);
     connect(histogramSection_, &CollapsibleSection::toggled, this,
             [this] { histogramGateChanged(); });
@@ -2168,6 +2183,92 @@ void MainWindow::beginSnapshotThumbnails() {
 
 void MainWindow::updatePasteAction() {
     pasteAction_->setEnabled(clipboard_ && editable() && !photoView_->isCropMode());
+    updateResetAllAction();
+}
+
+namespace {
+
+/// @brief Gives the negative a photograph returns to on Reset All.
+///
+/// The defaults, with the lens recorded for the photograph kept, as the corrections being off
+/// keeps it (and as pasting settings does).
+/// @param photo Photograph to reset.
+/// @return The negative settings.
+NegativeSettings resetNegative(const Photo& photo) {
+    NegativeSettings result = defaultNegativeFor(photo.metadata());
+    result.lens = withCorrectionsOf(photo.negative().lens, result.lens);
+    return result;
+}
+
+} // namespace
+
+void MainWindow::updateResetAllAction() {
+    bool enabled = editable() && !photoView_->isCropMode();
+    if (enabled) {
+        const Photo& photo = open_->session.photo();
+        enabled = photo.state() != resetState(photo.state(), photo.metadata().encoding) ||
+                  photo.negative() != resetNegative(photo);
+    }
+    resetAllAction_->setEnabled(enabled);
+    resetAllButton_->setEnabled(enabled);
+}
+
+void MainWindow::resetAllSettings() {
+    if (!editable() || photoView_->isCropMode()) {
+        return;
+    }
+    guarded([this] {
+        developPanel_->finishPendingEdit();
+        // A stroke under way is committed now, so that the reset is its own step and Cancel
+        // leaves nothing open.
+        photoView_->maskOverlay().abandonDrag();
+        if (open_->session.editing()) {
+            open_->session.commit();
+            refreshPanel();
+        }
+        const Photo& photo = open_->session.photo();
+        if (photo.state() == resetState(photo.state(), photo.metadata().encoding) &&
+            photo.negative() == resetNegative(photo)) {
+            return;
+        }
+        const QString file = toQString(photo.path().filename());
+        const std::size_t masks = photo.state().localAdjustments.size();
+        const bool lens = photo.negative().lens.any();
+        bool confirmed = false;
+        if (resetPrompts_.confirm) {
+            confirmed = resetPrompts_.confirm(file, masks, lens);
+        } else {
+            QString text = tr("Reset all settings of %1?").arg(file);
+            if (masks > 0 && lens) {
+                text += " " + tr("This also removes its %n mask(s) and turns off lens corrections.",
+                                 nullptr, static_cast<int>(masks));
+            } else if (masks > 0) {
+                text +=
+                    " " + tr("This also removes its %n mask(s).", nullptr, static_cast<int>(masks));
+            } else if (lens) {
+                text += " " + tr("This also turns off lens corrections.");
+            }
+            QMessageBox box(QMessageBox::Question, tr("Reset All Settings"), text,
+                            QMessageBox::NoButton, this);
+            box.setInformativeText(tr("You can undo it from the History."));
+            QPushButton* reset = box.addButton(tr("Reset"), QMessageBox::DestructiveRole);
+            QPushButton* cancel = box.addButton(QMessageBox::Cancel);
+            box.setDefaultButton(reset);
+            box.setEscapeButton(cancel);
+            box.exec();
+            confirmed = box.clickedButton() == reset;
+        }
+        // The photograph may have changed under the question.
+        if (!confirmed || !editable() || photoView_->isCropMode()) {
+            return;
+        }
+        const Photo& current = open_->session.photo();
+        // Both parts in one step; refreshPanel() re-decodes when the negative changed.
+        open_->session.setState(resetNegative(current),
+                                resetState(current.state(), current.metadata().encoding),
+                                EditOrigin::Reset, std::string(resetAllDetail));
+        refreshPanel();
+    });
 }
 
 void MainWindow::copySettings() {
